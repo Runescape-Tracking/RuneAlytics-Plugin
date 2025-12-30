@@ -54,7 +54,7 @@ public class RuneAlyticsPanel extends PluginPanel
         // Duel Arena icon
         BufferedImage duelImg = ImageUtil.loadImageResource(
                 RuneAlyticsPlugin.class,
-                "/net/runelite/client/plugins/hiscore/normal.png"
+                "/duel_arena_icon.png"
         );
         duelButton.setIcon(new ImageIcon(duelImg));
         duelButton.setToolTipText("Duel Arena");
