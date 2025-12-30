@@ -15,14 +15,17 @@ import java.io.IOException;
 public class RuneAlyticsVerificationPanel extends JPanel
 {
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-    private static final String VERIFY_URL = "https://runealytics.com/api/link_client";
+    private static final String VERIFY_URL = "https://runealytics.com/api/verify-runelite";
 
     private final OkHttpClient httpClient;
     private final Client client;
 
     private final JTextField codeField = new JTextField();
-    private final JButton verifyButton = new JButton("Verify account");
+    private final JButton verifyButton = new JButton("Verify Account");
     private final JLabel statusLabel = new JLabel(" ");
+
+    // NEW: API Response area
+    private final JTextArea apiResponseArea = new JTextArea(5, 30);
 
     private boolean verified = false;
     private boolean verifying = false;
@@ -42,6 +45,7 @@ public class RuneAlyticsVerificationPanel extends JPanel
         wireEvents();
 
         // Initial state (handles "already logged in" case too)
+        statusLabel.setText("Enter the link code from RuneAlytics.com.");
         updateUi();
     }
 
@@ -81,6 +85,27 @@ public class RuneAlyticsVerificationPanel extends JPanel
         statusLabel.setHorizontalAlignment(SwingConstants.LEFT);
         statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 11f));
 
+        // NEW: API response area setup
+        apiResponseArea.setEditable(false);
+        apiResponseArea.setLineWrap(true);
+        apiResponseArea.setWrapStyleWord(true);
+        apiResponseArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
+        apiResponseArea.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        apiResponseArea.setForeground(ColorScheme.TEXT_COLOR);
+        apiResponseArea.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+
+        JScrollPane apiScrollPane = new JScrollPane(apiResponseArea);
+        apiScrollPane.setAlignmentX(LEFT_ALIGNMENT);
+        apiScrollPane.setBorder(
+                BorderFactory.createTitledBorder(
+                        BorderFactory.createLineBorder(ColorScheme.DARKER_GRAY_COLOR.brighter(), 1),
+                        "API Response",
+                        0, 0,
+                        statusLabel.getFont().deriveFont(Font.PLAIN, 11f),
+                        ColorScheme.TEXT_COLOR
+                )
+        );
+
         add(title);
         add(Box.createRigidArea(new Dimension(0, 8)));
         add(instructions);
@@ -90,11 +115,16 @@ public class RuneAlyticsVerificationPanel extends JPanel
         add(verifyButton);
         add(Box.createRigidArea(new Dimension(0, 8)));
         add(statusLabel);
+        add(Box.createRigidArea(new Dimension(0, 8)));
+        add(apiScrollPane); // NEW
     }
 
     private void wireEvents()
     {
         verifyButton.addActionListener(e -> verifyAccount());
+
+        // NEW: press Enter in the code field to verify
+        codeField.addActionListener(e -> verifyAccount());
     }
 
     // ========= STATE / UI =========
@@ -136,6 +166,7 @@ public class RuneAlyticsVerificationPanel extends JPanel
             return;
         }
 
+        // Logged in and not yet verified
         codeField.setEnabled(!verifying);
         verifyButton.setEnabled(!verifying);
 
@@ -143,10 +174,8 @@ public class RuneAlyticsVerificationPanel extends JPanel
         {
             statusLabel.setText("Verifying...");
         }
-        else
-        {
-            statusLabel.setText("Enter the link code from RuneAlytics.com.");
-        }
+        // IMPORTANT: if not verifying, do NOT override statusLabel here.
+        // This lets our success/failure message from verifyAccount() stick.
     }
 
     // ========= VERIFY FLOW =========
@@ -164,7 +193,8 @@ public class RuneAlyticsVerificationPanel extends JPanel
         String code = codeField.getText().trim();
         if (code.isEmpty())
         {
-            statusLabel.setText("Enter the link code from the website.");
+            statusLabel.setText("Enter the code from RuneAlytics.com.");
+            apiResponseArea.setText(""); // clear any old API response
             return;
         }
 
@@ -175,6 +205,7 @@ public class RuneAlyticsVerificationPanel extends JPanel
             boolean success = false;
             String serverMessage = null;
             String errorMessage = null;
+            String rawResponse = null;
 
             try
             {
@@ -182,10 +213,11 @@ public class RuneAlyticsVerificationPanel extends JPanel
                         ? client.getLocalPlayer().getName()
                         : "";
 
+                assert rsn != null;
                 String jsonBody =
                         "{"
-                                + "\"code\":\"" + escapeJson(code) + "\","
-                                + "\"rsn\":\"" + escapeJson(rsn) + "\""
+                                + "\"verification_code\":\"" + escapeJson(code) + "\","
+                                + "\"osrs_rsn\":\"" + escapeJson(rsn) + "\""
                                 + "}";
 
                 RequestBody body = RequestBody.create(JSON, jsonBody);
@@ -196,19 +228,25 @@ public class RuneAlyticsVerificationPanel extends JPanel
 
                 try (Response response = httpClient.newCall(request).execute())
                 {
-                    String responseBody = response.body() != null
+                    rawResponse = response.body() != null
                             ? response.body().string()
                             : "";
 
-                    if (!response.isSuccessful())
+                    // Try to read "message" from JSON on *all* responses
+                    serverMessage = !rawResponse.isEmpty()
+                            ? extractMessageFromJson(rawResponse)
+                            : null;
+
+                    if (response.isSuccessful())
                     {
-                        errorMessage = "HTTP " + response.code();
+                        success = true;
                     }
                     else
                     {
-                        serverMessage = extractMessageFromJson(responseBody);
-                        success = true;
-                        // TODO: persist via ConfigManager if you want
+                        // Prefer server "message" for errors; fall back to HTTP code
+                        errorMessage = serverMessage != null && !serverMessage.isEmpty()
+                                ? serverMessage
+                                : "HTTP " + response.code();
                     }
                 }
             }
@@ -220,25 +258,70 @@ public class RuneAlyticsVerificationPanel extends JPanel
             boolean finalSuccess = success;
             String finalServerMessage = serverMessage;
             String finalErrorMessage = errorMessage;
+            String finalRawResponse = rawResponse;
 
             SwingUtilities.invokeLater(() -> {
                 verifying = false;
+
                 if (finalSuccess)
                 {
                     verified = true;
+
+                    // Prefer API "message" on success
                     statusLabel.setText(
-                            finalServerMessage != null
+                            finalServerMessage != null && !finalServerMessage.isEmpty()
                                     ? finalServerMessage
                                     : "Account verified! You can now use RuneAlytics features."
                     );
+
+                    if (!finalRawResponse.isEmpty())
+                    {
+                        apiResponseArea.setText(
+                                "Message: " + (finalServerMessage != null ? finalServerMessage : "(none)") +
+                                        "\n\nRaw response:\n" + finalRawResponse
+                        );
+                    }
+                    else
+                    {
+                        apiResponseArea.setText(
+                                "Message: " + "(none)"
+                        );
+                    }
                 }
                 else
                 {
                     verified = false;
-                    statusLabel.setText(
-                            "Verification failed. " +
-                                    (finalErrorMessage != null ? finalErrorMessage : "Check the code and try again.")
-                    );
+
+                    // Prefer API "message" on failure too
+                    String labelText;
+                    if (finalServerMessage != null && !finalServerMessage.isEmpty())
+                    {
+                        labelText = finalServerMessage;
+                    }
+                    else if (finalErrorMessage != null && !finalErrorMessage.isEmpty())
+                    {
+                        labelText = "Verification failed. " + finalErrorMessage;
+                    }
+                    else
+                    {
+                        labelText = "Verification failed. Check the code and try again.";
+                    }
+
+                    statusLabel.setText(labelText);
+
+                    if (finalRawResponse != null && !finalRawResponse.isEmpty())
+                    {
+                        apiResponseArea.setText(
+                                "Error: " + finalErrorMessage +
+                                        "\n\nRaw response:\n" + finalRawResponse
+                        );
+                    }
+                    else
+                    {
+                        apiResponseArea.setText(
+                                "Error: " + (finalErrorMessage != null ? finalErrorMessage : "(unknown)")
+                        );
+                    }
                 }
 
                 updateUi();
