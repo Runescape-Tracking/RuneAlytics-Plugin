@@ -1,10 +1,9 @@
 package com.runealytics;
 
-import net.runelite.api.Client;
-import net.runelite.api.GameState;
-import net.runelite.api.Player;
-import net.runelite.api.events.GameStateChanged;
-import net.runelite.api.events.GameTick;
+import com.google.inject.Provides;
+import net.runelite.api.*;
+import net.runelite.api.events.*;
+import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -12,23 +11,35 @@ import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.ImageUtil;
 import okhttp3.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ScheduledExecutorService;
 
 @PluginDescriptor(
         name = "RuneAlytics",
-        description = "Plugin by RuneAlytics"
+        description = "Sync your OSRS data with RuneAlytics.com",
+        tags = {"stats", "tracking", "analytics", "sync", "deatmatch"}
 )
 public class RuneAlyticsPlugin extends Plugin
 {
-    private static final String VERIFY_STATUS_URL =
-            "https://runealytics.com/api/check-verification";
+    private static final Logger log = LoggerFactory.getLogger(RuneAlyticsPlugin.class);
+    private static final String VERIFY_STATUS_URL = "https://runealytics.com/api/check-verification";
+
+    @Inject
+    private Client client;
 
     @Inject
     private ClientToolbar clientToolbar;
+
+    @Inject
+    private ScheduledExecutorService executorService;
 
     @Inject
     private RuneAlyticsPanel runeAlyticsPanel;
@@ -37,13 +48,7 @@ public class RuneAlyticsPlugin extends Plugin
     private DuelArenaMatchPanel duelArenaMatchPanel;
 
     @Inject
-    private RuneAlyticsSettingsPanel runeAlyticsSettingsPanel;
-
-    @Inject
     private RuneAlyticsSettingsPanel settingsPanel;
-
-    @Inject
-    private Client client;
 
     @Inject
     private OkHttpClient httpClient;
@@ -51,14 +56,28 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject
     private RuneAlyticsState runeAlyticsState;
 
-    private NavigationButton navButton;
+    @Inject
+    private RunealyticsApiClient apiClient;
 
-    // New: track whether we’ve already checked verification for this login session
+    @Inject
+    private BankDataManager bankDataManager;
+
+    @Inject
+    private XpTrackerManager xpTrackerManager;
+
+    @Inject
+    private RunealyticsConfig config;
+
+    private NavigationButton navButton;
     private boolean verificationCheckedForCurrentSession = false;
+    private final Map<Skill, Integer> lastXpMap = new HashMap<>();
+    private String verifiedUsername = null;
 
     @Override
     protected void startUp()
     {
+        log.info("RuneAlytics plugin started!");
+
         BufferedImage icon = ImageUtil.loadImageResource(
                 RuneAlyticsPlugin.class,
                 "/icon.png"
@@ -75,17 +94,18 @@ public class RuneAlyticsPlugin extends Plugin
 
         boolean loggedIn = isLoggedIn();
         duelArenaMatchPanel.setLoggedIn(loggedIn);
-        runeAlyticsSettingsPanel.refreshLoginState();
+        settingsPanel.refreshLoginState();
 
-        // On startup we just reset the flag; GameTick will handle the first check
         verificationCheckedForCurrentSession = false;
 
-        System.out.println("RuneAlytics plugin started");
+        log.info("RuneAlytics plugin initialization complete");
     }
 
     @Override
     protected void shutDown()
     {
+        log.info("RuneAlytics plugin stopped!");
+
         if (navButton != null)
         {
             clientToolbar.removeNavigation(navButton);
@@ -94,8 +114,14 @@ public class RuneAlyticsPlugin extends Plugin
 
         runeAlyticsState.setVerified(false);
         verificationCheckedForCurrentSession = false;
+        lastXpMap.clear();
+        verifiedUsername = null;
+    }
 
-        System.out.println("RuneAlytics plugin stopped");
+    @Provides
+    RunealyticsConfig provideConfig(ConfigManager configManager)
+    {
+        return configManager.getConfig(RunealyticsConfig.class);
     }
 
     private boolean isLoggedIn()
@@ -111,35 +137,33 @@ public class RuneAlyticsPlugin extends Plugin
                 && client.getLocalPlayer() != null;
 
         duelArenaMatchPanel.setLoggedIn(loggedIn);
-        runeAlyticsSettingsPanel.refreshLoginState();
+        settingsPanel.refreshLoginState();
 
         if (event.getGameState() == GameState.LOGGED_IN)
         {
-            // Just entered LOGGED_IN: reset flag so GameTick will run the check once
-            System.out.println("[RuneAlytics] GameStateChanged: LOGGED_IN, will check verification on GameTick.");
+            log.info("GameStateChanged: LOGGED_IN, will check verification on GameTick");
             verificationCheckedForCurrentSession = false;
         }
         else if (event.getGameState() == GameState.LOGIN_SCREEN
                 || event.getGameState() == GameState.HOPPING)
         {
-            // Going back to login / hopping – clear verification
-            System.out.println("[RuneAlytics] GameStateChanged: logged out/hopping; clearing verification state.");
+            log.info("GameStateChanged: logged out/hopping; clearing verification state");
             runeAlyticsState.setVerified(false);
             verificationCheckedForCurrentSession = false;
-            runeAlyticsSettingsPanel.refreshLoginState();
+            lastXpMap.clear();
+            verifiedUsername = null;
+            settingsPanel.refreshLoginState();
         }
     }
 
     @Subscribe
     public void onGameTick(GameTick tick)
     {
-        // Only care if logged in
         if (!isLoggedIn())
         {
             return;
         }
 
-        // Don’t spam the API: only once per login
         if (verificationCheckedForCurrentSession)
         {
             return;
@@ -148,22 +172,22 @@ public class RuneAlyticsPlugin extends Plugin
         Player localPlayer = client.getLocalPlayer();
         if (localPlayer == null)
         {
-            System.out.println("[RuneAlytics] GameTick: localPlayer is null; waiting...");
+            log.debug("GameTick: localPlayer is null; waiting...");
             return;
         }
 
         String rsn = localPlayer.getName();
-        System.out.println("[RuneAlytics] GameTick RSN: " + rsn);
+        log.debug("GameTick RSN: {}", rsn);
 
         if (rsn == null || rsn.isEmpty())
         {
-            // Name not populated yet; wait for another tick
-            System.out.println("[RuneAlytics] GameTick: RSN still null/empty; will try again next tick.");
+            log.debug("GameTick: RSN still null/empty; will try again next tick");
             return;
         }
 
-        // At this point we have a proper RSN; run the verification check once
         verificationCheckedForCurrentSession = true;
+        verifiedUsername = rsn;
+        initializeXpTracking();
         checkVerificationAsync(rsn);
     }
 
@@ -176,21 +200,19 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 if (rsn == null || rsn.isEmpty())
                 {
-                    System.out.println("[RuneAlytics] RSN is empty in async call; skipping verification.");
+                    log.warn("RSN is empty in async call; skipping verification");
                     return;
                 }
 
-                // Build POST body with osrs_rsn as a form field
                 RequestBody body = new FormBody.Builder()
                         .add("osrs_rsn", rsn)
                         .build();
 
-                System.out.println("[RuneAlytics] Checking verification status for RSN: " + rsn);
-                System.out.println("[RuneAlytics] POST " + VERIFY_STATUS_URL);
+                log.info("Checking verification status for RSN: {}", rsn);
 
                 Request request = new Request.Builder()
                         .url(VERIFY_STATUS_URL)
-                        .post(body) // ✅ proper POST with body
+                        .post(body)
                         .header("X-RuneAlytics-Client", "RuneLite-Plugin")
                         .build();
 
@@ -198,29 +220,166 @@ public class RuneAlyticsPlugin extends Plugin
                 {
                     String responseBody = response.body() != null ? response.body().string() : "";
 
-                    System.out.println("[RuneAlytics] HTTP status: " + response.code());
-                    System.out.println("[RuneAlytics] Response body: " + responseBody);
+                    log.info("Verification check - HTTP status: {}", response.code());
+                    log.debug("Verification response: {}", responseBody);
 
                     if (response.isSuccessful())
                     {
-                        // TEMP: simple check; replace with proper JSON parsing when ready
                         verified = responseBody.contains("\"verified\":true");
                     }
                 }
             }
             catch (IOException e)
             {
-                System.out.println("[RuneAlytics] Error during verification check: " + e.getMessage());
-                e.printStackTrace();
+                log.error("Error during verification check", e);
             }
 
             boolean finalVerified = verified;
 
             SwingUtilities.invokeLater(() -> {
                 runeAlyticsState.setVerified(finalVerified);
-                runeAlyticsSettingsPanel.refreshLoginState();
-                System.out.println("[RuneAlytics] Final verification state: " + finalVerified);
+                settingsPanel.updateVerificationStatus(finalVerified, verifiedUsername);
+                log.info("Final verification state: {}", finalVerified);
             });
         }).start();
+    }
+
+    private void initializeXpTracking()
+    {
+        if (client.getGameState() == GameState.LOGGED_IN)
+        {
+            for (Skill skill : Skill.values())
+            {
+                int xp = client.getSkillExperience(skill);
+                lastXpMap.put(skill, xp);
+            }
+            log.debug("XP tracking initialized");
+        }
+    }
+
+    @Subscribe
+    public void onStatChanged(StatChanged statChanged)
+    {
+        if (!runeAlyticsState.isVerified() || !isLoggedIn())
+        {
+            return;
+        }
+
+        Skill skill = statChanged.getSkill();
+        int currentXp = statChanged.getXp();
+        Integer previousXp = lastXpMap.get(skill);
+
+        if (previousXp != null && currentXp > previousXp)
+        {
+            int xpGained = currentXp - previousXp;
+            lastXpMap.put(skill, currentXp);
+
+            executorService.submit(() -> {
+                try
+                {
+                    xpTrackerManager.recordXpGain(
+                            config.authToken(),
+                            verifiedUsername,
+                            skill,
+                            xpGained,
+                            currentXp,
+                            client.getRealSkillLevel(skill)
+                    );
+                    log.debug("Recorded {} XP gain in {}", xpGained, skill.getName());
+                }
+                catch (Exception e)
+                {
+                    log.error("Failed to record XP gain", e);
+                }
+            });
+        }
+        else if (previousXp == null)
+        {
+            lastXpMap.put(skill, currentXp);
+        }
+    }
+
+    @Subscribe
+    public void onItemContainerChanged(ItemContainerChanged event)
+    {
+        if (!runeAlyticsState.isVerified() || !isLoggedIn())
+        {
+            return;
+        }
+
+        if (event.getContainerId() == InventoryID.BANK.getId())
+        {
+            ItemContainer bankContainer = event.getItemContainer();
+            if (bankContainer != null)
+            {
+                executorService.submit(() -> {
+                    try
+                    {
+                        bankDataManager.syncBankData(
+                                config.authToken(),
+                                verifiedUsername,
+                                bankContainer
+                        );
+                        log.info("Bank data synced successfully");
+                        settingsPanel.updateLastSyncTime();
+                    }
+                    catch (Exception e)
+                    {
+                        log.error("Failed to sync bank data", e);
+                    }
+                });
+            }
+        }
+    }
+
+    public void verifyToken(String token, Runnable onSuccess, Runnable onFailure)
+    {
+        executorService.submit(() -> {
+            try
+            {
+                boolean verified = apiClient.verifyToken(token);
+                if (verified)
+                {
+                    runeAlyticsState.setVerified(true);
+                    verifiedUsername = client.getLocalPlayer() != null ?
+                            client.getLocalPlayer().getName() : null;
+
+                    apiClient.autoVerifyAccount(token, verifiedUsername);
+
+                    if (onSuccess != null)
+                    {
+                        onSuccess.run();
+                    }
+
+                    log.info("Token verified and account auto-verified");
+                }
+                else
+                {
+                    if (onFailure != null)
+                    {
+                        onFailure.run();
+                    }
+                    log.warn("Token verification failed");
+                }
+            }
+            catch (Exception e)
+            {
+                log.error("Error during token verification", e);
+                if (onFailure != null)
+                {
+                    onFailure.run();
+                }
+            }
+        });
+    }
+
+    public boolean isVerified()
+    {
+        return runeAlyticsState.isVerified();
+    }
+
+    public String getVerifiedUsername()
+    {
+        return verifiedUsername;
     }
 }
