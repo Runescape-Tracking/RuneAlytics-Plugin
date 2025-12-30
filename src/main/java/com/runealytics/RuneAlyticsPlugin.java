@@ -23,10 +23,16 @@ public class RuneAlyticsPlugin extends Plugin
     private ClientToolbar clientToolbar;
 
     @Inject
-    private RuneAlyticsPanel runeAlyticsPanel; // main tabbed panel
+    private RuneAlyticsPanel runeAlyticsPanel;
 
     @Inject
-    private DuelArenaMatchPanel duelArenaMatchPanel; // concrete feature panel
+    private DuelArenaMatchPanel duelArenaMatchPanel;
+
+    @Inject
+    private RuneAlyticsSettingsPanel runeAlyticsSettingsPanel;
+
+    @Inject
+    private RuneAlyticsSettingsPanel settingsPanel;
 
     @Inject
     private Client client;
@@ -50,9 +56,10 @@ public class RuneAlyticsPlugin extends Plugin
 
         clientToolbar.addNavigation(navButton);
 
-        // Push initial login state down to the panel(s)
+        // Initial state push when plugin starts
         boolean loggedIn = isLoggedIn();
         duelArenaMatchPanel.setLoggedIn(loggedIn);
+        runeAlyticsSettingsPanel.refreshLoginState();
 
         System.out.println("RuneAlytics plugin started");
     }
@@ -78,7 +85,10 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onGameStateChanged(GameStateChanged event)
     {
-        boolean loggedIn = event.getGameState() == GameState.LOGGED_IN;
+        boolean loggedIn = event.getGameState() == GameState.LOGGED_IN
+                && client.getLocalPlayer() != null;
+
         duelArenaMatchPanel.setLoggedIn(loggedIn);
+        runeAlyticsSettingsPanel.refreshLoginState();
     }
 }

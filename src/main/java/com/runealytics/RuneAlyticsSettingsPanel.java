@@ -1,6 +1,8 @@
 package com.runealytics;
 
 import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.ui.components.materialtabs.MaterialTab;
+import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -10,7 +12,12 @@ import java.awt.*;
 @Singleton
 public class RuneAlyticsSettingsPanel extends JPanel
 {
-    private final JTabbedPane tabbedPane = new JTabbedPane();
+    // Display area where MaterialTabGroup will put the selected tab's content
+    private final JPanel display = new JPanel(new BorderLayout());
+
+    // MaterialTabGroup manages the tab strip and swaps content into `display`
+    private final MaterialTabGroup tabGroup = new MaterialTabGroup(display);
+
     private final RuneAlyticsVerificationPanel verificationPanel;
 
     @Inject
@@ -27,15 +34,25 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private void buildTabs()
     {
-        tabbedPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        tabbedPane.setForeground(ColorScheme.TEXT_COLOR);
+        // Style the tab strip
+        tabGroup.setLayout(new BoxLayout(tabGroup, BoxLayout.X_AXIS));
+        tabGroup.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        tabGroup.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        tabGroup.setOpaque(true);
 
-        tabbedPane.addTab("Verification", verificationPanel);
+        // Style the display area (content panel)
+        display.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        display.setOpaque(true);
 
-        // future:
-        // tabbedPane.addTab("General", generalSettingsPanel);
+        // Create the "Verification" tab and associate it with the verification panel
+        MaterialTab verificationTab = new MaterialTab("Verification", tabGroup, verificationPanel);
+        tabGroup.addTab(verificationTab);
 
-        add(tabbedPane, BorderLayout.CENTER);
+        // IMPORTANT: select via the *group*, so it swaps the content into `display`
+        tabGroup.select(verificationTab);
+
+        add(tabGroup, BorderLayout.NORTH);
+        add(display, BorderLayout.CENTER);
     }
 
     /** Called externally when login state or context changes */
