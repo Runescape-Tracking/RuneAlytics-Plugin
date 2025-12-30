@@ -1,2 +1,2 @@
-# Example
+# RuneAlytics
 An example greeter plugin
