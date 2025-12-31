@@ -3,11 +3,25 @@ package com.runealytics;
 import net.runelite.client.ui.ColorScheme;
 
 import javax.swing.*;
+import javax.swing.border.Border;
+import javax.swing.border.CompoundBorder;
+import javax.swing.border.EmptyBorder;
+import javax.swing.border.LineBorder;
 import java.awt.*;
 
 public final class RuneAlyticsUi
 {
     private RuneAlyticsUi() {}
+
+    // ---------- PALETTE / CONSTANTS ----------
+
+    // Slightly softer accent colors for statuses
+    private static final Color POSITIVE_COLOR = new Color(105, 220, 140);
+    private static final Color NEGATIVE_COLOR = new Color(255, 110, 110);
+    private static final Color MUTED_TEXT     = new Color(200, 200, 200);
+    private static final Color CARD_BORDER    = new Color(60, 60, 60, 180);
+
+    private static final int CARD_CORNER_RADIUS = 6;
 
     // ---------- ROOT / PANELS ----------
 
@@ -25,7 +39,7 @@ public final class RuneAlyticsUi
         JPanel panel = verticalPanel();
         panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
         panel.setOpaque(true);
-        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        panel.setBorder(new EmptyBorder(10, 10, 10, 10));
         return panel;
     }
 
@@ -58,13 +72,17 @@ public final class RuneAlyticsUi
         return row;
     }
 
-    /** Card-style panel (dark background + padding) */
+    /** Card-style panel (dark background + padding + subtle border) */
     public static JPanel cardPanel()
     {
         JPanel panel = verticalPanel();
         panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         panel.setOpaque(true);
-        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        Border outer = new LineBorder(CARD_BORDER, 1, true);
+        Border inner = new EmptyBorder(10, 10, 10, 10);
+        panel.setBorder(new CompoundBorder(outer, inner));
+
         return panel;
     }
 
@@ -72,7 +90,7 @@ public final class RuneAlyticsUi
     public static void styleTabStrip(JComponent tabStrip)
     {
         tabStrip.setLayout(new BoxLayout(tabStrip, BoxLayout.X_AXIS));
-        tabStrip.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        tabStrip.setBorder(new EmptyBorder(4, 4, 4, 4));
         tabStrip.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         tabStrip.setOpaque(true);
     }
@@ -99,7 +117,7 @@ public final class RuneAlyticsUi
     {
         JLabel label = new JLabel(text);
         label.setFont(label.getFont().deriveFont(Font.PLAIN, 11f));
-        label.setForeground(ColorScheme.TEXT_COLOR);
+        label.setForeground(MUTED_TEXT);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
     }
@@ -117,7 +135,7 @@ public final class RuneAlyticsUi
     public static JLabel valueLabel(String text)
     {
         JLabel label = bodyLabel(text);
-        label.setForeground(Color.LIGHT_GRAY);
+        label.setForeground(MUTED_TEXT);
         return label;
     }
 
@@ -133,12 +151,12 @@ public final class RuneAlyticsUi
 
     public static void stylePositiveStatus(JLabel label)
     {
-        label.setForeground(Color.GREEN);
+        label.setForeground(POSITIVE_COLOR);
     }
 
     public static void styleNegativeStatus(JLabel label)
     {
-        label.setForeground(Color.RED);
+        label.setForeground(NEGATIVE_COLOR);
     }
 
     // ---------- INPUTS ----------
@@ -151,10 +169,11 @@ public final class RuneAlyticsUi
         field.setForeground(ColorScheme.TEXT_COLOR);
         field.setCaretColor(ColorScheme.TEXT_COLOR);
 
-        field.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(ColorScheme.DARKER_GRAY_COLOR.brighter(), 1),
-                BorderFactory.createEmptyBorder(2, 4, 2, 4)
-        ));
+        Border border = new CompoundBorder(
+                new LineBorder(ColorScheme.DARKER_GRAY_COLOR.brighter(), 1, true),
+                new EmptyBorder(3, 6, 3, 6)
+        );
+        field.setBorder(border);
 
         field.setMaximumSize(
                 new Dimension(Integer.MAX_VALUE, field.getPreferredSize().height)
@@ -170,11 +189,17 @@ public final class RuneAlyticsUi
     {
         JButton button = new JButton(text);
 
-        button.setMargin(new Insets(2, 10, 2, 10));
+        button.setMargin(new Insets(3, 12, 3, 12));
         button.setFocusPainted(false);
+        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
         button.setBackground(ColorScheme.BRAND_ORANGE);
         button.setForeground(Color.BLACK);
+
+        button.setBorder(new CompoundBorder(
+                new LineBorder(ColorScheme.BRAND_ORANGE.darker(), 1, true),
+                new EmptyBorder(2, 10, 2, 10)
+        ));
 
         button.setAlignmentX(Component.LEFT_ALIGNMENT);
         return button;
@@ -184,11 +209,17 @@ public final class RuneAlyticsUi
     {
         JButton button = new JButton(text);
 
-        button.setMargin(new Insets(2, 8, 2, 8));
+        button.setMargin(new Insets(3, 10, 3, 10));
         button.setFocusPainted(false);
+        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
         button.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         button.setForeground(ColorScheme.TEXT_COLOR);
+
+        button.setBorder(new CompoundBorder(
+                new LineBorder(CARD_BORDER, 1, true),
+                new EmptyBorder(2, 8, 2, 8)
+        ));
 
         button.setAlignmentX(Component.LEFT_ALIGNMENT);
         return button;
@@ -204,9 +235,10 @@ public final class RuneAlyticsUi
         infoText.setLineWrap(true);
         infoText.setWrapStyleWord(true);
         infoText.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        infoText.setForeground(Color.LIGHT_GRAY);
-        infoText.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        infoText.setForeground(MUTED_TEXT);
+        infoText.setBorder(new EmptyBorder(10, 10, 10, 10));
         infoText.setAlignmentX(Component.LEFT_ALIGNMENT);
+        infoText.setFont(infoText.getFont().deriveFont(Font.PLAIN, 11f));
         return infoText;
     }
 
@@ -221,7 +253,7 @@ public final class RuneAlyticsUi
         area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
         area.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         area.setForeground(ColorScheme.TEXT_COLOR);
-        area.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        area.setBorder(new EmptyBorder(4, 4, 4, 4));
 
         area.setAlignmentX(Component.LEFT_ALIGNMENT);
         return area;
@@ -236,7 +268,7 @@ public final class RuneAlyticsUi
 
         JScrollPane scroll = new JScrollPane(area);
         scroll.setAlignmentX(Component.LEFT_ALIGNMENT);
-        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.setBorder(new EmptyBorder(0, 0, 0, 0));
         scroll.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
         scroll.setOpaque(false);
         scroll.setPreferredSize(new Dimension(100, 200));

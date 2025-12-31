@@ -52,17 +52,17 @@ public class RuneAlyticsSettingsPanel extends JPanel
         RuneAlyticsUi.styleTabStrip(tabGroup);
         RuneAlyticsUi.styleDisplayPanel(display);
 
-        // Create the "Verification" tab and associate it with the verification panel
-        MaterialTab verificationTab = new MaterialTab("Verification", tabGroup, verificationPanel);
-
         // Create the "Status" tab with tracking information
         MaterialTab statusTab = new MaterialTab("Status", tabGroup, createStatusPanel());
 
-        tabGroup.addTab(verificationTab);
+        // Create the "Verification" tab and associate it with the verification panel
+        MaterialTab verificationTab = new MaterialTab("Verification", tabGroup, verificationPanel);
+
         tabGroup.addTab(statusTab);
+        tabGroup.addTab(verificationTab);
 
         // IMPORTANT: select via the *group*, so it swaps the content into `display`
-        tabGroup.select(verificationTab);
+        tabGroup.select(statusTab);
 
         add(tabGroup, BorderLayout.NORTH);
         add(display, BorderLayout.CENTER);
