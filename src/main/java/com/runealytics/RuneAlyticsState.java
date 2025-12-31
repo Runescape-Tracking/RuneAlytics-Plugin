@@ -6,36 +6,20 @@ import lombok.Setter;
 import javax.inject.Singleton;
 
 @Singleton
+@Getter
+@Setter
 public class RuneAlyticsState
 {
-    @Getter
-    @Setter
-    private boolean verified = false;
-    private String verifiedUsername = null;
-
-    public boolean isVerified()
-    {
-        return verified;
-    }
-
-    public void setVerified(boolean verified)
-    {
-        this.verified = verified;
-    }
-
-    public String getVerifiedUsername()
-    {
-        return verifiedUsername;
-    }
-
-    public void setVerifiedUsername(String username)
-    {
-        this.verifiedUsername = username;
-    }
+    private boolean loggedIn;
+    private boolean verified;
+    private String verifiedUsername;
+    private String verificationCode;
 
     public void reset()
     {
-        this.verified = false;
-        this.verifiedUsername = null;
+        loggedIn = false;
+        verified = false;
+        verifiedUsername = null;
+        verificationCode = null;
     }
 }

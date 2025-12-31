@@ -1,6 +1,6 @@
 package com.runealytics;
 
-import net.runelite.api.Client;
+import com.google.gson.JsonObject;
 import net.runelite.client.ui.ColorScheme;
 import okhttp3.*;
 
@@ -14,34 +14,37 @@ import java.io.IOException;
 public class DuelArenaMatchPanel extends JPanel
 {
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-    private static final String API_URL = "https://runealytics.com/api/duel_arena";
+    private static final String DUEL_ARENA_PATH = "/duel_arena";
 
     private final OkHttpClient httpClient;
+    private final RuneAlyticsState runeAlyticsState;
+    private final RunealyticsConfig config;
 
-    // Standardized UI components
     private final JTextField matchCodeField = RuneAlyticsUi.inputField();
     private final JButton submitButton = RuneAlyticsUi.primaryButton("Load match");
     private final JLabel statusLabel = RuneAlyticsUi.statusLabel();
     private final JTextArea resultArea = RuneAlyticsUi.apiResponseArea();
 
-    // Panels we’ll swap in/out
     private final JPanel headerPanel;
     private final JPanel contentPanel;
     private final JLabel loginMessage;
 
-    private boolean loggedIn = false;
-
     @Inject
-    public DuelArenaMatchPanel(OkHttpClient httpClient, Client client)
+    public DuelArenaMatchPanel(
+            OkHttpClient httpClient,
+            RuneAlyticsState runeAlyticsState,
+            RunealyticsConfig config
+    )
     {
         this.httpClient = httpClient;
+        this.runeAlyticsState = runeAlyticsState;
+        this.config = config;
 
         setLayout(new BorderLayout(0, 8));
         setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
         setBackground(ColorScheme.DARK_GRAY_COLOR);
         setOpaque(true);
 
-        // Build once, reuse
         this.headerPanel = buildHeader();
         this.contentPanel = buildContent();
 
@@ -49,18 +52,14 @@ public class DuelArenaMatchPanel extends JPanel
         loginMessage.setForeground(ColorScheme.TEXT_COLOR);
         loginMessage.setFont(loginMessage.getFont().deriveFont(Font.BOLD, 14f));
 
-        // Start in logged-out view; plugin will call setLoggedIn(...) later
-        showLoggedOut();
-
         submitButton.addActionListener(e -> submitMatchCode());
+
+        refreshLoginState();
     }
 
-    // Called from plugin: duelArenaMatchPanel.setLoggedIn(isLoggedIn);
-    public void setLoggedIn(boolean loggedIn)
+    public void refreshLoginState()
     {
-        this.loggedIn = loggedIn;
-
-        if (loggedIn)
+        if (runeAlyticsState.isLoggedIn())
         {
             showLoggedIn();
         }
@@ -87,8 +86,6 @@ public class DuelArenaMatchPanel extends JPanel
         repaint();
     }
 
-    // --- UI building ---
-
     private JPanel buildHeader()
     {
         JPanel header = RuneAlyticsUi.verticalPanel();
@@ -106,18 +103,15 @@ public class DuelArenaMatchPanel extends JPanel
     {
         JPanel container = RuneAlyticsUi.verticalPanel();
 
-        // --- Form "card"
         JPanel formCard = RuneAlyticsUi.cardPanel();
 
         JLabel label = RuneAlyticsUi.bodyLabel("Match Code:");
         label.setAlignmentX(LEFT_ALIGNMENT);
 
-        // Ensure field stretches horizontally
         matchCodeField.setMaximumSize(
                 new Dimension(Integer.MAX_VALUE, matchCodeField.getPreferredSize().height)
         );
 
-        // Button row centered
         JPanel buttonRow = new JPanel();
         buttonRow.setLayout(new BoxLayout(buttonRow, BoxLayout.X_AXIS));
         buttonRow.setOpaque(false);
@@ -136,7 +130,6 @@ public class DuelArenaMatchPanel extends JPanel
         formCard.add(RuneAlyticsUi.vSpace(6));
         formCard.add(statusLabel);
 
-        // --- API Response card using shared UI
         JPanel apiCard = RuneAlyticsUi.apiResponseCard("API Response", resultArea);
 
         container.add(formCard);
@@ -146,12 +139,9 @@ public class DuelArenaMatchPanel extends JPanel
         return container;
     }
 
-    // --- Logic ---
-
     private void submitMatchCode()
     {
-        // Safety guard: if somehow called while logged out, bail
-        if (!loggedIn)
+        if (!runeAlyticsState.isLoggedIn())
         {
             showLoggedOut();
             return;
@@ -177,11 +167,12 @@ public class DuelArenaMatchPanel extends JPanel
 
             try
             {
-                String jsonBody = "{\"match_code\":\"" + escapeJson(matchCode) + "\"}";
+                JsonObject payload = new JsonObject();
+                payload.addProperty("match_code", matchCode);
 
-                RequestBody body = RequestBody.create(JSON, jsonBody);
+                RequestBody body = RequestBody.create(JSON, payload.toString());
                 Request request = new Request.Builder()
-                        .url(API_URL)
+                        .url(config.apiUrl() + DUEL_ARENA_PATH)
                         .post(body)
                         .build();
 
@@ -191,7 +182,7 @@ public class DuelArenaMatchPanel extends JPanel
                             ? response.body().string()
                             : "";
 
-                    serverMessage = extractMessageFromJson(responseBody);
+                    serverMessage = RuneAlyticsJson.extractMessage(responseBody);
 
                     if (response.isSuccessful())
                     {
@@ -211,7 +202,7 @@ public class DuelArenaMatchPanel extends JPanel
             }
 
             final boolean finalSuccess = success;
-            final String finalResponseBody = responseBody;
+            final String finalResponseBody = responseBody != null ? responseBody : "";
             final String finalServerMessage = serverMessage;
             final String finalErrorMessage = errorMessage;
 
@@ -257,7 +248,7 @@ public class DuelArenaMatchPanel extends JPanel
                     statusLabel.setText(displayMessage);
                     statusLabel.setForeground(Color.RED);
 
-                    if (finalResponseBody != null && !finalResponseBody.isEmpty())
+                    if (!finalResponseBody.isEmpty())
                     {
                         resultArea.setText(
                                 "Error message: " + displayMessage +
@@ -284,38 +275,5 @@ public class DuelArenaMatchPanel extends JPanel
             statusLabel.setText("Loading match...");
             statusLabel.setForeground(ColorScheme.TEXT_COLOR);
         }
-    }
-
-    private String escapeJson(String value)
-    {
-        if (value == null) return "";
-        return value.replace("\\", "\\\\").replace("\"", "\\\"");
-    }
-
-    /**
-     * Same simple JSON "message" extractor you used in the verification panel.
-     * This keeps status text aligned to your backend response.
-     */
-    private String extractMessageFromJson(String json)
-    {
-        if (json == null || json.isEmpty())
-        {
-            return null;
-        }
-
-        String key = "\"message\"";
-        int idx = json.indexOf(key);
-        if (idx == -1) return null;
-
-        int colonIdx = json.indexOf(':', idx + key.length());
-        if (colonIdx == -1) return null;
-
-        int firstQuote = json.indexOf('"', colonIdx + 1);
-        if (firstQuote == -1) return null;
-
-        int secondQuote = json.indexOf('"', firstQuote + 1);
-        if (secondQuote == -1) return null;
-
-        return json.substring(firstQuote + 1, secondQuote);
     }
 }

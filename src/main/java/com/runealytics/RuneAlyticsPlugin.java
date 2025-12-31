@@ -1,8 +1,12 @@
 package com.runealytics;
 
+import com.google.gson.JsonObject;
 import com.google.inject.Provides;
 import net.runelite.api.*;
-import net.runelite.api.events.*;
+import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
+import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.StatChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
@@ -25,7 +29,7 @@ import java.util.concurrent.ScheduledExecutorService;
 @PluginDescriptor(
         name = "RuneAlytics",
         description = "Sync your OSRS data with RuneAlytics.com",
-        tags = {"stats", "tracking", "analytics", "sync", "deatmatch"}
+        tags = {"stats", "tracking", "analytics", "sync", "deathmatch"}
 )
 public class RuneAlyticsPlugin extends Plugin
 {
@@ -71,7 +75,6 @@ public class RuneAlyticsPlugin extends Plugin
     private NavigationButton navButton;
     private boolean verificationCheckedForCurrentSession = false;
     private final Map<Skill, Integer> lastXpMap = new HashMap<>();
-    private String verifiedUsername = null;
 
     @Override
     protected void startUp()
@@ -92,8 +95,8 @@ public class RuneAlyticsPlugin extends Plugin
 
         clientToolbar.addNavigation(navButton);
 
-        boolean loggedIn = isLoggedIn();
-        duelArenaMatchPanel.setLoggedIn(loggedIn);
+        updateLoginStateFromClient();
+        duelArenaMatchPanel.refreshLoginState();
         settingsPanel.refreshLoginState();
 
         verificationCheckedForCurrentSession = false;
@@ -112,10 +115,9 @@ public class RuneAlyticsPlugin extends Plugin
             navButton = null;
         }
 
-        runeAlyticsState.setVerified(false);
+        runeAlyticsState.reset();
         verificationCheckedForCurrentSession = false;
         lastXpMap.clear();
-        verifiedUsername = null;
     }
 
     @Provides
@@ -124,10 +126,12 @@ public class RuneAlyticsPlugin extends Plugin
         return configManager.getConfig(RunealyticsConfig.class);
     }
 
-    private boolean isLoggedIn()
+    private void updateLoginStateFromClient()
     {
-        return client.getGameState() == GameState.LOGGED_IN
+        boolean loggedIn = client.getGameState() == GameState.LOGGED_IN
                 && client.getLocalPlayer() != null;
+
+        runeAlyticsState.setLoggedIn(loggedIn);
     }
 
     @Subscribe
@@ -136,7 +140,9 @@ public class RuneAlyticsPlugin extends Plugin
         boolean loggedIn = event.getGameState() == GameState.LOGGED_IN
                 && client.getLocalPlayer() != null;
 
-        duelArenaMatchPanel.setLoggedIn(loggedIn);
+        runeAlyticsState.setLoggedIn(loggedIn);
+
+        duelArenaMatchPanel.refreshLoginState();
         settingsPanel.refreshLoginState();
 
         if (event.getGameState() == GameState.LOGGED_IN)
@@ -148,18 +154,18 @@ public class RuneAlyticsPlugin extends Plugin
                 || event.getGameState() == GameState.HOPPING)
         {
             log.info("GameStateChanged: logged out/hopping; clearing verification state");
-            runeAlyticsState.setVerified(false);
+            runeAlyticsState.reset();
             verificationCheckedForCurrentSession = false;
             lastXpMap.clear();
-            verifiedUsername = null;
             settingsPanel.refreshLoginState();
+            duelArenaMatchPanel.refreshLoginState();
         }
     }
 
     @Subscribe
     public void onGameTick(GameTick tick)
     {
-        if (!isLoggedIn())
+        if (!runeAlyticsState.isLoggedIn())
         {
             return;
         }
@@ -186,7 +192,8 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         verificationCheckedForCurrentSession = true;
-        verifiedUsername = rsn;
+        runeAlyticsState.setVerifiedUsername(rsn);
+
         initializeXpTracking();
         checkVerificationAsync(rsn);
     }
@@ -195,6 +202,7 @@ public class RuneAlyticsPlugin extends Plugin
     {
         new Thread(() -> {
             boolean verified = false;
+            String verificationCode = null;
 
             try
             {
@@ -226,6 +234,10 @@ public class RuneAlyticsPlugin extends Plugin
                     if (response.isSuccessful())
                     {
                         verified = responseBody.contains("\"verified\":true");
+                        if (verified)
+                        {
+                            verificationCode = RuneAlyticsJson.extractStringField(responseBody, "verification_code");
+                        }
                     }
                 }
             }
@@ -235,11 +247,20 @@ public class RuneAlyticsPlugin extends Plugin
             }
 
             boolean finalVerified = verified;
+            String finalVerificationCode = verificationCode;
 
             SwingUtilities.invokeLater(() -> {
                 runeAlyticsState.setVerified(finalVerified);
-                settingsPanel.updateVerificationStatus(finalVerified, verifiedUsername);
-                log.info("Final verification state: {}", finalVerified);
+                runeAlyticsState.setVerifiedUsername(finalVerified ? rsn : null);
+                runeAlyticsState.setVerificationCode(finalVerified ? finalVerificationCode : null);
+
+                if (finalVerified && finalVerificationCode != null && !finalVerificationCode.isEmpty())
+                {
+                    config.authToken(finalVerificationCode);
+                }
+
+                settingsPanel.updateVerificationStatus(finalVerified, runeAlyticsState.getVerifiedUsername());
+                log.info("Final verification state: {}, verificationCode={}", finalVerified, finalVerificationCode);
             });
         }).start();
     }
@@ -260,7 +281,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onStatChanged(StatChanged statChanged)
     {
-        if (!runeAlyticsState.isVerified() || !isLoggedIn())
+        if (!runeAlyticsState.isVerified() || !runeAlyticsState.isLoggedIn())
         {
             return;
         }
@@ -274,12 +295,14 @@ public class RuneAlyticsPlugin extends Plugin
             int xpGained = currentXp - previousXp;
             lastXpMap.put(skill, currentXp);
 
+            String username = runeAlyticsState.getVerifiedUsername();
+
             executorService.submit(() -> {
                 try
                 {
                     xpTrackerManager.recordXpGain(
                             config.authToken(),
-                            verifiedUsername,
+                            username,
                             skill,
                             xpGained,
                             currentXp,
@@ -302,7 +325,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onItemContainerChanged(ItemContainerChanged event)
     {
-        if (!runeAlyticsState.isVerified() || !isLoggedIn())
+        if (!runeAlyticsState.isVerified() || !runeAlyticsState.isLoggedIn())
         {
             return;
         }
@@ -312,12 +335,14 @@ public class RuneAlyticsPlugin extends Plugin
             ItemContainer bankContainer = event.getItemContainer();
             if (bankContainer != null)
             {
+                String username = runeAlyticsState.getVerifiedUsername();
+
                 executorService.submit(() -> {
                     try
                     {
                         bankDataManager.syncBankData(
                                 config.authToken(),
-                                verifiedUsername,
+                                username,
                                 bankContainer
                         );
                         log.info("Bank data synced successfully");
@@ -341,17 +366,20 @@ public class RuneAlyticsPlugin extends Plugin
                 if (verified)
                 {
                     runeAlyticsState.setVerified(true);
-                    verifiedUsername = client.getLocalPlayer() != null ?
-                            client.getLocalPlayer().getName() : null;
 
-                    apiClient.autoVerifyAccount(token, verifiedUsername);
+                    String username = client.getLocalPlayer() != null
+                            ? client.getLocalPlayer().getName()
+                            : null;
+                    runeAlyticsState.setVerifiedUsername(username);
+
+                    apiClient.autoVerifyAccount(token, username);
 
                     if (onSuccess != null)
                     {
                         onSuccess.run();
                     }
 
-                    log.info("Token verified and account auto-verified");
+                    log.info("Token verified and account auto-verified for {}", username);
                 }
                 else
                 {
@@ -380,6 +408,6 @@ public class RuneAlyticsPlugin extends Plugin
 
     public String getVerifiedUsername()
     {
-        return verifiedUsername;
+        return runeAlyticsState.getVerifiedUsername();
     }
 }

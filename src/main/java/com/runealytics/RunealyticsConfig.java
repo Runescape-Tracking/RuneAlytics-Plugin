@@ -33,10 +33,11 @@ public interface RunealyticsConfig extends Config
 
     @ConfigItem(
             keyName = "authToken",
-            name = "Authentication Token",
-            description = "Your Runealytics authentication token from the website",
+            name = "Auth Token",
+            description = "Managed by the RuneAlytics plugin when you link your account.",
             section = authSection,
-            position = 0
+            position = 0,
+            secret = true
     )
     default String authToken()
     {
@@ -45,8 +46,11 @@ public interface RunealyticsConfig extends Config
 
     @ConfigItem(
             keyName = "authToken",
-            name = "",
-            description = ""
+            name = "Auth Token",
+            description = "Managed by the RuneAlytics plugin when you link your account.",
+            section = authSection,
+            position = 0,
+            secret = true
     )
     void authToken(String token);
 
@@ -55,6 +59,7 @@ public interface RunealyticsConfig extends Config
             name = "API URL",
             description = "Runealytics API endpoint (change only if using custom server)",
             section = authSection,
+            hidden = true,
             position = 1
     )
     default String apiUrl()

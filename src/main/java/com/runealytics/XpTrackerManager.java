@@ -1,6 +1,5 @@
 package com.runealytics;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import net.runelite.api.Skill;
 import org.slf4j.Logger;
@@ -16,18 +15,13 @@ public class XpTrackerManager
     private static final Logger log = LoggerFactory.getLogger(XpTrackerManager.class);
 
     private final RunealyticsApiClient apiClient;
-    private final Gson gson;
 
     @Inject
     public XpTrackerManager(RunealyticsApiClient apiClient)
     {
         this.apiClient = apiClient;
-        this.gson = new Gson();
     }
 
-    /**
-     * Record XP gain to RuneAlytics API
-     */
     public void recordXpGain(
             String token,
             String username,
@@ -80,9 +74,6 @@ public class XpTrackerManager
         }
     }
 
-    /**
-     * Build XP data JSON payload
-     */
     private JsonObject buildXpData(
             String username,
             Skill skill,
@@ -102,26 +93,5 @@ public class XpTrackerManager
         log.debug("Built XP data for {} in {} (+{} XP)", username, skill.getName(), xpGained);
 
         return data;
-    }
-
-    /**
-     * Calculate XP difference between two values
-     */
-    public int calculateXpGain(int currentXp, int previousXp)
-    {
-        if (previousXp <= 0)
-        {
-            return 0; // First time tracking this skill
-        }
-
-        int gain = currentXp - previousXp;
-
-        if (gain < 0)
-        {
-            log.warn("Negative XP gain detected: current={}, previous={}", currentXp, previousXp);
-            return 0;
-        }
-
-        return gain;
     }
 }

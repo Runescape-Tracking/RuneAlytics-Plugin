@@ -47,12 +47,15 @@ public class RunealyticsApiClient
 
         try (Response response = httpClient.newCall(request).execute())
         {
-            if (response.isSuccessful() && response.body() != null)
+            if (!response.isSuccessful() || response.body() == null)
             {
-                JsonObject result = gson.fromJson(response.body().string(), JsonObject.class);
-                return result.has("verified") && result.get("verified").getAsBoolean();
+                return false;
             }
-            return false;
+
+            JsonObject result = gson.fromJson(response.body().string(), JsonObject.class);
+            return result != null
+                    && result.has("verified")
+                    && result.get("verified").getAsBoolean();
         }
     }
 
@@ -72,19 +75,22 @@ public class RunealyticsApiClient
 
         try (Response response = httpClient.newCall(request).execute())
         {
-            if (response.isSuccessful() && response.body() != null)
+            if (!response.isSuccessful() || response.body() == null)
             {
-                JsonObject result = gson.fromJson(response.body().string(), JsonObject.class);
-                boolean success = result.has("success") && result.get("success").getAsBoolean();
-
-                if (success)
-                {
-                    log.info("Account {} auto-verified successfully", username);
-                }
-
-                return success;
+                return false;
             }
-            return false;
+
+            JsonObject result = gson.fromJson(response.body().string(), JsonObject.class);
+            boolean success = result != null
+                    && result.has("success")
+                    && result.get("success").getAsBoolean();
+
+            if (success)
+            {
+                log.info("Account {} auto-verified successfully", username);
+            }
+
+            return success;
         }
     }
 
@@ -104,11 +110,9 @@ public class RunealyticsApiClient
                 log.debug("Bank data synced successfully");
                 return true;
             }
-            else
-            {
-                log.error("Failed to sync bank data. Status: {}", response.code());
-                return false;
-            }
+
+            log.error("Failed to sync bank data. Status: {}", response.code());
+            return false;
         }
     }
 
@@ -128,11 +132,9 @@ public class RunealyticsApiClient
                 log.debug("XP gain recorded successfully");
                 return true;
             }
-            else
-            {
-                log.error("Failed to record XP gain. Status: {}", response.code());
-                return false;
-            }
+
+            log.error("Failed to record XP gain. Status: {}", response.code());
+            return false;
         }
     }
 
