@@ -64,7 +64,7 @@ public interface RunealyticsConfig extends Config
     )
     default String apiUrl()
     {
-        return "https://runealytics.com/api";
+        return "https://testing.runealytics.com/api";
     }
 
     // ==================== SYNC SETTINGS ====================

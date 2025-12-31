@@ -93,41 +93,59 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 
     private void updateUi()
     {
-        boolean loggedIn = runeAlyticsState.isLoggedIn();
+        final boolean loggedIn = runeAlyticsState.isLoggedIn();
+        final boolean isVerified = runeAlyticsState.isVerified();
+
+        // Always show the controls; just toggle enabled/disabled state
+        codeField.setVisible(true);
+        verifyButton.setVisible(true);
 
         if (!loggedIn)
         {
+            // Not logged in → disabled
             setControlsEnabled(false);
             statusLabel.setText("You must be logged into RuneScape in RuneLite to link your account.");
             return;
         }
 
-        boolean isVerified = runeAlyticsState.isVerified();
-
-        codeField.setVisible(!isVerified);
-        verifyButton.setVisible(!isVerified);
-
-        setControlsEnabled(!verifying && !isVerified);
-
         if (verifying)
         {
+            // In-flight request → disabled
+            setControlsEnabled(false);
             statusLabel.setText("Verifying with RuneAlytics...");
+            return;
         }
-        else if (isVerified)
+
+        if (isVerified)
         {
+            // Verified → visible but disabled
+            setControlsEnabled(false);
             statusLabel.setText("Your account has been successfully verified!");
+            return;
         }
+
+        // Logged in, not verified, not currently verifying → enable controls
+        setControlsEnabled(true);
+        statusLabel.setText("Enter the link code from RuneAlytics.com.");
     }
 
     private void setControlsEnabled(boolean enabled)
     {
         codeField.setEnabled(enabled);
         verifyButton.setEnabled(enabled);
+        // Response area stays readable even when "disabled"
         apiResponseArea.setEnabled(true);
     }
 
     private void verifyAccount()
     {
+        // If already verified, do nothing
+        if (runeAlyticsState.isVerified())
+        {
+            statusLabel.setText("Your account is already verified.");
+            return;
+        }
+
         if (!runeAlyticsState.isLoggedIn()
                 || client.getGameState() != GameState.LOGGED_IN
                 || client.getLocalPlayer() == null)
@@ -214,13 +232,11 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                     runeAlyticsState.setVerified(true);
                     runeAlyticsState.setVerifiedUsername(finalRsn);
 
-                    // NEW: extract verification_code and persist it
                     String verificationCode = RuneAlyticsJson.extractStringField(finalRawResponse, "verification_code");
                     runeAlyticsState.setVerificationCode(verificationCode);
 
                     if (verificationCode != null && !verificationCode.isEmpty())
                     {
-                        // This is what populates the "Auth Token" field in the config UI
                         config.authToken(verificationCode);
                     }
 
@@ -248,8 +264,6 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                     runeAlyticsState.setVerified(false);
                     runeAlyticsState.setVerifiedUsername(null);
                     runeAlyticsState.setVerificationCode(null);
-
-                    // Optional: clear config token on failure
                     config.authToken("");
 
                     String displayMessage;
