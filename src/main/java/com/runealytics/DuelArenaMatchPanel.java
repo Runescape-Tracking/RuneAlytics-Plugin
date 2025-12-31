@@ -18,10 +18,11 @@ public class DuelArenaMatchPanel extends JPanel
 
     private final OkHttpClient httpClient;
 
-    private final JTextField matchCodeField = new JTextField();
-    private final JButton submitButton = new JButton("Load match");
-    private final JLabel statusLabel = new JLabel("");
-    private final JTextArea resultArea = new JTextArea();
+    // Standardized UI components
+    private final JTextField matchCodeField = RuneAlyticsUi.inputField();
+    private final JButton submitButton = RuneAlyticsUi.primaryButton("Load match");
+    private final JLabel statusLabel = RuneAlyticsUi.statusLabel();
+    private final JTextArea resultArea = RuneAlyticsUi.apiResponseArea();
 
     // Panels we’ll swap in/out
     private final JPanel headerPanel;
@@ -39,8 +40,6 @@ public class DuelArenaMatchPanel extends JPanel
         setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
         setBackground(ColorScheme.DARK_GRAY_COLOR);
         setOpaque(true);
-
-        styleMatchCodeField();
 
         // Build once, reuse
         this.headerPanel = buildHeader();
@@ -90,31 +89,12 @@ public class DuelArenaMatchPanel extends JPanel
 
     // --- UI building ---
 
-    private void styleMatchCodeField()
-    {
-        matchCodeField.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        matchCodeField.setForeground(ColorScheme.TEXT_COLOR);
-        matchCodeField.setCaretColor(ColorScheme.TEXT_COLOR);
-        matchCodeField.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(ColorScheme.DARKER_GRAY_COLOR.brighter(), 1),
-                BorderFactory.createEmptyBorder(2, 4, 2, 4)
-        ));
-        matchCodeField.setOpaque(true);
-    }
-
     private JPanel buildHeader()
     {
-        JPanel header = new JPanel();
-        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
-        header.setBorder(BorderFactory.createEmptyBorder(0, 0, 4, 0));
-        header.setOpaque(false);
+        JPanel header = RuneAlyticsUi.verticalPanel();
 
-        JLabel title = new JLabel("Duel Arena");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 14f));
-        title.setForeground(ColorScheme.TEXT_COLOR);
-
-        JLabel subtitle = new JLabel("RuneAlytics Match Linker");
-        subtitle.setForeground(ColorScheme.TEXT_COLOR);
+        JLabel title = RuneAlyticsUi.titleLabel("Duel Arena");
+        JLabel subtitle = RuneAlyticsUi.subtitleLabel("RuneAlytics Match Linker");
 
         header.add(title);
         header.add(subtitle);
@@ -124,30 +104,20 @@ public class DuelArenaMatchPanel extends JPanel
 
     private JPanel buildContent()
     {
-        JPanel container = new JPanel();
-        container.setLayout(new BoxLayout(container, BoxLayout.Y_AXIS));
-        container.setOpaque(false);
+        JPanel container = RuneAlyticsUi.verticalPanel();
 
         // --- Form "card"
-        JPanel formCard = new JPanel();
-        formCard.setLayout(new BoxLayout(formCard, BoxLayout.Y_AXIS));
-        formCard.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        formCard.setOpaque(true);
-        formCard.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
-        formCard.setAlignmentX(LEFT_ALIGNMENT);
+        JPanel formCard = RuneAlyticsUi.cardPanel();
 
-        // Label
-        JLabel label = new JLabel("Match Code:");
+        JLabel label = RuneAlyticsUi.bodyLabel("Match Code:");
         label.setAlignmentX(LEFT_ALIGNMENT);
-        label.setForeground(ColorScheme.TEXT_COLOR);
 
-        // Input Box
+        // Ensure field stretches horizontally
         matchCodeField.setMaximumSize(
                 new Dimension(Integer.MAX_VALUE, matchCodeField.getPreferredSize().height)
         );
-        matchCodeField.setAlignmentX(LEFT_ALIGNMENT);
 
-        // Button Row - Centered
+        // Button row centered
         JPanel buttonRow = new JPanel();
         buttonRow.setLayout(new BoxLayout(buttonRow, BoxLayout.X_AXIS));
         buttonRow.setOpaque(false);
@@ -156,37 +126,22 @@ public class DuelArenaMatchPanel extends JPanel
         buttonRow.add(submitButton);
         buttonRow.add(Box.createHorizontalGlue());
 
-        // Status label under button
         statusLabel.setAlignmentX(LEFT_ALIGNMENT);
-        statusLabel.setForeground(ColorScheme.TEXT_COLOR);
 
         formCard.add(label);
-        formCard.add(Box.createRigidArea(new Dimension(0, 4)));
+        formCard.add(RuneAlyticsUi.vSpace(4));
         formCard.add(matchCodeField);
-        formCard.add(Box.createRigidArea(new Dimension(0, 6)));
+        formCard.add(RuneAlyticsUi.vSpace(6));
         formCard.add(buttonRow);
-        formCard.add(Box.createRigidArea(new Dimension(0, 6)));
+        formCard.add(RuneAlyticsUi.vSpace(6));
         formCard.add(statusLabel);
 
-        // --- API Response
-        resultArea.setEditable(false);
-        resultArea.setLineWrap(true);
-        resultArea.setWrapStyleWord(true);
-        resultArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
-        resultArea.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        resultArea.setForeground(ColorScheme.TEXT_COLOR);
-        resultArea.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
-
-        JScrollPane scroll = new JScrollPane(resultArea);
-        scroll.setBorder(BorderFactory.createTitledBorder("API response"));
-        scroll.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        scroll.setOpaque(false);
-        scroll.setPreferredSize(new Dimension(100, 200));
-        scroll.setAlignmentX(LEFT_ALIGNMENT);
+        // --- API Response card using shared UI
+        JPanel apiCard = RuneAlyticsUi.apiResponseCard("API Response", resultArea);
 
         container.add(formCard);
-        container.add(Box.createRigidArea(new Dimension(0, 8)));
-        container.add(scroll);
+        container.add(RuneAlyticsUi.vSpace(8));
+        container.add(apiCard);
 
         return container;
     }
@@ -215,6 +170,11 @@ public class DuelArenaMatchPanel extends JPanel
         resultArea.setText("");
 
         new Thread(() -> {
+            String responseBody = null;
+            String serverMessage = null;
+            String errorMessage = null;
+            boolean success = false;
+
             try
             {
                 String jsonBody = "{\"match_code\":\"" + escapeJson(matchCode) + "\"}";
@@ -227,34 +187,91 @@ public class DuelArenaMatchPanel extends JPanel
 
                 try (Response response = httpClient.newCall(request).execute())
                 {
-                    final String responseBody = response.body() != null
+                    responseBody = response.body() != null
                             ? response.body().string()
                             : "";
 
-                    SwingUtilities.invokeLater(() -> {
-                        if (!response.isSuccessful())
-                        {
-                            statusLabel.setText("Error: HTTP " + response.code());
-                            statusLabel.setForeground(Color.RED);
-                        }
-                        else
-                        {
-                            statusLabel.setText("Match loaded.");
-                            statusLabel.setForeground(Color.GREEN);
-                        }
-                        resultArea.setText(responseBody);
-                        setLoadingState(false);
-                    });
+                    serverMessage = extractMessageFromJson(responseBody);
+
+                    if (response.isSuccessful())
+                    {
+                        success = true;
+                    }
+                    else
+                    {
+                        errorMessage = (serverMessage != null && !serverMessage.isEmpty())
+                                ? serverMessage
+                                : "HTTP " + response.code();
+                    }
                 }
             }
             catch (IOException ex)
             {
-                SwingUtilities.invokeLater(() -> {
-                    statusLabel.setText("Error: " + ex.getMessage());
-                    resultArea.setText("");
-                    setLoadingState(false);
-                });
+                errorMessage = ex.getMessage();
             }
+
+            final boolean finalSuccess = success;
+            final String finalResponseBody = responseBody;
+            final String finalServerMessage = serverMessage;
+            final String finalErrorMessage = errorMessage;
+
+            SwingUtilities.invokeLater(() -> {
+                if (finalSuccess)
+                {
+                    String displayMessage =
+                            (finalServerMessage != null && !finalServerMessage.isEmpty())
+                                    ? finalServerMessage
+                                    : "Match loaded.";
+
+                    statusLabel.setText(displayMessage);
+                    statusLabel.setForeground(Color.GREEN);
+
+                    if (!finalResponseBody.isEmpty())
+                    {
+                        resultArea.setText(
+                                "Message: " + (finalServerMessage != null ? finalServerMessage : "(none)") +
+                                        "\n\nRaw response:\n" + finalResponseBody
+                        );
+                    }
+                    else
+                    {
+                        resultArea.setText("Message: " + displayMessage);
+                    }
+                }
+                else
+                {
+                    String displayMessage;
+                    if (finalServerMessage != null && !finalServerMessage.isEmpty())
+                    {
+                        displayMessage = finalServerMessage;
+                    }
+                    else if (finalErrorMessage != null && !finalErrorMessage.isEmpty())
+                    {
+                        displayMessage = "Request failed. " + finalErrorMessage;
+                    }
+                    else
+                    {
+                        displayMessage = "Request failed. Please check the match code and try again.";
+                    }
+
+                    statusLabel.setText(displayMessage);
+                    statusLabel.setForeground(Color.RED);
+
+                    if (finalResponseBody != null && !finalResponseBody.isEmpty())
+                    {
+                        resultArea.setText(
+                                "Error message: " + displayMessage +
+                                        "\n\nRaw response:\n" + finalResponseBody
+                        );
+                    }
+                    else
+                    {
+                        resultArea.setText("Error message: " + displayMessage);
+                    }
+                }
+
+                setLoadingState(false);
+            });
         }).start();
     }
 
@@ -265,11 +282,40 @@ public class DuelArenaMatchPanel extends JPanel
         if (loading)
         {
             statusLabel.setText("Loading match...");
+            statusLabel.setForeground(ColorScheme.TEXT_COLOR);
         }
     }
 
     private String escapeJson(String value)
     {
+        if (value == null) return "";
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /**
+     * Same simple JSON "message" extractor you used in the verification panel.
+     * This keeps status text aligned to your backend response.
+     */
+    private String extractMessageFromJson(String json)
+    {
+        if (json == null || json.isEmpty())
+        {
+            return null;
+        }
+
+        String key = "\"message\"";
+        int idx = json.indexOf(key);
+        if (idx == -1) return null;
+
+        int colonIdx = json.indexOf(':', idx + key.length());
+        if (colonIdx == -1) return null;
+
+        int firstQuote = json.indexOf('"', colonIdx + 1);
+        if (firstQuote == -1) return null;
+
+        int secondQuote = json.indexOf('"', firstQuote + 1);
+        if (secondQuote == -1) return null;
+
+        return json.substring(firstQuote + 1, secondQuote);
     }
 }

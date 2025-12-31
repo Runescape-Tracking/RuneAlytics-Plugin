@@ -1,6 +1,5 @@
 package com.runealytics;
 
-import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.components.materialtabs.MaterialTab;
 import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
 
@@ -41,24 +40,17 @@ public class RuneAlyticsSettingsPanel extends JPanel
         this.verificationPanel = verificationPanel;
         this.config = config;
 
-        setLayout(new BorderLayout());
-        setBackground(ColorScheme.DARK_GRAY_COLOR);
-        setOpaque(true);
+        // All styling delegated to RuneAlyticsUi
+        RuneAlyticsUi.styleRootPanel(this);
 
         buildTabs();
     }
 
     private void buildTabs()
     {
-        // Style the tab strip
-        tabGroup.setLayout(new BoxLayout(tabGroup, BoxLayout.X_AXIS));
-        tabGroup.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
-        tabGroup.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        tabGroup.setOpaque(true);
-
-        // Style the display area (content panel)
-        display.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        display.setOpaque(true);
+        // Style tab strip + display via shared helpers
+        RuneAlyticsUi.styleTabStrip(tabGroup);
+        RuneAlyticsUi.styleDisplayPanel(display);
 
         // Create the "Verification" tab and associate it with the verification panel
         MaterialTab verificationTab = new MaterialTab("Verification", tabGroup, verificationPanel);
@@ -78,91 +70,83 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private JPanel createStatusPanel()
     {
-        JPanel panel = new JPanel();
-        panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        // Use standard root content panel styling (padding, bg, etc.)
+        JPanel panel = RuneAlyticsUi.rootContentPanel();
 
         // Title
-        JLabel titleLabel = new JLabel("Tracking Status");
-        titleLabel.setFont(new Font("Arial", Font.BOLD, 16));
-        titleLabel.setForeground(Color.WHITE);
-        titleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel titleLabel = RuneAlyticsUi.titleLabel("Tracking Status");
         panel.add(titleLabel);
-        panel.add(Box.createVerticalStrut(15));
+        panel.add(RuneAlyticsUi.vSpace(15));
 
         // Verification Status
-        JLabel statusTitleLabel = new JLabel("Verification:");
-        statusTitleLabel.setForeground(Color.WHITE);
-        statusTitleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel statusTitleLabel = RuneAlyticsUi.bodyLabel("Verification:");
         panel.add(statusTitleLabel);
-        panel.add(Box.createVerticalStrut(5));
+        panel.add(RuneAlyticsUi.vSpace(5));
 
-        statusLabel = new JLabel("Not Verified");
-        statusLabel.setForeground(Color.RED);
-        statusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        statusLabel = RuneAlyticsUi.statusLabel();
+        statusLabel.setText("Not Verified");
+        RuneAlyticsUi.styleNegativeStatus(statusLabel);
         panel.add(statusLabel);
-        panel.add(Box.createVerticalStrut(5));
+        panel.add(RuneAlyticsUi.vSpace(5));
 
-        usernameLabel = new JLabel("Username: N/A");
-        usernameLabel.setForeground(Color.LIGHT_GRAY);
-        usernameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        usernameLabel = RuneAlyticsUi.valueLabel("Username: N/A");
         panel.add(usernameLabel);
-        panel.add(Box.createVerticalStrut(15));
+        panel.add(RuneAlyticsUi.vSpace(15));
 
         // Tracking Features Card
-        JPanel trackingCard = new JPanel();
-        trackingCard.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        trackingCard.setLayout(new BoxLayout(trackingCard, BoxLayout.Y_AXIS));
-        trackingCard.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        trackingCard.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JPanel trackingCard = RuneAlyticsUi.cardPanel();
 
-        JLabel trackingTitle = new JLabel("Active Tracking:");
-        trackingTitle.setForeground(Color.WHITE);
-        trackingTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel trackingTitle = RuneAlyticsUi.bodyLabel("Active Tracking:");
         trackingCard.add(trackingTitle);
-        trackingCard.add(Box.createVerticalStrut(8));
+        trackingCard.add(RuneAlyticsUi.vSpace(8));
 
-        xpTrackingLabel = new JLabel("✓ XP Tracking: " + (config.enableXpTracking() ? "ON" : "OFF"));
-        xpTrackingLabel.setForeground(config.enableXpTracking() ? Color.GREEN : Color.GRAY);
-        xpTrackingLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        xpTrackingLabel = RuneAlyticsUi.valueLabel(
+                "✓ XP Tracking: " + (config.enableXpTracking() ? "ON" : "OFF")
+        );
+        if (config.enableXpTracking())
+        {
+            RuneAlyticsUi.stylePositiveStatus(xpTrackingLabel);
+        }
+        else
+        {
+            xpTrackingLabel.setForeground(Color.GRAY);
+        }
         trackingCard.add(xpTrackingLabel);
-        trackingCard.add(Box.createVerticalStrut(5));
+        trackingCard.add(RuneAlyticsUi.vSpace(5));
 
-        bankTrackingLabel = new JLabel("✓ Bank Tracking: " + (config.enableBankSync() ? "ON" : "OFF"));
-        bankTrackingLabel.setForeground(config.enableBankSync() ? Color.GREEN : Color.GRAY);
-        bankTrackingLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        bankTrackingLabel = RuneAlyticsUi.valueLabel(
+                "✓ Bank Tracking: " + (config.enableBankSync() ? "ON" : "OFF")
+        );
+        if (config.enableBankSync())
+        {
+            RuneAlyticsUi.stylePositiveStatus(bankTrackingLabel);
+        }
+        else
+        {
+            bankTrackingLabel.setForeground(Color.GRAY);
+        }
         trackingCard.add(bankTrackingLabel);
 
         panel.add(trackingCard);
-        panel.add(Box.createVerticalStrut(15));
+        panel.add(RuneAlyticsUi.vSpace(15));
 
         // Last Bank Sync
-        JLabel lastSyncTitleLabel = new JLabel("Last Bank Sync:");
-        lastSyncTitleLabel.setForeground(Color.WHITE);
-        lastSyncTitleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel lastSyncTitleLabel = RuneAlyticsUi.bodyLabel("Last Bank Sync:");
         panel.add(lastSyncTitleLabel);
-        panel.add(Box.createVerticalStrut(5));
+        panel.add(RuneAlyticsUi.vSpace(5));
 
-        lastSyncLabel = new JLabel("Never");
-        lastSyncLabel.setForeground(Color.LIGHT_GRAY);
-        lastSyncLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        lastSyncLabel = RuneAlyticsUi.valueLabel("Never");
         panel.add(lastSyncLabel);
 
         panel.add(Box.createVerticalGlue());
 
-        // Configuration Info
-        JTextArea infoText = new JTextArea(
+        // Configuration Info – now using global styled infoTextArea
+        JTextArea infoText = RuneAlyticsUi.infoTextArea(
                 "To change tracking settings, use\n" +
                         "the RuneLite configuration panel.\n\n" +
                         "Click the wrench icon and search\n" +
                         "for 'RuneAlytics'."
         );
-        infoText.setEditable(false);
-        infoText.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        infoText.setForeground(Color.LIGHT_GRAY);
-        infoText.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        infoText.setAlignmentX(Component.LEFT_ALIGNMENT);
         panel.add(infoText);
 
         return panel;
@@ -182,13 +166,13 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 if (verified)
                 {
                     statusLabel.setText("✓ Verified");
-                    statusLabel.setForeground(Color.GREEN);
+                    RuneAlyticsUi.stylePositiveStatus(statusLabel);
                     usernameLabel.setText("Username: " + (username != null ? username : "N/A"));
                 }
                 else
                 {
                     statusLabel.setText("✗ Not Verified");
-                    statusLabel.setForeground(Color.RED);
+                    RuneAlyticsUi.styleNegativeStatus(statusLabel);
                     usernameLabel.setText("Username: N/A");
                 }
             }

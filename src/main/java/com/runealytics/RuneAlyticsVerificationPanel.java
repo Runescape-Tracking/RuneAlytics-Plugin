@@ -2,7 +2,6 @@ package com.runealytics;
 
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import net.runelite.client.ui.ColorScheme;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -16,7 +15,7 @@ import java.awt.*;
 import java.io.IOException;
 
 @Singleton
-public class RuneAlyticsVerificationPanel extends JPanel
+public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 {
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final String VERIFY_URL = "https://runealytics.com/api/verify-runelite";
@@ -25,11 +24,10 @@ public class RuneAlyticsVerificationPanel extends JPanel
     private final Client client;
     private final RuneAlyticsState runeAlyticsState;
 
-    private final JTextField codeField = new JTextField();
-    private final JButton verifyButton = new JButton("Verify Account");
-    private final JLabel statusLabel = new JLabel(" ");
-
-    private final JTextArea apiResponseArea = new JTextArea(5, 30);
+    private final JTextField codeField = RuneAlyticsUi.inputField();
+    private final JButton verifyButton = RuneAlyticsUi.primaryButton("Verify Account");
+    private final JLabel statusLabel = RuneAlyticsUi.statusLabel();
+    private final JTextArea apiResponseArea = RuneAlyticsUi.apiResponseArea();
 
     private boolean verifying = false;
 
@@ -44,11 +42,6 @@ public class RuneAlyticsVerificationPanel extends JPanel
         this.client = client;
         this.runeAlyticsState = runeAlyticsState;
 
-        setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
-        setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
-        setBackground(ColorScheme.DARK_GRAY_COLOR);
-        setOpaque(true);
-
         buildUi();
         wireEvents();
 
@@ -60,91 +53,36 @@ public class RuneAlyticsVerificationPanel extends JPanel
 
     private void buildUi()
     {
-        // Header
-        JLabel title = new JLabel("RuneAlytics Account Linking");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 14f));
-        title.setForeground(ColorScheme.TEXT_COLOR);
-        title.setAlignmentX(LEFT_ALIGNMENT);
+        // Top title / subtitle use your base panel helpers
+        addSectionTitle("RuneAlytics Account Linking");
+        addSubtitle("Connect your RuneLite client with your RuneAlytics account.");
 
-        JLabel subtitle = new JLabel("Connect your RuneLite client with your RuneAlytics account.");
-        subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 11f));
-        subtitle.setForeground(ColorScheme.TEXT_COLOR);
-        subtitle.setAlignmentX(LEFT_ALIGNMENT);
-
-        add(title);
-        add(Box.createRigidArea(new Dimension(0, 2)));
-        add(subtitle);
-        add(Box.createRigidArea(new Dimension(0, 8)));
-
-        // Instructions
-        JLabel instructions = new JLabel(
+        // Instructions block
+        JLabel instructions = RuneAlyticsUi.bodyLabel(
                 "<html>" +
                         "1. Log into <b>RuneAlytics.com</b>.<br>" +
                         "2. Go to <b>Account → Link RuneLite</b>.<br>" +
                         "3. Paste your link / verification code below." +
                         "</html>"
         );
-        instructions.setForeground(ColorScheme.TEXT_COLOR);
-        instructions.setAlignmentX(LEFT_ALIGNMENT);
-
         add(instructions);
-        add(Box.createRigidArea(new Dimension(0, 8)));
+        add(RuneAlyticsUi.vSpace(8));
 
-        // Code field + button in a form panel
-        JPanel formPanel = new JPanel();
-        formPanel.setLayout(new BoxLayout(formPanel, BoxLayout.X_AXIS));
-        formPanel.setOpaque(false);
+        // Input + button on one row
+        JPanel formRow = RuneAlyticsUi.formRow(codeField, verifyButton);
+        add(formRow);
+        add(RuneAlyticsUi.vSpace(6));
 
-        codeField.setMaximumSize(new Dimension(Integer.MAX_VALUE, codeField.getPreferredSize().height));
-        codeField.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        codeField.setForeground(ColorScheme.TEXT_COLOR);
-        codeField.setCaretColor(ColorScheme.TEXT_COLOR);
-        codeField.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(ColorScheme.DARKER_GRAY_COLOR.brighter(), 1),
-                BorderFactory.createEmptyBorder(2, 4, 2, 4)
-        ));
-
-        verifyButton.setMargin(new Insets(2, 8, 2, 8));
-
-        formPanel.add(codeField);
-        formPanel.add(Box.createRigidArea(new Dimension(6, 0)));
-        formPanel.add(verifyButton);
-
-        formPanel.setAlignmentX(LEFT_ALIGNMENT);
-        add(formPanel);
-        add(Box.createRigidArea(new Dimension(0, 6)));
-
-        // Status label
-        statusLabel.setAlignmentX(LEFT_ALIGNMENT);
-        statusLabel.setForeground(ColorScheme.TEXT_COLOR);
-        statusLabel.setHorizontalAlignment(SwingConstants.LEFT);
-        statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 11f));
-
+        // Status line
         add(statusLabel);
-        add(Box.createRigidArea(new Dimension(0, 8)));
+        add(RuneAlyticsUi.vSpace(8));
 
-        // API response area (for debugging / transparency)
-        apiResponseArea.setEditable(false);
-        apiResponseArea.setLineWrap(true);
-        apiResponseArea.setWrapStyleWord(true);
-        apiResponseArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
-        apiResponseArea.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        apiResponseArea.setForeground(ColorScheme.TEXT_COLOR);
-        apiResponseArea.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        // API response card (new style)
+        JPanel apiCard = RuneAlyticsUi.apiResponseCard("Server Response", apiResponseArea);
+        add(apiCard);
 
-        JScrollPane apiScrollPane = new JScrollPane(apiResponseArea);
-        apiScrollPane.setAlignmentX(LEFT_ALIGNMENT);
-        apiScrollPane.setBorder(
-                BorderFactory.createTitledBorder(
-                        BorderFactory.createLineBorder(ColorScheme.DARKER_GRAY_COLOR.brighter(), 1),
-                        "Server Response",
-                        0, 0,
-                        statusLabel.getFont().deriveFont(Font.PLAIN, 11f),
-                        ColorScheme.TEXT_COLOR
-                )
-        );
-
-        add(apiScrollPane);
+        // Push content up / allow stretch
+        add(Box.createVerticalGlue());
     }
 
     private void wireEvents()
@@ -161,7 +99,6 @@ public class RuneAlyticsVerificationPanel extends JPanel
                 && client.getLocalPlayer() != null;
     }
 
-    /** Called externally when login state changes. */
     public void refreshLoginState()
     {
         updateUi();
@@ -173,31 +110,36 @@ public class RuneAlyticsVerificationPanel extends JPanel
 
         if (!loggedIn)
         {
-            setVerificationControlsEnabled(false);
+            setControlsEnabled(false);
             statusLabel.setText("You must be logged into RuneScape in RuneLite to link your account.");
             return;
         }
 
         boolean isVerified = runeAlyticsState.isVerified();
 
-        // Hide form once verified, but keep the last server message visible
+        // Once verified: hide inputs
         codeField.setVisible(!isVerified);
         verifyButton.setVisible(!isVerified);
 
-        setVerificationControlsEnabled(!verifying && !isVerified);
+        setControlsEnabled(!verifying && !isVerified);
 
-        // Keep statusLabel text as-is unless we’re actively verifying
         if (verifying)
         {
             statusLabel.setText("Verifying with RuneAlytics...");
         }
+        else if (isVerified && !verifying)
+        {
+            // If you want a nicer post-verified message:
+            statusLabel.setText("Your account has been successfully verified!");
+        }
     }
 
-    private void setVerificationControlsEnabled(boolean enabled)
+    private void setControlsEnabled(boolean enabled)
     {
         codeField.setEnabled(enabled);
         verifyButton.setEnabled(enabled);
-        apiResponseArea.setEnabled(true); // always readable
+        // Keep response area readable even when disabled
+        apiResponseArea.setEnabled(true);
     }
 
     // ========= VERIFY FLOW =========
@@ -234,11 +176,7 @@ public class RuneAlyticsVerificationPanel extends JPanel
                 String rsn = client.getLocalPlayer() != null
                         ? client.getLocalPlayer().getName()
                         : "";
-
-                if (rsn == null)
-                {
-                    rsn = "";
-                }
+                if (rsn == null) rsn = "";
 
                 String jsonBody =
                         "{"
@@ -247,7 +185,6 @@ public class RuneAlyticsVerificationPanel extends JPanel
                                 + "}";
 
                 RequestBody body = RequestBody.create(JSON, jsonBody);
-
                 Request request = new Request.Builder()
                         .url(VERIFY_URL)
                         .post(body)
@@ -265,12 +202,10 @@ public class RuneAlyticsVerificationPanel extends JPanel
 
                     if (response.isSuccessful())
                     {
-                        // Success is based on HTTP 2xx — message comes from server
                         success = true;
                     }
                     else
                     {
-                        // Prefer server message even on error
                         errorMessage = (serverMessage != null && !serverMessage.isEmpty())
                                 ? serverMessage
                                 : "HTTP " + response.code();
@@ -294,7 +229,6 @@ public class RuneAlyticsVerificationPanel extends JPanel
                 {
                     runeAlyticsState.setVerified(true);
 
-                    // Always prefer the message from the JSON response
                     String displayMessage =
                             (finalServerMessage != null && !finalServerMessage.isEmpty())
                                     ? finalServerMessage
@@ -319,7 +253,6 @@ public class RuneAlyticsVerificationPanel extends JPanel
                 {
                     runeAlyticsState.setVerified(false);
 
-                    // Again, always prefer the server's 'message' if present
                     String displayMessage;
                     if (finalServerMessage != null && !finalServerMessage.isEmpty())
                     {
@@ -355,10 +288,7 @@ public class RuneAlyticsVerificationPanel extends JPanel
         }).start();
     }
 
-    /**
-     * Very simple "message" extractor: looks for `"message":"..."`
-     * and returns the inner text. If not found or malformed, returns null.
-     */
+    // Same simple helper as before – you can move this to a RuneAlyticsApi helper if you want
     private String extractMessageFromJson(String json)
     {
         if (json == null || json.isEmpty())
@@ -368,41 +298,23 @@ public class RuneAlyticsVerificationPanel extends JPanel
 
         String key = "\"message\"";
         int idx = json.indexOf(key);
-        if (idx == -1)
-        {
-            return null;
-        }
+        if (idx == -1) return null;
 
         int colonIdx = json.indexOf(':', idx + key.length());
-        if (colonIdx == -1)
-        {
-            return null;
-        }
+        if (colonIdx == -1) return null;
 
         int firstQuote = json.indexOf('"', colonIdx + 1);
-        if (firstQuote == -1)
-        {
-            return null;
-        }
+        if (firstQuote == -1) return null;
 
         int secondQuote = json.indexOf('"', firstQuote + 1);
-        if (secondQuote == -1)
-        {
-            return null;
-        }
+        if (secondQuote == -1) return null;
 
         return json.substring(firstQuote + 1, secondQuote);
     }
 
     private String escapeJson(String value)
     {
-        if (value == null)
-        {
-            return "";
-        }
-
-        return value
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"");
+        if (value == null) return "";
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }
