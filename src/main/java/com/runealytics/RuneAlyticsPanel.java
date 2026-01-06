@@ -11,25 +11,25 @@ import java.awt.image.BufferedImage;
 
 public class RuneAlyticsPanel extends PluginPanel
 {
-    private static final String VIEW_DUEL_ARENA = "duel_arena";
+    private static final String VIEW_MATCHMAKING = "matchmaking";
     private static final String VIEW_SETTINGS   = "settings";
 
-    private final DuelArenaMatchPanel duelArenaMatchPanel;
+    private final MatchmakingPanel matchmakingPanel;
     private final RuneAlyticsSettingsPanel settingsPanel;
 
     private final JPanel contentPanel = new JPanel();
     private final CardLayout cardLayout = new CardLayout();
 
-    private final JButton duelButton = new JButton();
+    private final JButton matchmakingButton = new JButton();
     private final JButton settingsButton = new JButton();
 
     @Inject
     public RuneAlyticsPanel(
-            DuelArenaMatchPanel duelArenaMatchPanel,
+            MatchmakingPanel matchmakingPanel,
             RuneAlyticsSettingsPanel settingsPanel
     )
     {
-        this.duelArenaMatchPanel = duelArenaMatchPanel;
+        this.matchmakingPanel = matchmakingPanel;
         this.settingsPanel = settingsPanel;
 
         setLayout(new BorderLayout());
@@ -40,7 +40,7 @@ public class RuneAlyticsPanel extends PluginPanel
         buildContent();
 
         // Default view
-        showView(VIEW_DUEL_ARENA);
+        showView(VIEW_MATCHMAKING);
     }
 
     private void buildNavBar()
@@ -51,15 +51,15 @@ public class RuneAlyticsPanel extends PluginPanel
         navBar.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         navBar.setOpaque(true);
 
-        // Duel Arena icon
+        // Matchmaking icon
         BufferedImage duelImg = ImageUtil.loadImageResource(
                 RuneAlyticsPlugin.class,
                 "/duel_arena_icon.png"
         );
-        duelButton.setIcon(new ImageIcon(duelImg));
-        duelButton.setToolTipText("Duel Arena");
-        styleNavButton(duelButton, false);
-        duelButton.addActionListener(e -> showView(VIEW_DUEL_ARENA));
+        matchmakingButton.setIcon(new ImageIcon(duelImg));
+        matchmakingButton.setToolTipText("Matchmaking");
+        styleNavButton(matchmakingButton, false);
+        matchmakingButton.addActionListener(e -> showView(VIEW_MATCHMAKING));
 
         // Settings icon
         BufferedImage settingsImg = ImageUtil.loadImageResource(
@@ -74,7 +74,7 @@ public class RuneAlyticsPanel extends PluginPanel
             settingsPanel.refreshLoginState();
         });
 
-        navBar.add(duelButton);
+        navBar.add(matchmakingButton);
         navBar.add(Box.createRigidArea(new Dimension(4, 0)));
         navBar.add(settingsButton);
         navBar.add(Box.createHorizontalGlue());
@@ -103,7 +103,7 @@ public class RuneAlyticsPanel extends PluginPanel
         contentPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
         contentPanel.setOpaque(true);
 
-        contentPanel.add(duelArenaMatchPanel, VIEW_DUEL_ARENA);
+        contentPanel.add(matchmakingPanel, VIEW_MATCHMAKING);
         contentPanel.add(settingsPanel, VIEW_SETTINGS);
 
         add(contentPanel, BorderLayout.CENTER);
@@ -113,13 +113,18 @@ public class RuneAlyticsPanel extends PluginPanel
     {
         cardLayout.show(contentPanel, view);
 
-        boolean duelActive = VIEW_DUEL_ARENA.equals(view);
+        boolean duelActive = VIEW_MATCHMAKING.equals(view);
 
         // Re-style buttons based on which view is active
-        styleNavButton(duelButton, duelActive);
+        styleNavButton(matchmakingButton, duelActive);
         styleNavButton(settingsButton, !duelActive);
 
-        duelButton.setEnabled(!duelActive);
+        matchmakingButton.setEnabled(!duelActive);
         settingsButton.setEnabled(duelActive);
+
+        if (duelActive)
+        {
+            matchmakingPanel.refreshLoginState();
+        }
     }
 }
