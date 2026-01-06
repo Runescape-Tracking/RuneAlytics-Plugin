@@ -3,7 +3,6 @@ package com.runealytics;
 import com.google.gson.JsonObject;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -13,17 +12,18 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.swing.*;
 import java.io.IOException;
+import java.util.concurrent.ScheduledExecutorService;
 
 @Singleton
 public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 {
-    private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final String VERIFY_PATH = "/verify-runelite";
 
     private final OkHttpClient httpClient;
     private final Client client;
     private final RuneAlyticsState runeAlyticsState;
     private final RunealyticsConfig config;
+    private final ScheduledExecutorService executorService;
 
     private final JTextField codeField = RuneAlyticsUi.inputField();
     private final JButton verifyButton = RuneAlyticsUi.primaryButton("Verify Account");
@@ -37,13 +37,15 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
             OkHttpClient httpClient,
             Client client,
             RuneAlyticsState runeAlyticsState,
-            RunealyticsConfig config
+            RunealyticsConfig config,
+            ScheduledExecutorService executorService
     )
     {
         this.httpClient = httpClient;
         this.client = client;
         this.runeAlyticsState = runeAlyticsState;
         this.config = config;
+        this.executorService = executorService;
 
         buildUi();
         wireEvents();
@@ -167,7 +169,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
         verifying = true;
         updateUi();
 
-        new Thread(() -> {
+        executorService.submit(() -> {
             boolean success = false;
             String serverMessage = null;
             String rawResponse = null;
@@ -187,7 +189,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                 payload.addProperty("verification_code", code);
                 payload.addProperty("osrs_rsn", rsn);
 
-                RequestBody body = RequestBody.create(JSON, payload.toString());
+                RequestBody body = RequestBody.create(RuneAlyticsHttp.JSON, payload.toString());
                 Request request = new Request.Builder()
                         .url(config.apiUrl() + VERIFY_PATH)
                         .post(body)
@@ -297,6 +299,6 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 
                 updateUi();
             });
-        }).start();
+        });
     }
 }

@@ -200,7 +200,7 @@ public class RuneAlyticsPlugin extends Plugin
 
     private void checkVerificationAsync(String rsn)
     {
-        new Thread(() -> {
+        executorService.submit(() -> {
             boolean verified = false;
             String verificationCode = null;
 
@@ -262,7 +262,7 @@ public class RuneAlyticsPlugin extends Plugin
                 settingsPanel.updateVerificationStatus(finalVerified, runeAlyticsState.getVerifiedUsername());
                 log.info("Final verification state: {}, verificationCode={}", finalVerified, finalVerificationCode);
             });
-        }).start();
+        });
     }
 
     private void initializeXpTracking()

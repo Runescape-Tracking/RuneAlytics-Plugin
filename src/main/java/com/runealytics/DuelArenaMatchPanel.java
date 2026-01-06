@@ -2,23 +2,27 @@ package com.runealytics;
 
 import com.google.gson.JsonObject;
 import net.runelite.client.ui.ColorScheme;
-import okhttp3.*;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.swing.*;
 import java.awt.*;
 import java.io.IOException;
+import java.util.concurrent.ScheduledExecutorService;
 
 @Singleton
 public class DuelArenaMatchPanel extends JPanel
 {
-    private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
     private static final String DUEL_ARENA_PATH = "/duel_arena";
 
     private final OkHttpClient httpClient;
     private final RuneAlyticsState runeAlyticsState;
     private final RunealyticsConfig config;
+    private final ScheduledExecutorService executorService;
 
     private final JTextField matchCodeField = RuneAlyticsUi.inputField();
     private final JButton submitButton = RuneAlyticsUi.primaryButton("Load match");
@@ -33,12 +37,14 @@ public class DuelArenaMatchPanel extends JPanel
     public DuelArenaMatchPanel(
             OkHttpClient httpClient,
             RuneAlyticsState runeAlyticsState,
-            RunealyticsConfig config
+            RunealyticsConfig config,
+            ScheduledExecutorService executorService
     )
     {
         this.httpClient = httpClient;
         this.runeAlyticsState = runeAlyticsState;
         this.config = config;
+        this.executorService = executorService;
 
         setLayout(new BorderLayout(0, 8));
         setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
@@ -159,7 +165,7 @@ public class DuelArenaMatchPanel extends JPanel
         setLoadingState(true);
         resultArea.setText("");
 
-        new Thread(() -> {
+        executorService.submit(() -> {
             String responseBody = null;
             String serverMessage = null;
             String errorMessage = null;
@@ -170,7 +176,7 @@ public class DuelArenaMatchPanel extends JPanel
                 JsonObject payload = new JsonObject();
                 payload.addProperty("match_code", matchCode);
 
-                RequestBody body = RequestBody.create(JSON, payload.toString());
+                RequestBody body = RequestBody.create(RuneAlyticsHttp.JSON, payload.toString());
                 Request request = new Request.Builder()
                         .url(config.apiUrl() + DUEL_ARENA_PATH)
                         .post(body)
@@ -263,7 +269,7 @@ public class DuelArenaMatchPanel extends JPanel
 
                 setLoadingState(false);
             });
-        }).start();
+        });
     }
 
     private void setLoadingState(boolean loading)
