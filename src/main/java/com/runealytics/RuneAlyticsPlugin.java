@@ -5,6 +5,7 @@ import com.google.inject.Provides;
 import net.runelite.api.*;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.StatChanged;
 import net.runelite.client.config.ConfigManager;
@@ -203,6 +204,20 @@ public class RuneAlyticsPlugin extends Plugin
 
         initializeXpTracking();
         checkVerificationAsync(rsn);
+    }
+
+    @Subscribe
+    public void onActorDeath(ActorDeath event)
+    {
+        if (!runeAlyticsState.isLoggedIn())
+        {
+            return;
+        }
+
+        if (event.getActor() instanceof Player)
+        {
+            matchmakingManager.onActorDeath((Player) event.getActor());
+        }
     }
 
     private void checkVerificationAsync(String rsn)

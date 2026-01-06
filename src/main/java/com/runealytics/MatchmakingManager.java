@@ -31,6 +31,8 @@ public class MatchmakingManager
     private int tickCounter;
     private boolean requestInFlight;
     private boolean beginInFlight;
+    private boolean reportInFlight;
+    private boolean resultReported;
     private WorldPoint lastRallyPoint;
 
     @Inject
@@ -103,6 +105,7 @@ public class MatchmakingManager
             {
                 session = result.getSession();
                 attemptAcceptMatchIfNeeded();
+                updateResultStatus();
             }
 
             requestInFlight = false;
@@ -134,7 +137,66 @@ public class MatchmakingManager
         tickCounter = 0;
         requestInFlight = false;
         beginInFlight = false;
+        reportInFlight = false;
+        resultReported = false;
         clearHintArrow();
+    }
+
+    public void onActorDeath(Player player)
+    {
+        if (session == null || reportInFlight || resultReported)
+        {
+            return;
+        }
+
+        if (player == null || player.getName() == null)
+        {
+            return;
+        }
+
+        String deathName = player.getName();
+        if (!deathName.equalsIgnoreCase(session.getPlayer1Username())
+                && !deathName.equalsIgnoreCase(session.getPlayer2Username()))
+        {
+            return;
+        }
+
+        String token = session.getLocalToken();
+        String verificationCode = resolveVerificationCode();
+        String rsn = resolveLocalRsn();
+
+        if (token == null || token.isEmpty() || verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        {
+            return;
+        }
+
+        reportInFlight = true;
+
+        executorService.submit(() -> {
+            MatchmakingApiResult result;
+            try
+            {
+                result = apiClient.reportMatch(verificationCode, session.getMatchCode(), rsn, token, deathName);
+            }
+            catch (IOException ex)
+            {
+                result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
+            }
+
+            handleResult(result);
+
+            if (result.isSuccess() && result.getSession() != null)
+            {
+                session = result.getSession();
+                updateResultStatus();
+            }
+            else if (result.isTokenRefresh())
+            {
+                refreshToken();
+            }
+
+            reportInFlight = false;
+        });
     }
 
     private void pollMatch()
@@ -173,6 +235,7 @@ public class MatchmakingManager
             {
                 session = result.getSession();
                 attemptAcceptMatchIfNeeded();
+                updateResultStatus();
             }
 
             requestInFlight = false;
@@ -216,6 +279,7 @@ public class MatchmakingManager
             if (result.isSuccess() && result.getSession() != null)
             {
                 session = result.getSession();
+                updateResultStatus();
             }
         });
     }
@@ -295,6 +359,7 @@ public class MatchmakingManager
             if (result.isSuccess() && result.getSession() != null)
             {
                 session = result.getSession();
+                updateResultStatus();
             }
 
             beginInFlight = false;
@@ -327,8 +392,23 @@ public class MatchmakingManager
             if (result.isSuccess() && result.getSession() != null)
             {
                 session = result.getSession();
+                updateResultStatus();
             }
         });
+    }
+
+    private void updateResultStatus()
+    {
+        if (session == null)
+        {
+            return;
+        }
+
+        if (session.getStatus().equalsIgnoreCase("Completed")
+                || session.getStatus().equalsIgnoreCase("Canceled"))
+        {
+            resultReported = true;
+        }
     }
 
     private void updateHintArrow()
