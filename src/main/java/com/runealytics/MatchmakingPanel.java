@@ -234,9 +234,12 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             builder.append("Rally: none\n");
         }
 
-        if (session.getWinner() != null && !session.getWinner().isEmpty())
+        MatchmakingWinner winner = session.getWinner();
+        if (winner != null && winner.getOsrsRsn() != null && !winner.getOsrsRsn().isEmpty())
         {
-            builder.append("Winner: ").append(session.getWinner()).append("\n");
+            builder.append("Winner: ").append(winner.getOsrsRsn()).append("\n");
+            builder.append("Winner Combat Level: ").append(winner.getCombatLevel()).append("\n");
+            builder.append("Winner ELO: ").append(winner.getElo()).append("\n");
         }
 
         if (update.getMessage() != null && !update.getMessage().isEmpty())

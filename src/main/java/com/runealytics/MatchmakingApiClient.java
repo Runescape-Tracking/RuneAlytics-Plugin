@@ -183,21 +183,22 @@ public class MatchmakingApiClient
             rally = new MatchmakingRally(x, y, plane);
         }
 
-        String winner = null;
+        MatchmakingWinner winner = null;
         if (json.has("winner") && !json.get("winner").isJsonNull())
         {
             JsonObject winnerObj = json.getAsJsonObject("winner");
-            winner = getString(winnerObj, "osrs_rsn");
+            String winnerRsn = getString(winnerObj, "osrs_rsn");
+            int combatLevel = getInt(winnerObj, "combat_level");
+            int elo = getInt(winnerObj, "elo");
+            winner = new MatchmakingWinner(winnerRsn, combatLevel, elo);
         }
 
-        String player1Token = null;
-        String player2Token = null;
+        String token = null;
         String tokenExpiresAt = null;
         if (json.has("authentication") && json.get("authentication").isJsonObject())
         {
             JsonObject auth = json.getAsJsonObject("authentication");
-            player1Token = getString(auth, "player1_token");
-            player2Token = getString(auth, "player2_token");
+            token = getString(auth, "token");
             tokenExpiresAt = getString(auth, "expires_at");
         }
 
@@ -217,8 +218,7 @@ public class MatchmakingApiClient
                 gearRules,
                 rally,
                 winner,
-                player1Token,
-                player2Token,
+                token,
                 tokenExpiresAt
         );
     }

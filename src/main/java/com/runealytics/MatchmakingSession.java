@@ -16,9 +16,8 @@ public class MatchmakingSession
     private final String risk;
     private final String gearRules;
     private final MatchmakingRally rally;
-    private final String winner;
-    private final String player1Token;
-    private final String player2Token;
+    private final MatchmakingWinner winner;
+    private final String token;
     private final String tokenExpiresAt;
 
     public MatchmakingSession(
@@ -36,9 +35,8 @@ public class MatchmakingSession
             String risk,
             String gearRules,
             MatchmakingRally rally,
-            String winner,
-            String player1Token,
-            String player2Token,
+            MatchmakingWinner winner,
+            String token,
             String tokenExpiresAt
     )
     {
@@ -57,8 +55,7 @@ public class MatchmakingSession
         this.gearRules = gearRules;
         this.rally = rally;
         this.winner = winner;
-        this.player1Token = player1Token;
-        this.player2Token = player2Token;
+        this.token = token;
         this.tokenExpiresAt = tokenExpiresAt;
     }
 
@@ -132,19 +129,14 @@ public class MatchmakingSession
         return rally;
     }
 
-    public String getWinner()
+    public MatchmakingWinner getWinner()
     {
         return winner;
     }
 
-    public String getPlayer1Token()
+    public String getToken()
     {
-        return player1Token;
-    }
-
-    public String getPlayer2Token()
-    {
-        return player2Token;
+        return token;
     }
 
     public String getTokenExpiresAt()
@@ -154,19 +146,7 @@ public class MatchmakingSession
 
     public String getLocalToken()
     {
-        if (localRsn == null)
-        {
-            return null;
-        }
-        if (localRsn.equalsIgnoreCase(player1Username))
-        {
-            return player1Token;
-        }
-        if (localRsn.equalsIgnoreCase(player2Username))
-        {
-            return player2Token;
-        }
-        return null;
+        return token;
     }
 
     public String getOpponentRsn()
