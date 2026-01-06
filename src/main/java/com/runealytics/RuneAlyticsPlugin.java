@@ -49,7 +49,10 @@ public class RuneAlyticsPlugin extends Plugin
     private RuneAlyticsPanel runeAlyticsPanel;
 
     @Inject
-    private DuelArenaMatchPanel duelArenaMatchPanel;
+    private MatchmakingPanel matchmakingPanel;
+
+    @Inject
+    private MatchmakingManager matchmakingManager;
 
     @Inject
     private RuneAlyticsSettingsPanel settingsPanel;
@@ -96,7 +99,7 @@ public class RuneAlyticsPlugin extends Plugin
         clientToolbar.addNavigation(navButton);
 
         updateLoginStateFromClient();
-        duelArenaMatchPanel.refreshLoginState();
+        matchmakingPanel.refreshLoginState();
         settingsPanel.refreshLoginState();
 
         verificationCheckedForCurrentSession = false;
@@ -118,6 +121,7 @@ public class RuneAlyticsPlugin extends Plugin
         runeAlyticsState.reset();
         verificationCheckedForCurrentSession = false;
         lastXpMap.clear();
+        matchmakingManager.reset();
     }
 
     @Provides
@@ -142,7 +146,7 @@ public class RuneAlyticsPlugin extends Plugin
 
         runeAlyticsState.setLoggedIn(loggedIn);
 
-        duelArenaMatchPanel.refreshLoginState();
+        matchmakingPanel.refreshLoginState();
         settingsPanel.refreshLoginState();
 
         if (event.getGameState() == GameState.LOGGED_IN)
@@ -158,7 +162,8 @@ public class RuneAlyticsPlugin extends Plugin
             verificationCheckedForCurrentSession = false;
             lastXpMap.clear();
             settingsPanel.refreshLoginState();
-            duelArenaMatchPanel.refreshLoginState();
+            matchmakingPanel.refreshLoginState();
+            matchmakingManager.reset();
         }
     }
 
@@ -169,6 +174,8 @@ public class RuneAlyticsPlugin extends Plugin
         {
             return;
         }
+
+        matchmakingManager.onGameTick();
 
         if (verificationCheckedForCurrentSession)
         {
@@ -260,6 +267,7 @@ public class RuneAlyticsPlugin extends Plugin
                 }
 
                 settingsPanel.updateVerificationStatus(finalVerified, runeAlyticsState.getVerifiedUsername());
+                matchmakingPanel.refreshLoginState();
                 log.info("Final verification state: {}, verificationCode={}", finalVerified, finalVerificationCode);
             });
         });
