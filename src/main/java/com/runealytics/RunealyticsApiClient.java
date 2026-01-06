@@ -2,7 +2,10 @@ package com.runealytics;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-import okhttp3.*;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,7 +18,6 @@ import java.util.concurrent.TimeUnit;
 public class RunealyticsApiClient
 {
     private static final Logger log = LoggerFactory.getLogger(RunealyticsApiClient.class);
-    private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     private final OkHttpClient httpClient;
     private final Gson gson;
@@ -38,7 +40,7 @@ public class RunealyticsApiClient
         JsonObject payload = new JsonObject();
         payload.addProperty("token", token);
 
-        RequestBody body = RequestBody.create(JSON, gson.toJson(payload));
+        RequestBody body = RequestBody.create(RuneAlyticsHttp.JSON, gson.toJson(payload));
         Request request = new Request.Builder()
                 .url(config.apiUrl() + "/check-verification")
                 .post(body)
@@ -66,7 +68,7 @@ public class RunealyticsApiClient
         payload.addProperty("username", username);
         payload.addProperty("verification_method", "plugin");
 
-        RequestBody body = RequestBody.create(JSON, gson.toJson(payload));
+        RequestBody body = RequestBody.create(RuneAlyticsHttp.JSON, gson.toJson(payload));
         Request request = new Request.Builder()
                 .url(config.apiUrl() + "/check-verification")
                 .post(body)
@@ -96,7 +98,7 @@ public class RunealyticsApiClient
 
     public boolean syncBankData(String token, JsonObject bankData) throws IOException
     {
-        RequestBody body = RequestBody.create(JSON, gson.toJson(bankData));
+        RequestBody body = RequestBody.create(RuneAlyticsHttp.JSON, gson.toJson(bankData));
         Request request = new Request.Builder()
                 .url(config.apiUrl() + "/bank/sync")
                 .post(body)
@@ -118,7 +120,7 @@ public class RunealyticsApiClient
 
     public boolean recordXpGain(String token, JsonObject xpData) throws IOException
     {
-        RequestBody body = RequestBody.create(JSON, gson.toJson(xpData));
+        RequestBody body = RequestBody.create(RuneAlyticsHttp.JSON, gson.toJson(xpData));
         Request request = new Request.Builder()
                 .url(config.apiUrl() + "/xp/record")
                 .post(body)
