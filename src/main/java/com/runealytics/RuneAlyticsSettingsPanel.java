@@ -19,10 +19,13 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private final JPanel display = new JPanel(new BorderLayout());
 
     // MaterialTabGroup manages the tab strip and swaps content into `display`
-    private final MaterialTabGroup tabGroup = new MaterialTabGroup(display);
+    private MaterialTabGroup tabGroup;
 
     private final RuneAlyticsVerificationPanel verificationPanel;
     private final RunealyticsConfig config;
+    private final RuneAlyticsState runeAlyticsState;
+
+    private boolean verificationTabVisible = true;
 
     // Status panel labels
     private JLabel statusLabel;
@@ -34,20 +37,32 @@ public class RuneAlyticsSettingsPanel extends JPanel
     @Inject
     public RuneAlyticsSettingsPanel(
             RuneAlyticsVerificationPanel verificationPanel,
-            RunealyticsConfig config
+            RunealyticsConfig config,
+            RuneAlyticsState runeAlyticsState
     )
     {
         this.verificationPanel = verificationPanel;
         this.config = config;
+        this.runeAlyticsState = runeAlyticsState;
 
         // All styling delegated to RuneAlyticsUi
         RuneAlyticsUi.styleRootPanel(this);
+
+        this.verificationPanel.setVerificationStatusListener(this::handleVerificationStatusChange);
 
         buildTabs();
     }
 
     private void buildTabs()
     {
+        boolean shouldShowVerification = !runeAlyticsState.isVerified();
+
+        if (tabGroup != null)
+        {
+            remove(tabGroup);
+        }
+
+        tabGroup = new MaterialTabGroup(display);
         // Style tab strip + display via shared helpers
         RuneAlyticsUi.styleTabStrip(tabGroup);
         RuneAlyticsUi.styleDisplayPanel(display);
@@ -55,17 +70,25 @@ public class RuneAlyticsSettingsPanel extends JPanel
         // Create the "Status" tab with tracking information
         MaterialTab statusTab = new MaterialTab("Status", tabGroup, createStatusPanel());
 
-        // Create the "Verification" tab and associate it with the verification panel
-        MaterialTab verificationTab = new MaterialTab("Verification", tabGroup, verificationPanel);
-
         tabGroup.addTab(statusTab);
-        tabGroup.addTab(verificationTab);
+
+        if (shouldShowVerification)
+        {
+            // Create the "Verification" tab and associate it with the verification panel
+            MaterialTab verificationTab = new MaterialTab("Verification", tabGroup, verificationPanel);
+            tabGroup.addTab(verificationTab);
+        }
+
+        verificationTabVisible = shouldShowVerification;
 
         // IMPORTANT: select via the *group*, so it swaps the content into `display`
         tabGroup.select(statusTab);
 
         add(tabGroup, BorderLayout.NORTH);
         add(display, BorderLayout.CENTER);
+
+        revalidate();
+        repaint();
     }
 
     private JPanel createStatusPanel()
@@ -155,11 +178,14 @@ public class RuneAlyticsSettingsPanel extends JPanel
     /** Called externally when login state or context changes */
     public void refreshLoginState()
     {
+        syncTabs();
         verificationPanel.refreshLoginState();
+        updateVerificationStatus(runeAlyticsState.isVerified(), runeAlyticsState.getVerifiedUsername());
     }
 
     public void updateVerificationStatus(boolean verified, String username)
     {
+        syncTabs();
         SwingUtilities.invokeLater(() -> {
             if (statusLabel != null)
             {
@@ -179,6 +205,15 @@ public class RuneAlyticsSettingsPanel extends JPanel
         });
     }
 
+    private void syncTabs()
+    {
+        boolean shouldShowVerification = !runeAlyticsState.isVerified();
+        if (tabGroup == null || verificationTabVisible != shouldShowVerification)
+        {
+            buildTabs();
+        }
+    }
+
     public void updateLastSyncTime()
     {
         SwingUtilities.invokeLater(() -> {
@@ -187,5 +222,10 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 lastSyncLabel.setText(LocalDateTime.now().format(TIME_FORMATTER));
             }
         });
+    }
+
+    private void handleVerificationStatusChange()
+    {
+        updateVerificationStatus(runeAlyticsState.isVerified(), runeAlyticsState.getVerifiedUsername());
     }
 }
