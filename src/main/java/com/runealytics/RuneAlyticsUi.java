@@ -125,7 +125,7 @@ public final class RuneAlyticsUi
     public static JLabel bodyLabel(String text)
     {
         JLabel label = new JLabel(text);
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 12f));
+        label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
         label.setForeground(ColorScheme.TEXT_COLOR);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
@@ -142,7 +142,7 @@ public final class RuneAlyticsUi
     public static JLabel statusLabel()
     {
         JLabel label = new JLabel(" ");
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 11f));
+        label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
         label.setForeground(ColorScheme.TEXT_COLOR);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         label.setHorizontalAlignment(SwingConstants.LEFT);

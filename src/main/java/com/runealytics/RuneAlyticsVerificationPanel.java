@@ -27,10 +27,12 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 
     private final JTextField codeField = RuneAlyticsUi.inputField();
     private final JButton verifyButton = RuneAlyticsUi.primaryButton("Verify Account");
+    private final JPanel formRow = RuneAlyticsUi.formRow(codeField, verifyButton);
     private final JLabel statusLabel = RuneAlyticsUi.statusLabel();
     private final JTextArea apiResponseArea = RuneAlyticsUi.apiResponseArea();
 
     private boolean verifying = false;
+    private Runnable verificationStatusListener;
 
     @Inject
     public RuneAlyticsVerificationPanel(
@@ -69,7 +71,6 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
         add(instructions);
         add(RuneAlyticsUi.vSpace(8));
 
-        JPanel formRow = RuneAlyticsUi.formRow(codeField, verifyButton);
         add(formRow);
         add(RuneAlyticsUi.vSpace(6));
 
@@ -93,14 +94,18 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
         updateUi();
     }
 
+    public void setVerificationStatusListener(Runnable listener)
+    {
+        this.verificationStatusListener = listener;
+    }
+
     private void updateUi()
     {
         final boolean loggedIn = runeAlyticsState.isLoggedIn();
         final boolean isVerified = runeAlyticsState.isVerified();
 
-        // Always show the controls; just toggle enabled/disabled state
-        codeField.setVisible(true);
-        verifyButton.setVisible(true);
+        // Hide the controls when verified, otherwise show
+        formRow.setVisible(!isVerified);
 
         if (!loggedIn)
         {
@@ -297,8 +302,17 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                     }
                 }
 
+                notifyVerificationStatusChange();
                 updateUi();
             });
         });
+    }
+
+    private void notifyVerificationStatusChange()
+    {
+        if (verificationStatusListener != null)
+        {
+            verificationStatusListener.run();
+        }
     }
 }
