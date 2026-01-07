@@ -124,7 +124,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         trackingCard.add(RuneAlyticsUi.vSpace(8));
 
         xpTrackingLabel = RuneAlyticsUi.valueLabel(
-                "✓ XP Tracking: " + (config.enableXpTracking() ? "ON" : "OFF")
+                "XP Tracking: " + (config.enableXpTracking() ? "ON" : "OFF")
         );
         if (config.enableXpTracking())
         {
@@ -138,7 +138,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         trackingCard.add(RuneAlyticsUi.vSpace(5));
 
         bankTrackingLabel = RuneAlyticsUi.valueLabel(
-                "✓ Bank Tracking: " + (config.enableBankSync() ? "ON" : "OFF")
+                "Bank Tracking: " + (config.enableBankSync() ? "ON" : "OFF")
         );
         if (config.enableBankSync())
         {
@@ -191,13 +191,13 @@ public class RuneAlyticsSettingsPanel extends JPanel
             {
                 if (verified)
                 {
-                    statusLabel.setText("✓ Verified");
+                    statusLabel.setText("Verified");
                     RuneAlyticsUi.stylePositiveStatus(statusLabel);
                     usernameLabel.setText("Username: " + (username != null ? username : "N/A"));
                 }
                 else
                 {
-                    statusLabel.setText("✗ Not Verified");
+                    statusLabel.setText("Not Verified");
                     RuneAlyticsUi.styleNegativeStatus(statusLabel);
                     usernameLabel.setText("Username: N/A");
                 }
