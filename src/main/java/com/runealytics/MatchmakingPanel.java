@@ -16,7 +16,22 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     private final JTextField matchCodeField = RuneAlyticsUi.inputField();
     private final JButton loadButton = RuneAlyticsUi.primaryButton("Load match");
     private final JLabel statusLabel = RuneAlyticsUi.statusLabel();
-    private final JTextArea detailsArea = RuneAlyticsUi.apiResponseArea();
+    private final JLabel playersLabel = RuneAlyticsUi.valueLabel("Players: -");
+    private final JLabel matchStatusLabel = RuneAlyticsUi.valueLabel("Status: -");
+    private final JLabel worldLabel = RuneAlyticsUi.valueLabel("World: -");
+    private final JLabel zoneLabel = RuneAlyticsUi.valueLabel("Zone: -");
+    private final JLabel riskLabel = RuneAlyticsUi.valueLabel("Risk: -");
+    private final JLabel gearRulesLabel = RuneAlyticsUi.valueLabel("Gear Rules: -");
+    private final JLabel player1JoinedLabel = RuneAlyticsUi.valueLabel("Player 1 Joined: -");
+    private final JLabel player2JoinedLabel = RuneAlyticsUi.valueLabel("Player 2 Joined: -");
+    private final JLabel player1ReadyLabel = RuneAlyticsUi.valueLabel("Player 1 Ready: -");
+    private final JLabel player2ReadyLabel = RuneAlyticsUi.valueLabel("Player 2 Ready: -");
+    private final JLabel rallyLabel = RuneAlyticsUi.valueLabel("Rally: -");
+    private final JLabel winnerLabel = RuneAlyticsUi.valueLabel("Winner: -");
+    private final JLabel winnerCombatLabel = RuneAlyticsUi.valueLabel("Winner Combat Level: -");
+    private final JLabel winnerEloLabel = RuneAlyticsUi.valueLabel("Winner ELO: -");
+    private final JLabel serverMessageLabel = RuneAlyticsUi.valueLabel("Message: -");
+    private final JLabel rawResponseLabel = RuneAlyticsUi.valueLabel("Raw Response: -");
 
     private boolean loading;
 
@@ -69,12 +84,49 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         formCard.add(RuneAlyticsUi.vSpace(6));
         formCard.add(statusLabel);
 
-        JPanel detailsCard = RuneAlyticsUi.apiResponseCard("Match Details", detailsArea);
+        JPanel detailsCard = RuneAlyticsUi.cardPanel();
+        JLabel detailsHeader = RuneAlyticsUi.bodyLabel("Match Details");
+        detailsHeader.setFont(detailsHeader.getFont().deriveFont(Font.BOLD, 12f));
+        detailsCard.add(detailsHeader);
+        detailsCard.add(RuneAlyticsUi.vSpace(6));
+        detailsCard.add(playersLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(matchStatusLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(worldLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(zoneLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(riskLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(gearRulesLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(6));
+        detailsCard.add(player1JoinedLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(player2JoinedLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(player1ReadyLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(player2ReadyLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(6));
+        detailsCard.add(rallyLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(6));
+        detailsCard.add(winnerLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(winnerCombatLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(winnerEloLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(6));
+        detailsCard.add(serverMessageLabel);
+        detailsCard.add(RuneAlyticsUi.vSpace(4));
+        detailsCard.add(rawResponseLabel);
 
         add(formCard);
         add(RuneAlyticsUi.vSpace(8));
         add(detailsCard);
         add(Box.createVerticalGlue());
+
+        clearMatchDetails();
     }
 
     private void wireEvents()
@@ -137,7 +189,6 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     {
         matchCodeField.setEnabled(enabled);
         loadButton.setEnabled(enabled);
-        detailsArea.setEnabled(true);
     }
 
     private void submitMatchCode()
@@ -165,7 +216,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         }
 
         loading = true;
-        detailsArea.setText("");
+        clearMatchDetails();
         updateUi();
 
         matchmakingManager.loadMatch(matchCode);
@@ -181,7 +232,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             MatchmakingSession session = update.getSession();
             statusLabel.setText("Match status: " + session.getStatus());
             RuneAlyticsUi.stylePositiveStatus(statusLabel);
-            detailsArea.setText(buildMatchDetails(session, update));
+            updateMatchDetails(session, update);
         }
         else
         {
@@ -193,78 +244,109 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             statusLabel.setText(message);
             RuneAlyticsUi.styleNegativeStatus(statusLabel);
 
-            detailsArea.setText(buildErrorDetails(message, update.getRawResponse()));
+            updateErrorDetails(message, update.getRawResponse());
         }
 
         updateUi();
     }
 
-    private String buildMatchDetails(MatchmakingSession session, MatchmakingUpdate update)
+    private void updateMatchDetails(MatchmakingSession session, MatchmakingUpdate update)
     {
-        StringBuilder builder = new StringBuilder();
-        builder.append("Players: ")
-                .append(session.getPlayer1Username())
-                .append(" vs ")
-                .append(session.getPlayer2Username())
-                .append("\n");
-
-        builder.append("Status: ").append(session.getStatus()).append("\n");
-        builder.append("World: ").append(session.getWorld()).append("\n");
-        builder.append("Zone: ").append(session.getZone()).append("\n");
-        builder.append("Risk: ").append(session.getRisk()).append("\n");
-        builder.append("Gear Rules: ").append(session.getGearRules()).append("\n");
-
-        builder.append("Player 1 Joined: ").append(session.isPlayer1Joined()).append("\n");
-        builder.append("Player 2 Joined: ").append(session.isPlayer2Joined()).append("\n");
-        builder.append("Player 1 Ready: ").append(session.isPlayer1ReadyToFight()).append("\n");
-        builder.append("Player 2 Ready: ").append(session.isPlayer2ReadyToFight()).append("\n");
+        playersLabel.setText("Players: " + session.getPlayer1Username() + " vs " + session.getPlayer2Username());
+        matchStatusLabel.setText("Status: " + session.getStatus());
+        worldLabel.setText("World: " + session.getWorld());
+        zoneLabel.setText("Zone: " + session.getZone());
+        riskLabel.setText("Risk: " + session.getRisk());
+        gearRulesLabel.setText("Gear Rules: " + session.getGearRules());
+        player1JoinedLabel.setText("Player 1 Joined: " + session.isPlayer1Joined());
+        player2JoinedLabel.setText("Player 2 Joined: " + session.isPlayer2Joined());
+        player1ReadyLabel.setText("Player 1 Ready: " + session.isPlayer1ReadyToFight());
+        player2ReadyLabel.setText("Player 2 Ready: " + session.isPlayer2ReadyToFight());
 
         if (session.getRally() != null)
         {
-            builder.append("Rally: ")
-                    .append(session.getRally().getX())
-                    .append(", ")
-                    .append(session.getRally().getY())
-                    .append(" (plane ")
-                    .append(session.getRally().getPlane())
-                    .append(")\n");
+            rallyLabel.setText("Rally: " + session.getRally().getX()
+                    + ", " + session.getRally().getY()
+                    + " (plane " + session.getRally().getPlane() + ")");
         }
         else
         {
-            builder.append("Rally: none\n");
+            rallyLabel.setText("Rally: none");
         }
 
         MatchmakingWinner winner = session.getWinner();
         if (winner != null && winner.getOsrsRsn() != null && !winner.getOsrsRsn().isEmpty())
         {
-            builder.append("Winner: ").append(winner.getOsrsRsn()).append("\n");
-            builder.append("Winner Combat Level: ").append(winner.getCombatLevel()).append("\n");
-            builder.append("Winner ELO: ").append(winner.getElo()).append("\n");
+            winnerLabel.setText("Winner: " + winner.getOsrsRsn());
+            winnerCombatLabel.setText("Winner Combat Level: " + winner.getCombatLevel());
+            winnerEloLabel.setText("Winner ELO: " + winner.getElo());
+        }
+        else
+        {
+            winnerLabel.setText("Winner: -");
+            winnerCombatLabel.setText("Winner Combat Level: -");
+            winnerEloLabel.setText("Winner ELO: -");
         }
 
         if (update.getMessage() != null && !update.getMessage().isEmpty())
         {
-            builder.append("\nServer Message: ").append(update.getMessage()).append("\n");
+            serverMessageLabel.setText("Message: " + update.getMessage());
+            serverMessageLabel.setVisible(true);
+        }
+        else
+        {
+            serverMessageLabel.setText("Message: -");
+            serverMessageLabel.setVisible(false);
         }
 
         if (update.getRawResponse() != null && !update.getRawResponse().isEmpty())
         {
-            builder.append("\nRaw response:\n").append(update.getRawResponse());
+            rawResponseLabel.setText("Raw Response: " + update.getRawResponse());
+            rawResponseLabel.setVisible(true);
         }
-
-        return builder.toString();
+        else
+        {
+            rawResponseLabel.setText("Raw Response: -");
+            rawResponseLabel.setVisible(false);
+        }
     }
 
-    private String buildErrorDetails(String message, String rawResponse)
+    private void updateErrorDetails(String message, String rawResponse)
     {
-        StringBuilder builder = new StringBuilder();
-        builder.append("Error: ").append(message).append("\n");
+        clearMatchDetails();
+        serverMessageLabel.setText("Message: " + message);
+        serverMessageLabel.setVisible(true);
 
         if (rawResponse != null && !rawResponse.isEmpty())
         {
-            builder.append("\nRaw response:\n").append(rawResponse);
+            rawResponseLabel.setText("Raw Response: " + rawResponse);
+            rawResponseLabel.setVisible(true);
         }
+        else
+        {
+            rawResponseLabel.setVisible(false);
+        }
+    }
 
-        return builder.toString();
+    private void clearMatchDetails()
+    {
+        playersLabel.setText("Players: -");
+        matchStatusLabel.setText("Status: -");
+        worldLabel.setText("World: -");
+        zoneLabel.setText("Zone: -");
+        riskLabel.setText("Risk: -");
+        gearRulesLabel.setText("Gear Rules: -");
+        player1JoinedLabel.setText("Player 1 Joined: -");
+        player2JoinedLabel.setText("Player 2 Joined: -");
+        player1ReadyLabel.setText("Player 1 Ready: -");
+        player2ReadyLabel.setText("Player 2 Ready: -");
+        rallyLabel.setText("Rally: -");
+        winnerLabel.setText("Winner: -");
+        winnerCombatLabel.setText("Winner Combat Level: -");
+        winnerEloLabel.setText("Winner ELO: -");
+        serverMessageLabel.setText("Message: -");
+        serverMessageLabel.setVisible(false);
+        rawResponseLabel.setText("Raw Response: -");
+        rawResponseLabel.setVisible(false);
     }
 }

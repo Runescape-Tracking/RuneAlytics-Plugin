@@ -12,6 +12,7 @@ import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.ImageUtil;
@@ -56,6 +57,12 @@ public class RuneAlyticsPlugin extends Plugin
     private MatchmakingManager matchmakingManager;
 
     @Inject
+    private MatchmakingMinimapOverlay matchmakingMinimapOverlay;
+
+    @Inject
+    private OverlayManager overlayManager;
+
+    @Inject
     private RuneAlyticsSettingsPanel settingsPanel;
 
     @Inject
@@ -98,6 +105,7 @@ public class RuneAlyticsPlugin extends Plugin
                 .build();
 
         clientToolbar.addNavigation(navButton);
+        overlayManager.add(matchmakingMinimapOverlay);
 
         updateLoginStateFromClient();
         matchmakingPanel.refreshLoginState();
@@ -118,6 +126,8 @@ public class RuneAlyticsPlugin extends Plugin
             clientToolbar.removeNavigation(navButton);
             navButton = null;
         }
+
+        overlayManager.remove(matchmakingMinimapOverlay);
 
         runeAlyticsState.reset();
         verificationCheckedForCurrentSession = false;

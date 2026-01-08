@@ -34,6 +34,7 @@ public class MatchmakingManager
     private boolean reportInFlight;
     private boolean resultReported;
     private WorldPoint lastRallyPoint;
+    private String lastHintPlayerName;
 
     @Inject
     public MatchmakingManager(
@@ -419,6 +420,31 @@ public class MatchmakingManager
             return;
         }
 
+        if (isMatchCompletedOrCanceled())
+        {
+            clearHintArrow();
+            return;
+        }
+
+        if (isMatchFighting())
+        {
+            Player opponent = findPlayerByName(session.getOpponentRsn());
+            if (opponent == null)
+            {
+                clearHintArrow();
+                return;
+            }
+
+            String opponentName = opponent.getName();
+            if (opponentName != null && !opponentName.equalsIgnoreCase(lastHintPlayerName))
+            {
+                client.setHintArrow(opponent);
+                lastHintPlayerName = opponentName;
+                lastRallyPoint = null;
+            }
+            return;
+        }
+
         MatchmakingRally rally = session.getRally();
         if (rally == null)
         {
@@ -428,20 +454,59 @@ public class MatchmakingManager
 
         WorldPoint rallyPoint = new WorldPoint(rally.getX(), rally.getY(), rally.getPlane());
 
-        if (!rallyPoint.equals(lastRallyPoint))
+        if (!rallyPoint.equals(lastRallyPoint) || lastHintPlayerName != null)
         {
             client.setHintArrow(rallyPoint);
             lastRallyPoint = rallyPoint;
+            lastHintPlayerName = null;
         }
     }
 
     private void clearHintArrow()
     {
-        if (lastRallyPoint != null)
+        if (lastRallyPoint != null || lastHintPlayerName != null)
         {
             client.clearHintArrow();
             lastRallyPoint = null;
+            lastHintPlayerName = null;
         }
+    }
+
+    public WorldPoint getMinimapTarget()
+    {
+        if (session == null || isMatchCompletedOrCanceled())
+        {
+            return null;
+        }
+
+        if (isMatchFighting())
+        {
+            Player opponent = findPlayerByName(session.getOpponentRsn());
+            if (opponent != null)
+            {
+                return opponent.getWorldLocation();
+            }
+        }
+
+        MatchmakingRally rally = session.getRally();
+        if (rally == null)
+        {
+            return null;
+        }
+
+        return new WorldPoint(rally.getX(), rally.getY(), rally.getPlane());
+    }
+
+    private boolean isMatchFighting()
+    {
+        return session != null && session.getStatus().equalsIgnoreCase("Fighting");
+    }
+
+    private boolean isMatchCompletedOrCanceled()
+    {
+        return session != null
+                && (session.getStatus().equalsIgnoreCase("Completed")
+                || session.getStatus().equalsIgnoreCase("Canceled"));
     }
 
     private boolean isWithinRally(Player localPlayer, Player opponent, WorldPoint rallyPoint)
