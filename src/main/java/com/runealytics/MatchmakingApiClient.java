@@ -24,6 +24,7 @@ public class MatchmakingApiClient
     private static final String ACCEPT_MATCH_PATH = MATCHMAKING_BASE + "/accept";
     private static final String BEGIN_MATCH_PATH = MATCHMAKING_BASE + "/begin-match";
     private static final String REPORT_MATCH_PATH = MATCHMAKING_BASE + "/report-match";
+    private static final String REPORT_ITEMS_PATH = MATCHMAKING_BASE + "/report-items";
 
     private final OkHttpClient httpClient;
     private final RunealyticsConfig config;
@@ -78,6 +79,22 @@ public class MatchmakingApiClient
         payload.addProperty("authentication_token", authenticationToken);
         payload.addProperty("osrs_rsn_death", deathRsn);
         return executeRequest(REPORT_MATCH_PATH, payload, matchCode, osrsRsn);
+    }
+
+    public MatchmakingApiResult reportItems(
+            String verificationCode,
+            String matchCode,
+            String osrsRsn,
+            String authenticationToken,
+            JsonElement playerInventory,
+            JsonElement playerGear
+    ) throws IOException
+    {
+        JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
+        payload.addProperty("authentication_token", authenticationToken);
+        payload.add("player_inventory", playerInventory);
+        payload.add("player_gear", playerGear);
+        return executeRequest(REPORT_ITEMS_PATH, payload, matchCode, osrsRsn);
     }
 
     private JsonObject basePayload(String verificationCode, String matchCode, String osrsRsn)
