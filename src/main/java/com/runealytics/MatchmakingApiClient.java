@@ -122,14 +122,21 @@ public class MatchmakingApiClient
         try (Response response = httpClient.newCall(request).execute())
         {
             String responseBody = response.body() != null ? response.body().string() : "";
-            JsonObject json = parseJson(responseBody);
-            String message = json != null ? getString(json, "message") : null;
+            ParsedResponse parsedResponse = parseResponseBody(responseBody);
+            JsonObject json = parsedResponse.getJsonObject();
+            String message = json != null ? getString(json, "message") : parsedResponse.getPrimitiveMessage();
             boolean tokenRefresh = json != null && (hasTrue(json, "token_refresh") || hasTrue(json, "refresh_token"));
+            boolean success = response.isSuccessful() && (json != null || parsedResponse.isPrimitiveSuccess());
 
-            if (response.isSuccessful() && json != null)
+            if (success && json != null)
             {
                 MatchmakingSession session = parseMatchSession(json, matchCode, osrsRsn);
                 return new MatchmakingApiResult(session, message, responseBody, true, tokenRefresh);
+            }
+
+            if (success)
+            {
+                return new MatchmakingApiResult(null, message, responseBody, true, tokenRefresh);
             }
 
             if (!response.isSuccessful())
@@ -141,21 +148,110 @@ public class MatchmakingApiClient
         }
     }
 
-    private JsonObject parseJson(String responseBody)
+    private ParsedResponse parseResponseBody(String responseBody)
     {
         if (responseBody == null || responseBody.isEmpty())
         {
-            return null;
+            return ParsedResponse.empty();
         }
 
         try
         {
-            return gson.fromJson(responseBody, JsonObject.class);
+            JsonElement element = gson.fromJson(responseBody, JsonElement.class);
+            if (element == null || element.isJsonNull())
+            {
+                return ParsedResponse.empty();
+            }
+
+            if (element.isJsonObject())
+            {
+                return ParsedResponse.fromObject(element.getAsJsonObject());
+            }
+
+            log.debug("Matchmaking response was not a JSON object: {}", element);
+            return ParsedResponse.fromPrimitive(element);
         }
         catch (Exception ex)
         {
             log.debug("Failed to parse matchmaking response", ex);
-            return null;
+            return ParsedResponse.empty();
+        }
+    }
+
+    private static class ParsedResponse
+    {
+        private final JsonObject jsonObject;
+        private final boolean primitiveSuccess;
+        private final String primitiveMessage;
+
+        private ParsedResponse(JsonObject jsonObject, boolean primitiveSuccess, String primitiveMessage)
+        {
+            this.jsonObject = jsonObject;
+            this.primitiveSuccess = primitiveSuccess;
+            this.primitiveMessage = primitiveMessage;
+        }
+
+        private static ParsedResponse empty()
+        {
+            return new ParsedResponse(null, false, "");
+        }
+
+        private static ParsedResponse fromObject(JsonObject jsonObject)
+        {
+            return new ParsedResponse(jsonObject, false, "");
+        }
+
+        private static ParsedResponse fromPrimitive(JsonElement element)
+        {
+            if (!element.isJsonPrimitive())
+            {
+                return new ParsedResponse(null, false, element.toString());
+            }
+
+            boolean success = false;
+            String message = "";
+
+            try
+            {
+                success = element.getAsBoolean();
+            }
+            catch (Exception ignored)
+            {
+                success = false;
+            }
+
+            try
+            {
+                if (element.getAsJsonPrimitive().isNumber())
+                {
+                    success = element.getAsInt() != 0;
+                }
+                else if (element.getAsJsonPrimitive().isString())
+                {
+                    message = element.getAsString();
+                }
+            }
+            catch (Exception ignored)
+            {
+                // Keep best-effort success/message values.
+            }
+
+            return new ParsedResponse(null, success, message);
+        }
+
+        private JsonObject getJsonObject()
+        {
+            return jsonObject;
+        }
+
+        private boolean isPrimitiveSuccess()
+        {
+            return primitiveSuccess;
+        }
+
+        private String getPrimitiveMessage()
+        {
+            return primitiveMessage;
         }
     }
 
