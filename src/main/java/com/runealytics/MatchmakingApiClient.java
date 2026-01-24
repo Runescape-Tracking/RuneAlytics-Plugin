@@ -174,7 +174,7 @@ public class MatchmakingApiClient
         {
             JsonReader reader = new JsonReader(new StringReader(trimmedBody));
             reader.setLenient(true);
-            JsonElement element = JsonParser.parseReader(reader);
+            JsonElement element = new JsonParser().parse(reader);
             if (element == null || element.isJsonNull())
             {
                 return ParsedResponse.empty();
