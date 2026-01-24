@@ -24,7 +24,10 @@ import javax.swing.*;
 import java.awt.image.BufferedImage;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.ScheduledExecutorService;
 
 @Slf4j
 @PluginDescriptor(
@@ -43,9 +46,10 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private ItemManager itemManager;
     @Inject private LootTrackerManager lootManager;
     @Inject private RuneAlyticsState state;
+    @Inject private ScheduledExecutorService executorService;
 
     @Getter
-    private LootTrackerPanel lootPanel;
+    private RuneAlyticsPanel mainPanel;
 
     private NavigationButton navButton;
 
@@ -60,13 +64,27 @@ public class RuneAlyticsPlugin extends Plugin
     {
         log.info("RuneAlytics started");
 
-        lootPanel = injector.getInstance(LootTrackerPanel.class);
+        // Log config values
+        log.info("=== CONFIGURATION ===");
+        log.info("Enable Loot Tracking: {}", config.enableLootTracking());
+        log.info("Track All NPCs: {}", config.trackAllNpcs());
+        log.info("Minimum Loot Value: {}", config.minimumLootValue());
+        log.info("Sync to Server: {}", config.syncLootToServer());
+        log.info("Auto Verification: {}", config.enableAutoVerification());
+        log.info("====================");
+
+        // Create the main panel with tabs
+        mainPanel = injector.getInstance(RuneAlyticsPanel.class);
+
+        // Add the loot tracker tab to the main panel
+        LootTrackerPanel lootPanel = injector.getInstance(LootTrackerPanel.class);
+        mainPanel.addLootTrackerTab(lootPanel);
 
         navButton = NavigationButton.builder()
-                .tooltip("RuneAlytics - Loot Tracker")
+                .tooltip("RuneAlytics")
                 .icon(loadPluginIcon())
                 .priority(5)
-                .panel(lootPanel) // now valid
+                .panel(mainPanel)
                 .build();
 
         clientToolbar.addNavigation(navButton);
@@ -79,7 +97,7 @@ public class RuneAlyticsPlugin extends Plugin
         clientToolbar.removeNavigation(navButton);
 
         lootManager.shutdown();
-        lootPanel = null;
+        mainPanel = null;
         navButton = null;
         lastKilledBoss = null;
         lastKillTime = null;
@@ -98,29 +116,54 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onNpcLootReceived(NpcLootReceived event)
     {
+        log.info("=== NPC LOOT RECEIVED EVENT ===");
+
         if (!config.enableLootTracking())
         {
+            log.info("Loot tracking disabled in config");
             return;
         }
 
         NPC npc = event.getNpc();
         if (npc == null)
         {
+            log.info("NPC is null");
             return;
         }
 
-        Collection<ItemStack> items = event.getItems();
+        log.info("NPC: {} (ID: {}, Combat: {})", npc.getName(), npc.getId(), npc.getCombatLevel());
+
+        Collection<net.runelite.client.game.ItemStack> items = event.getItems();
         if (items == null || items.isEmpty())
         {
+            log.info("No items in loot");
             return;
         }
 
-        if (!lootManager.isBoss(npc.getId(), npc.getName()))
+        log.info("Loot contains {} items", items.size());
+
+        boolean isBoss = lootManager.isBoss(npc.getId(), npc.getName());
+        log.info("Is boss: {}", isBoss);
+
+        // Check if we should track this NPC
+        if (!isBoss && !config.trackAllNpcs())
         {
+            log.info("Not a tracked boss and trackAllNpcs is disabled, skipping");
             return;
         }
 
-        lootManager.processBossLoot(npc, items);
+        // Convert RuneLite ItemStack to custom ItemStack
+        List<ItemStack> converted = new ArrayList<>();
+        for (net.runelite.client.game.ItemStack item : items)
+        {
+            String itemName = itemManager.getItemComposition(item.getId()).getName();
+            log.info("  Item: {} (ID: {}, Qty: {})", itemName, item.getId(), item.getQuantity());
+            converted.add(new ItemStack(item.getId(), item.getQuantity()));
+        }
+
+        log.info("Processing loot for {} with {} items", npc.getName(), converted.size());
+        lootManager.processBossLoot(npc, converted);
+        log.info("=== END NPC LOOT RECEIVED ===");
     }
 
     // ==================== BOSS DEATH ====================
@@ -150,7 +193,6 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     // ==================== GROUND ITEM SPAWN ====================
-    // Correct modern RuneLite event
 
     @Subscribe
     public void onItemSpawned(ItemSpawned event)
@@ -227,7 +269,108 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onGameStateChanged(GameStateChanged event)
     {
-        state.setLoggedIn(event.getGameState() == GameState.LOGGED_IN);
+        GameState newState = event.getGameState();
+
+        if (newState == GameState.LOGGED_IN)
+        {
+            state.setLoggedIn(true);
+            log.info("Game state changed to LOGGED_IN, scheduling verification check");
+        }
+        else if (newState == GameState.LOGIN_SCREEN || newState == GameState.HOPPING)
+        {
+            state.setLoggedIn(false);
+        }
+    }
+
+    @Subscribe
+    public void onPlayerSpawned(PlayerSpawned event)
+    {
+        // Only check for local player
+        if (event.getPlayer() != client.getLocalPlayer())
+        {
+            return;
+        }
+
+        // Now the player is definitely available
+        if (config.enableAutoVerification() && !state.isVerified())
+        {
+            log.info("Local player spawned, checking verification");
+            checkVerificationStatus();
+        }
+    }
+
+    private void checkVerificationStatus()
+    {
+        if (client.getLocalPlayer() == null)
+        {
+            log.warn("Local player is null, cannot check verification");
+            return;
+        }
+
+        String rsn = client.getLocalPlayer().getName();
+
+        if (rsn == null || rsn.isEmpty())
+        {
+            log.warn("RSN is null or empty, cannot check verification");
+            return;
+        }
+
+        String token = config.authToken();
+
+        if (token == null || token.isEmpty())
+        {
+            log.debug("No auth token found for auto-verification");
+            return;
+        }
+
+        log.info("Checking verification status for {} with token: {}...",
+                rsn,
+                token.substring(0, Math.min(10, token.length())));
+
+        executorService.submit(() -> {
+            try
+            {
+                RunealyticsApiClient apiClient = injector.getInstance(RunealyticsApiClient.class);
+                boolean verified = apiClient.verifyToken(token, rsn);
+
+                if (verified)
+                {
+                    log.info("✓ Account {} auto-verified successfully", rsn);
+                    state.setVerified(true);
+                    state.setVerifiedUsername(rsn);
+                    state.setVerificationCode(token);
+
+                    SwingUtilities.invokeLater(() -> {
+                        if (mainPanel != null)
+                        {
+                            RuneAlyticsSettingsPanel settingsPanel = injector.getInstance(RuneAlyticsSettingsPanel.class);
+                            settingsPanel.updateVerificationStatus(true, rsn);
+
+                            mainPanel.revalidate();
+                            mainPanel.repaint();
+                        }
+                    });
+                }
+                else
+                {
+                    log.warn("✗ Verification failed for {}. Token may be invalid or account not verified on server.", rsn);
+                    state.setVerified(false);
+                    state.setVerifiedUsername(null);
+
+                    SwingUtilities.invokeLater(() -> {
+                        if (mainPanel != null)
+                        {
+                            RuneAlyticsSettingsPanel settingsPanel = injector.getInstance(RuneAlyticsSettingsPanel.class);
+                            settingsPanel.updateVerificationStatus(false, null);
+                        }
+                    });
+                }
+            }
+            catch (Exception e)
+            {
+                log.error("Failed to verify token for {}", rsn, e);
+            }
+        });
     }
 
     // ==================== AUTO SYNC ====================
@@ -258,24 +401,36 @@ public class RuneAlyticsPlugin extends Plugin
     {
         try
         {
-            return ImageUtil.loadImageResource(getClass(), "/runealytics_icon.png");
+            BufferedImage img = ImageUtil.loadImageResource(getClass(), "/runealytics_icon.png");
+            if (img != null)
+            {
+                return img;
+            }
         }
         catch (Exception e)
         {
-            BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
-            var g = img.createGraphics();
-            g.setColor(new java.awt.Color(255, 215, 0));
-            g.fillRect(0, 0, 16, 16);
-            g.dispose();
-            return img;
+            log.debug("Failed to load icon, using fallback", e);
         }
+
+        // Fallback: create a simple colored square
+        BufferedImage img = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
+        var g = img.createGraphics();
+        g.setColor(new java.awt.Color(255, 165, 0)); // Orange
+        g.fillRect(0, 0, 32, 32);
+        g.setColor(new java.awt.Color(255, 215, 0)); // Gold border
+        g.drawRect(0, 0, 31, 31);
+        g.dispose();
+        return img;
     }
 
     public void refreshLootPanel()
     {
-        if (lootPanel != null)
+        if (mainPanel != null)
         {
-            SwingUtilities.invokeLater(lootPanel::onDataRefresh);
+            SwingUtilities.invokeLater(() -> {
+                mainPanel.revalidate();
+                mainPanel.repaint();
+            });
         }
     }
 }

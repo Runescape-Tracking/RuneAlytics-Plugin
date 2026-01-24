@@ -125,6 +125,18 @@ public interface RunealyticsConfig extends Config
     )
     String lootSection = "loot";
 
+    @ConfigItem(
+            keyName = "trackAllNpcs",
+            name = "Track All NPCs",
+            description = "Track loot from all NPCs, not just bosses",
+            section = lootSection,
+            position = 3
+    )
+    default boolean trackAllNpcs()
+    {
+        return true;
+    }
+
     // Add config items:
     @ConfigItem(
             keyName = "enableLootTracking",

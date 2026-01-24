@@ -1,8 +1,10 @@
 package com.runealytics;
 
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.util.AsyncBufferedImage;
 import net.runelite.client.util.QuantityFormatter;
 
@@ -18,8 +20,9 @@ import java.util.List;
 /**
  * Loot tracker panel with filters and ignore functionality
  */
+@Slf4j
 @Singleton
-public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTrackerUpdateListener
+public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateListener
 {
     private static final int ITEMS_PER_ROW = 5;
     private static final int ITEM_SIZE = 36;
@@ -75,6 +78,9 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
         this.runeAlyticsState = runeAlyticsState;
         this.itemManager = itemManager;
 
+        log.info("LootTrackerPanel: Initializing");
+
+        // Register as listener FIRST
         lootManager.addListener(this);
 
         // Initialize with proper styling
@@ -92,7 +98,10 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
         bossListPanel.setOpaque(true);
 
         buildUi();
-        refreshDisplay();
+
+        // Force initial refresh to show any stored data
+        log.info("LootTrackerPanel: Triggering initial refresh");
+        SwingUtilities.invokeLater(this::refreshDisplay);
     }
 
     private void buildUi()
@@ -298,25 +307,33 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
     public void onKillRecorded(NpcKillRecord kill, BossKillStats stats)
     {
         lastKilledBoss = kill.getNpcName();
+        log.info("LootTrackerPanel: Kill recorded for {}", kill.getNpcName());
         SwingUtilities.invokeLater(this::refreshDisplay);
     }
 
     @Override
-    public void onLootUpdated() {
-
+    public void onLootUpdated()
+    {
+        log.info("LootTrackerPanel: Loot updated");
+        SwingUtilities.invokeLater(this::refreshDisplay);
     }
 
     @Override
     public void onDataRefresh()
     {
+        log.info("LootTrackerPanel: Data refresh requested");
         SwingUtilities.invokeLater(this::refreshDisplay);
     }
 
     private void refreshDisplay()
     {
+        log.info("LootTrackerPanel: Refreshing display");
+
         bossListPanel.removeAll();
 
         List<BossKillStats> allStats = lootManager.getAllBossStats();
+
+        log.info("LootTrackerPanel: Found {} boss stats", allStats.size());
 
         if (allStats.isEmpty())
         {
@@ -334,6 +351,9 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
 
             for (BossKillStats stats : allStats)
             {
+                log.info("LootTrackerPanel: Displaying {} - {} kills, {} gp",
+                        stats.getNpcName(), stats.getKillCount(), stats.getTotalLootValue());
+
                 totalValue += stats.getTotalLootValue();
                 totalKills += stats.getKillCount();
 
@@ -352,6 +372,8 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
 
         bossListPanel.revalidate();
         bossListPanel.repaint();
+
+        log.info("LootTrackerPanel: Display refresh complete");
     }
 
     /**

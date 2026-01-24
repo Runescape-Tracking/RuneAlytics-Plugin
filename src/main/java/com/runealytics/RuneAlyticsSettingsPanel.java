@@ -1,5 +1,6 @@
 package com.runealytics;
 
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.ui.components.materialtabs.MaterialTab;
 import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
 
@@ -9,7 +10,7 @@ import javax.swing.*;
 import java.awt.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-
+@Slf4j
 @Singleton
 public class RuneAlyticsSettingsPanel extends JPanel
 {
@@ -33,6 +34,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private JLabel lastSyncLabel;
     private JLabel xpTrackingLabel;
     private JLabel bankTrackingLabel;
+
 
     @Inject
     public RuneAlyticsSettingsPanel(
@@ -191,15 +193,17 @@ public class RuneAlyticsSettingsPanel extends JPanel
             {
                 if (verified)
                 {
-                    statusLabel.setText("Verified");
+                    statusLabel.setText("Verified ✓");
                     RuneAlyticsUi.stylePositiveStatus(statusLabel);
                     usernameLabel.setText("Username: " + (username != null ? username : "N/A"));
+                    log.info("UI updated: Account verified as {}", username);
                 }
                 else
                 {
                     statusLabel.setText("Not Verified");
                     RuneAlyticsUi.styleNegativeStatus(statusLabel);
                     usernameLabel.setText("Username: N/A");
+                    log.info("UI updated: Account not verified");
                 }
             }
         });
