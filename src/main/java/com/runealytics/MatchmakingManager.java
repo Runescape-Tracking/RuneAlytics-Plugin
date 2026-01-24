@@ -696,7 +696,13 @@ public class MatchmakingManager
             return true;
         }
 
-        String signature = update.getMessage() + "|" + update.getRawResponse();
+        String message = update.getMessage() != null ? update.getMessage() : "";
+        String rawResponse = update.getRawResponse() != null ? update.getRawResponse() : "";
+
+        boolean htmlFailure = message.equalsIgnoreCase("Matchmaking API returned HTML instead of JSON.")
+                || rawResponse.startsWith("<");
+
+        String signature = htmlFailure ? message : message + "|" + rawResponse;
         if (signature.equals(lastFailureSignature))
         {
             return false;
