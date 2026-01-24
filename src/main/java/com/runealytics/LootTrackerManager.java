@@ -28,7 +28,7 @@ public class LootTrackerManager
 
     private final Client client;
     private final ItemManager itemManager;
-    private final RunealyticsConfig config;  // CHANGED from LootTrackerConfig
+    private final RunealyticsConfig config;
     private final Gson gson;
     private final OkHttpClient okHttpClient;
     private final LootTrackerApiClient apiClient;
@@ -92,7 +92,7 @@ public class LootTrackerManager
     public LootTrackerManager(
             Client client,
             ItemManager itemManager,
-            RunealyticsConfig config,  // CHANGED from LootTrackerConfig
+            RunealyticsConfig config,
             Gson gson,
             OkHttpClient okHttpClient,
             LootTrackerApiClient apiClient,
@@ -148,19 +148,53 @@ public class LootTrackerManager
         storageManager.saveLootData(bossStats, 0);
     }
 
-    public void processBossLoot(NPC npc, List<ItemStack> items)
+    /**
+     * Process NPC loot
+     */
+    public void processNpcLoot(NPC npc, List<ItemStack> items)
     {
+        log.info(">>> processNpcLoot called for NPC: {} (ID: {})", npc.getName(), npc.getId());
+        processLoot(npc.getName(), npc.getId(), npc.getCombatLevel(), client.getWorld(), items, "NPC");
+    }
+
+    /**
+     * Process player loot (PvP)
+     */
+    public void processPlayerLoot(String playerName, List<ItemStack> items)
+    {
+        log.info(">>> processPlayerLoot called for player: {}", playerName);
+        processLoot(playerName, 0, 0, client.getWorld(), items, "PLAYER");
+    }
+
+    /**
+     * Process generic loot (chests, clues, etc.)
+     */
+    public void processGenericLoot(String source, String type, List<ItemStack> items)
+    {
+        log.info(">>> processGenericLoot called for source: {} (type: {})", source, type);
+        processLoot(source, 0, 0, client.getWorld(), items, type);
+    }
+
+    /**
+     * Unified loot processing
+     */
+    private void processLoot(String sourceName, int sourceId, int combatLevel, int world, List<ItemStack> items, String lootType)
+    {
+        log.info(">>> processLoot: source={}, id={}, combat={}, world={}, items={}, type={}",
+                sourceName, sourceId, combatLevel, world, items.size(), lootType);
+
         if (!config.enableLootTracking())
         {
+            log.warn("Loot tracking is disabled, exiting");
             return;
         }
 
-        String npcName = normalizeBossName(npc.getName());
-        int combatLevel = npc.getCombatLevel();
-        int world = client.getWorld();
+        String normalizedName = normalizeBossName(sourceName);
+        log.info(">>> Normalized name: {}", normalizedName);
 
-        NpcKillRecord kill = new NpcKillRecord(npcName, npc.getId(), combatLevel, world);
+        NpcKillRecord kill = new NpcKillRecord(normalizedName, sourceId, combatLevel, world);
 
+        int dropsAdded = 0;
         for (ItemStack item : items)
         {
             long gePrice = itemManager.getItemPrice(item.getId());
@@ -169,8 +203,13 @@ public class LootTrackerManager
 
             long totalValue = gePrice * item.getQuantity();
 
+            log.info(">>> Item: {} (ID: {}), Qty: {}, GE: {}, Total: {}",
+                    itemName, item.getId(), item.getQuantity(), gePrice, totalValue);
+            log.info(">>> Minimum value threshold: {}", config.minimumLootValue());
+
             if (totalValue < config.minimumLootValue())
             {
+                log.info(">>> Item value {} below threshold {}, skipping", totalValue, config.minimumLootValue());
                 continue;
             }
 
@@ -183,25 +222,39 @@ public class LootTrackerManager
             );
 
             kill.addDrop(drop);
+            dropsAdded++;
+            log.info(">>> Added drop #{}", dropsAdded);
         }
 
         if (kill.getDrops().isEmpty())
         {
-            log.debug("No drops to record for {}", npcName);
+            log.warn(">>> No drops to record for {} (all items below threshold)", normalizedName);
             return;
         }
 
-        log.info("Processing boss loot: {} - {} drops", npcName, kill.getDrops().size());
+        log.info(">>> Recording kill with {} drops", kill.getDrops().size());
 
         addKill(kill);
+        log.info(">>> Kill added to stats");
+
         pendingSync.offer(kill);
+        log.info(">>> Kill queued for sync");
 
-        BossKillStats stats = bossStats.get(npcName);
+        BossKillStats stats = bossStats.get(normalizedName);
+        log.info(">>> Stats: {} kills, {} gp total",
+                stats != null ? stats.getKillCount() : 0,
+                stats != null ? stats.getTotalLootValue() : 0);
 
-        log.info("Notifying {} listeners about kill", listeners.size());
+        log.info(">>> Notifying {} listeners", listeners.size());
         notifyKillRecorded(kill, stats);
 
-        log.info("Recorded {} kill: {} items, {} gp", npcName, kill.getDrops().size(), kill.getTotalValue());
+        log.info(">>> Recorded {} kill: {} items, {} gp", normalizedName, kill.getDrops().size(), kill.getTotalValue());
+    }
+
+    // Legacy method for compatibility
+    public void processBossLoot(NPC npc, List<ItemStack> items)
+    {
+        processNpcLoot(npc, items);
     }
 
     public void processGroundItem(NPC npc, TileItem item)
@@ -415,10 +468,26 @@ public class LootTrackerManager
 
         String lowerName = name.toLowerCase();
 
+        // Gauntlet
+        if (lowerName.contains("corrupted gauntlet")) return "Corrupted Gauntlet";
+        if (lowerName.contains("gauntlet")) return "The Gauntlet";
+
+        // Chests and special loot sources
+        if (lowerName.contains("barrows chest") || lowerName.contains("barrows")) return "Barrows";
+        if (lowerName.contains("crystal chest")) return "Crystal Chest";
+        if (lowerName.contains("casket") || lowerName.contains("clue scroll")) return "Clue Scroll";
+        if (lowerName.contains("reward chest")) return "Reward Chest";
+        if (lowerName.contains("chambers of xeric")) return "Chambers of Xeric";
+        if (lowerName.contains("theatre of blood")) return "Theatre of Blood";
+        if (lowerName.contains("tombs of amascut")) return "Tombs of Amascut";
+
+        // DT2 Bosses
         if (lowerName.contains("duke") || lowerName.contains("sucellus")) return "Duke Sucellus";
         if (lowerName.contains("leviathan")) return "The Leviathan";
         if (lowerName.contains("vardorvis")) return "Vardorvis";
         if (lowerName.contains("whisperer")) return "The Whisperer";
+
+        // Other bosses
         if (lowerName.contains("zulrah")) return "Zulrah";
         if (lowerName.contains("vorkath")) return "Vorkath";
         if (lowerName.contains("cerberus")) return "Cerberus";

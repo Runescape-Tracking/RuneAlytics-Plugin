@@ -10,6 +10,7 @@ import net.runelite.api.events.*;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.NpcLootReceived;
+import net.runelite.client.events.PlayerLootReceived;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -56,6 +57,9 @@ public class RuneAlyticsPlugin extends Plugin
     // Boss death tracking for ground loot attribution
     private NPC lastKilledBoss;
     private Instant lastKillTime;
+
+    // Chest source tracking
+    private String lastChestSource = "Unknown Chest";
 
     // ==================== LIFECYCLE ====================
 
@@ -162,8 +166,93 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         log.info("Processing loot for {} with {} items", npc.getName(), converted.size());
-        lootManager.processBossLoot(npc, converted);
+        lootManager.processNpcLoot(npc, converted);
         log.info("=== END NPC LOOT RECEIVED ===");
+    }
+
+    // ==================== PLAYER LOOT (PvP, Chests, etc.) ====================
+
+    @Subscribe
+    public void onPlayerLootReceived(PlayerLootReceived event)
+    {
+        log.info("=== PLAYER LOOT RECEIVED EVENT ===");
+        log.info("!!! Event toString: {}", event.toString());
+
+        if (!config.enableLootTracking())
+        {
+            log.info("Loot tracking disabled in config");
+            return;
+        }
+
+        Player player = event.getPlayer();
+        String source = player != null ? player.getName() : "Unknown";
+        log.info("Source Player: {}", source);
+        log.info("Last Chest Source: {}", lastChestSource);
+        log.info("Local Player Name: {}", client.getLocalPlayer() != null ? client.getLocalPlayer().getName() : "null");
+
+        Collection<net.runelite.client.game.ItemStack> items = event.getItems();
+        if (items == null || items.isEmpty())
+        {
+            log.info("No items in loot");
+            return;
+        }
+
+        log.info("Loot contains {} items", items.size());
+
+        // List all items
+        for (net.runelite.client.game.ItemStack item : items)
+        {
+            String itemName = itemManager.getItemComposition(item.getId()).getName();
+            log.info("  !!! ITEM: {} (ID: {}, Qty: {})", itemName, item.getId(), item.getQuantity());
+        }
+
+        // Check if this is from our own player (chest loot)
+        boolean isOwnPlayer = client.getLocalPlayer() != null &&
+                source.equals(client.getLocalPlayer().getName());
+
+        log.info("Is own player: {}", isOwnPlayer);
+
+        if (isOwnPlayer)
+        {
+            // This is chest loot
+            source = lastChestSource;
+            log.info("!!! USING CHEST SOURCE: {}", source);
+        }
+
+        // Convert items
+        List<ItemStack> converted = new ArrayList<>();
+        for (net.runelite.client.game.ItemStack item : items)
+        {
+            converted.add(new ItemStack(item.getId(), item.getQuantity()));
+        }
+
+        log.info("!!! PROCESSING LOOT FROM: {} ({} items)", source, converted.size());
+        lootManager.processPlayerLoot(source, converted);
+        log.info("=== END PLAYER LOOT RECEIVED ===");
+    }
+
+    // ==================== WIDGET EVENTS (for chests) ====================
+
+    @Subscribe
+    public void onWidgetLoaded(WidgetLoaded event)
+    {
+        if (!config.enableLootTracking())
+        {
+            return;
+        }
+
+        int groupId = event.getGroupId();
+        log.info("=== WIDGET LOADED: GroupId = {} ===", groupId);
+
+        // Common widget group IDs:
+        // 155 = Barrows reward
+        // 207 = Achievement Diary reward
+        // Check what widget loads for Gauntlet chest
+
+        if (groupId == 155)
+        {
+            log.info("!!! REWARD WIDGET DETECTED - Current chest source: {}", lastChestSource);
+        }
     }
 
     // ==================== BOSS DEATH ====================
@@ -239,19 +328,62 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
-        if (event.getType() != ChatMessageType.GAMEMESSAGE
-                && event.getType() != ChatMessageType.SPAM)
+        String msg = event.getMessage();
+        ChatMessageType type = event.getType();
+
+        log.info("=== CHAT [{}]: {} ===", type, msg);
+
+        if (type != ChatMessageType.GAMEMESSAGE && type != ChatMessageType.SPAM)
         {
             return;
         }
-
-        String msg = event.getMessage();
 
         if (msg.contains("kill count is:"))
         {
             lootManager.parseKillCountMessage(msg);
         }
+
+        // Detect "Your reward awaits you in the nearby chest" or similar
+        if (msg.contains("reward awaits") || msg.contains("You open the chest"))
+        {
+            lastChestSource = "Corrupted Gauntlet";
+            log.info("!!! CHEST OPENING DETECTED - Setting source to: {}", lastChestSource);
+        }
+
+        // Detect completion messages
+        if (msg.contains("Congratulations, you've completed") && msg.contains("Gauntlet"))
+        {
+            if (msg.contains("Corrupted"))
+            {
+                lastChestSource = "Corrupted Gauntlet";
+            }
+            else
+            {
+                lastChestSource = "The Gauntlet";
+            }
+            log.info("!!! GAUNTLET COMPLETION DETECTED - Setting source to: {}", lastChestSource);
+        }
+
+        // Generic chest messages
+        if (msg.contains("Barrows"))
+        {
+            lastChestSource = "Barrows";
+        }
+        else if (msg.contains("Theatre of Blood") || msg.contains("Verzik"))
+        {
+            lastChestSource = "Theatre of Blood";
+        }
+        else if (msg.contains("Chambers of Xeric") || msg.contains("Great Olm"))
+        {
+            lastChestSource = "Chambers of Xeric";
+        }
+        else if (msg.contains("Tombs of Amascut"))
+        {
+            lastChestSource = "Tombs of Amascut";
+        }
     }
+
+
 
     // ==================== GAME STATE ====================
 
