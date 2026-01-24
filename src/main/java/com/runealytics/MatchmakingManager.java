@@ -660,8 +660,14 @@ public class MatchmakingManager
 
     private void handleResult(MatchmakingApiResult result)
     {
+        MatchmakingSession sessionForUpdate = result.getSession();
+        if (sessionForUpdate == null && result.isSuccess())
+        {
+            sessionForUpdate = session;
+        }
+
         MatchmakingUpdate update = new MatchmakingUpdate(
-                result.getSession(),
+                sessionForUpdate,
                 result.getMessage(),
                 result.getRawResponse(),
                 result.isSuccess(),

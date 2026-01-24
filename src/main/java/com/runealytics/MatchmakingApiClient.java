@@ -165,6 +165,11 @@ public class MatchmakingApiClient
             return ParsedResponse.empty();
         }
 
+        if (isLikelyPrimitiveResponse(trimmedBody))
+        {
+            return ParsedResponse.fromRaw(trimmedBody);
+        }
+
         try
         {
             JsonReader reader = new JsonReader(new StringReader(trimmedBody));
@@ -188,6 +193,26 @@ public class MatchmakingApiClient
             log.debug("Failed to parse matchmaking response", ex);
             return ParsedResponse.fromRaw(trimmedBody);
         }
+    }
+
+    private boolean isLikelyPrimitiveResponse(String responseBody)
+    {
+        if (responseBody.isEmpty())
+        {
+            return false;
+        }
+
+        char firstChar = responseBody.charAt(0);
+        if (firstChar == '{' || firstChar == '[' || firstChar == '"')
+        {
+            return false;
+        }
+
+        String lower = responseBody.toLowerCase(Locale.ROOT);
+        return lower.startsWith("true")
+                || lower.startsWith("false")
+                || lower.startsWith("1")
+                || lower.startsWith("0");
     }
 
     private static class ParsedResponse
