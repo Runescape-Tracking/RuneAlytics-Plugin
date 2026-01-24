@@ -24,7 +24,6 @@ public class MatchmakingManager
 
     private static final int POLL_INTERVAL_TICKS = 2;
     private static final int RALLY_DISTANCE = 15;
-    private static final long FAILURE_NOTIFY_INTERVAL_MS = 5000L;
 
     private final Client client;
     private final RuneAlyticsState runeAlyticsState;
@@ -44,7 +43,6 @@ public class MatchmakingManager
     private WorldPoint lastRallyPoint;
     private String lastHintPlayerName;
     private String lastFailureSignature = "";
-    private long lastFailureAtMs;
 
     @Inject
     public MatchmakingManager(
@@ -154,7 +152,6 @@ public class MatchmakingManager
         resultReported = false;
         itemsReported = false;
         lastFailureSignature = "";
-        lastFailureAtMs = 0L;
         clearHintArrow();
     }
 
@@ -696,20 +693,16 @@ public class MatchmakingManager
         if (update.isSuccess())
         {
             lastFailureSignature = "";
-            lastFailureAtMs = 0L;
             return true;
         }
 
         String signature = update.getMessage() + "|" + update.getRawResponse();
-        long now = System.currentTimeMillis();
-
-        if (signature.equals(lastFailureSignature) && (now - lastFailureAtMs) < FAILURE_NOTIFY_INTERVAL_MS)
+        if (signature.equals(lastFailureSignature))
         {
             return false;
         }
 
         lastFailureSignature = signature;
-        lastFailureAtMs = now;
         return true;
     }
 

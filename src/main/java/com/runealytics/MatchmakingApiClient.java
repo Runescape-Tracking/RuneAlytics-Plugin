@@ -187,6 +187,15 @@ public class MatchmakingApiClient
                 return ParsedResponse.empty();
             }
 
+            if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isString())
+            {
+                String primitiveString = element.getAsString().trim();
+                if (isLikelyHtmlResponse(primitiveString))
+                {
+                    return ParsedResponse.fromRaw(primitiveString);
+                }
+            }
+
             if (element.isJsonObject())
             {
                 return ParsedResponse.fromObject(element.getAsJsonObject());
@@ -300,6 +309,15 @@ public class MatchmakingApiClient
                 else if (element.getAsJsonPrimitive().isString())
                 {
                     message = element.getAsString();
+                    if (message != null)
+                    {
+                        message = message.trim();
+                        if (message.startsWith("<"))
+                        {
+                            return new ParsedResponse(null, false, "Matchmaking API returned HTML instead of JSON.");
+                        }
+                        message = sanitizeRawResponse(message);
+                    }
                 }
             }
             catch (Exception ignored)
