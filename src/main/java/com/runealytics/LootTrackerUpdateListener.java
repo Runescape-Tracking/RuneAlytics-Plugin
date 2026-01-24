@@ -1,7 +1,7 @@
 package com.runealytics;
 
 /**
- * Listener interface for loot tracking updates
+ * Listener for loot tracker updates
  */
 public interface LootTrackerUpdateListener
 {
@@ -10,11 +10,11 @@ public interface LootTrackerUpdateListener
      */
     void onKillRecorded(NpcKillRecord kill, BossKillStats stats);
 
+    void onLootUpdated();
+
     /**
-     * Called when data should be refreshed (after loading or prestige)
+     * Called when data is refreshed
      */
-    default void onDataRefresh()
-    {
-        // Optional - implement if needed
-    }
+    void onDataRefresh();
+
 }

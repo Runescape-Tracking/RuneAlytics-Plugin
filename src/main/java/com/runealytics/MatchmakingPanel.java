@@ -349,4 +349,9 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         rawResponseLabel.setText("Raw Response: -");
         rawResponseLabel.setVisible(false);
     }
+
+    @Override
+    public void onDataRefresh() {
+
+    }
 }

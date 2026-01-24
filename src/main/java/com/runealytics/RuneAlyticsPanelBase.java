@@ -27,4 +27,10 @@ public abstract class RuneAlyticsPanelBase extends JPanel
         add(RuneAlyticsUi.subtitleLabel(text));
         add(RuneAlyticsUi.vSpace(8));
     }
+
+    /**
+     * Called when data is refreshed
+     * Subclasses should override this to update their display
+     */
+    public abstract void onDataRefresh();
 }

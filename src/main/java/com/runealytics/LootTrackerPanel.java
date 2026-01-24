@@ -1,7 +1,6 @@
 package com.runealytics;
 
-import com.runealytics.RuneAlyticsPanelBase;
-import com.runealytics.RuneAlyticsState;
+import lombok.Getter;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.util.AsyncBufferedImage;
@@ -41,6 +40,27 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
 
     private boolean showIgnoredItems = false;
     private String lastKilledBoss = null;
+    private SortMode currentSort = SortMode.VALUE;
+
+    @Getter
+    private enum SortMode
+    {
+        VALUE("Sort by Value"),
+        KILLS("Sort by Kills"),
+        RECENT("Sort by Recent");
+
+        private final String tooltip;
+
+        SortMode(String tooltip)
+        {
+            this.tooltip = tooltip;
+        }
+
+        public SortMode next()
+        {
+            return values()[(ordinal() + 1) % values().length];
+        }
+    }
 
     @Inject
     public LootTrackerPanel(
@@ -49,6 +69,8 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
             ItemManager itemManager
     )
     {
+        super(); // Call RuneAlyticsPanelBase constructor
+
         this.lootManager = lootManager;
         this.runeAlyticsState = runeAlyticsState;
         this.itemManager = itemManager;
@@ -75,6 +97,8 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
 
     private void buildUi()
     {
+        // Clear parent layout and set up our own
+        removeAll();
         setLayout(new BorderLayout());
         setBackground(ColorScheme.DARK_GRAY_COLOR);
 
@@ -89,7 +113,7 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
         backpackPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
         topPanel.add(backpackPanel);
 
-        topPanel.add(Box.createVerticalStrut(5));
+        topPanel.add(RuneAlyticsUi.vSpace(5));
 
         // Filter buttons
         JPanel filterPanel = createFilterPanel();
@@ -120,7 +144,7 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
         panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 50));
 
         // Backpack icon
-        JLabel backpackIcon = new JLabel("🎒");
+        JLabel backpackIcon = new JLabel("💰");
         backpackIcon.setFont(new Font("Dialog", Font.PLAIN, 28));
         backpackIcon.setPreferredSize(new Dimension(40, 50));
         backpackIcon.setHorizontalAlignment(SwingConstants.CENTER);
@@ -133,14 +157,8 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
         statsPanel.setOpaque(false);
 
         // Total count
-        JLabel countHeader = new JLabel("Total count:");
-        countHeader.setForeground(Color.LIGHT_GRAY);
-        countHeader.setFont(new Font("Dialog", Font.PLAIN, 11));
-
-        // Total value
-        JLabel valueHeader = new JLabel("Total value:");
-        valueHeader.setForeground(Color.LIGHT_GRAY);
-        valueHeader.setFont(new Font("Dialog", Font.PLAIN, 11));
+        JLabel countHeader = RuneAlyticsUi.subtitleLabel("Total kills:");
+        JLabel valueHeader = RuneAlyticsUi.subtitleLabel("Total value:");
 
         statsPanel.add(countHeader);
         statsPanel.add(totalCountLabel);
@@ -170,7 +188,8 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
 
         // Sort button
         sortButton = createFilterButton("⇅");
-        sortButton.setToolTipText("Sort by value");
+        sortButton.setToolTipText(currentSort.getTooltip());
+        sortButton.addActionListener(e -> cycleSortMode());
 
         // Clear all button
         clearButton = createFilterButton("🗑");
@@ -196,6 +215,36 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
         button.setFocusPainted(false);
         button.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60), 1));
         button.setFont(new Font("Dialog", Font.PLAIN, 14));
+        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+
+        // Add hover effect
+        button.addMouseListener(new MouseAdapter()
+        {
+            @Override
+            public void mouseEntered(MouseEvent e)
+            {
+                if (button.isEnabled())
+                {
+                    button.setBackground(ColorScheme.DARKER_GRAY_HOVER_COLOR);
+                }
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e)
+            {
+                Color bg = ColorScheme.DARK_GRAY_COLOR;
+                if (button == eyeButton && showIgnoredItems)
+                {
+                    bg = ColorScheme.BRAND_ORANGE;
+                }
+                else if (button == sortButton && currentSort != SortMode.VALUE)
+                {
+                    bg = new Color(70, 70, 100);
+                }
+                button.setBackground(bg);
+            }
+        });
+
         return button;
     }
 
@@ -207,6 +256,19 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
         showIgnoredItems = !showIgnoredItems;
         eyeButton.setToolTipText(showIgnoredItems ? "Hide ignored items" : "Show ignored items");
         eyeButton.setBackground(showIgnoredItems ? ColorScheme.BRAND_ORANGE : ColorScheme.DARK_GRAY_COLOR);
+        refreshDisplay();
+    }
+
+    /**
+     * Cycle through sort modes
+     */
+    private void cycleSortMode()
+    {
+        currentSort = currentSort.next();
+        sortButton.setToolTipText(currentSort.getTooltip());
+        sortButton.setBackground(currentSort == SortMode.VALUE
+                ? ColorScheme.DARK_GRAY_COLOR
+                : new Color(70, 70, 100));
         refreshDisplay();
     }
 
@@ -240,6 +302,11 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
     }
 
     @Override
+    public void onLootUpdated() {
+
+    }
+
+    @Override
     public void onDataRefresh()
     {
         SwingUtilities.invokeLater(this::refreshDisplay);
@@ -251,61 +318,152 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
 
         List<BossKillStats> allStats = lootManager.getAllBossStats();
 
-        // Sort: Most recently killed first, then by total value
-        allStats.sort((a, b) -> {
-            if (lastKilledBoss != null)
-            {
-                if (a.getNpcName().equals(lastKilledBoss) && !b.getNpcName().equals(lastKilledBoss))
-                {
-                    return -1;
-                }
-                if (b.getNpcName().equals(lastKilledBoss) && !a.getNpcName().equals(lastKilledBoss))
-                {
-                    return 1;
-                }
-            }
-            return Long.compare(b.getTotalLootValue(), a.getTotalLootValue());
-        });
-
-        long totalValue = 0;
-        int totalKills = 0;
-
-        for (BossKillStats stats : allStats)
+        if (allStats.isEmpty())
         {
-            totalValue += stats.getTotalLootValue();
-            totalKills += stats.getKillCount();
-
-            JPanel bossPanel = createBossPanel(stats);
-            bossPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-            bossListPanel.add(bossPanel);
-
-            // Add separator between bosses
-            bossListPanel.add(Box.createVerticalStrut(12));
+            // Show empty state
+            JPanel emptyPanel = createEmptyStatePanel();
+            bossListPanel.add(emptyPanel);
         }
+        else
+        {
+            // Sort based on current mode
+            sortBossStats(allStats);
 
-        // Update header totals
-        totalCountLabel.setText(String.valueOf(totalKills));
-        totalValueLabel.setText(formatGp(totalValue));
+            long totalValue = 0;
+            int totalKills = 0;
+
+            for (BossKillStats stats : allStats)
+            {
+                totalValue += stats.getTotalLootValue();
+                totalKills += stats.getKillCount();
+
+                JPanel bossPanel = createBossPanel(stats);
+                bossPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+                bossListPanel.add(bossPanel);
+
+                // Add separator between bosses
+                bossListPanel.add(RuneAlyticsUi.vSpace(12));
+            }
+
+            // Update header totals
+            totalCountLabel.setText(String.valueOf(totalKills));
+            totalValueLabel.setText(formatGp(totalValue));
+        }
 
         bossListPanel.revalidate();
         bossListPanel.repaint();
     }
 
+    /**
+     * Create empty state panel
+     */
+    private JPanel createEmptyStatePanel()
+    {
+        JPanel panel = RuneAlyticsUi.verticalPanel();
+        panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        panel.setBorder(new EmptyBorder(40, 20, 40, 20));
+        panel.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        JLabel emptyIcon = new JLabel("💀");
+        emptyIcon.setFont(new Font("Dialog", Font.PLAIN, 48));
+        emptyIcon.setAlignmentX(Component.CENTER_ALIGNMENT);
+        emptyIcon.setHorizontalAlignment(SwingConstants.CENTER);
+
+        JLabel emptyText = RuneAlyticsUi.titleLabel("No loot tracked yet");
+        emptyText.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        JLabel emptySubtext = RuneAlyticsUi.subtitleLabel("Kill bosses to start tracking!");
+        emptySubtext.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        panel.add(emptyIcon);
+        panel.add(RuneAlyticsUi.vSpace(10));
+        panel.add(emptyText);
+        panel.add(RuneAlyticsUi.vSpace(5));
+        panel.add(emptySubtext);
+
+        return panel;
+    }
+
+    /**
+     * Sort boss stats based on current sort mode
+     */
+    private void sortBossStats(List<BossKillStats> stats)
+    {
+        switch (currentSort)
+        {
+            case VALUE:
+                stats.sort((a, b) -> {
+                    if (lastKilledBoss != null)
+                    {
+                        if (a.getNpcName().equals(lastKilledBoss) && !b.getNpcName().equals(lastKilledBoss))
+                        {
+                            return -1;
+                        }
+                        if (b.getNpcName().equals(lastKilledBoss) && !a.getNpcName().equals(lastKilledBoss))
+                        {
+                            return 1;
+                        }
+                    }
+                    return Long.compare(b.getTotalLootValue(), a.getTotalLootValue());
+                });
+                break;
+
+            case KILLS:
+                stats.sort((a, b) -> {
+                    if (lastKilledBoss != null)
+                    {
+                        if (a.getNpcName().equals(lastKilledBoss) && !b.getNpcName().equals(lastKilledBoss))
+                        {
+                            return -1;
+                        }
+                        if (b.getNpcName().equals(lastKilledBoss) && !a.getNpcName().equals(lastKilledBoss))
+                        {
+                            return 1;
+                        }
+                    }
+                    return Integer.compare(b.getKillCount(), a.getKillCount());
+                });
+                break;
+
+            case RECENT:
+                stats.sort((a, b) -> {
+                    if (lastKilledBoss != null)
+                    {
+                        if (a.getNpcName().equals(lastKilledBoss) && !b.getNpcName().equals(lastKilledBoss))
+                        {
+                            return -1;
+                        }
+                        if (b.getNpcName().equals(lastKilledBoss) && !a.getNpcName().equals(lastKilledBoss))
+                        {
+                            return 1;
+                        }
+                    }
+                    return Long.compare(b.getLastKillTimestamp(), a.getLastKillTimestamp());
+                });
+                break;
+        }
+    }
+
     private JPanel createBossPanel(BossKillStats stats)
     {
-        JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        JPanel panel = RuneAlyticsUi.verticalPanel();
         panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        panel.setOpaque(true);
+
+        boolean isRecentKill = lastKilledBoss != null && lastKilledBoss.equals(stats.getNpcName());
+
         panel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(60, 60, 60), 1),
+                BorderFactory.createLineBorder(
+                        isRecentKill ? new Color(100, 200, 100) : new Color(60, 60, 60),
+                        isRecentKill ? 2 : 1
+                ),
                 new EmptyBorder(0, 0, 0, 0)
         ));
-        // Don't set maxHeight - let it size naturally
         panel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         // Boss header bar
         JPanel headerPanel = new JPanel(new BorderLayout());
-        headerPanel.setBackground(new Color(28, 28, 28));
+        headerPanel.setBackground(isRecentKill ? new Color(35, 40, 35) : new Color(28, 28, 28));
         headerPanel.setBorder(new EmptyBorder(6, 8, 6, 8));
         headerPanel.setOpaque(true);
         headerPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
@@ -358,7 +516,7 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
         });
 
         panel.add(headerPanel);
-        panel.add(Box.createVerticalStrut(4));
+        panel.add(RuneAlyticsUi.vSpace(4));
 
         // Get drops (filter if needed)
         List<BossKillStats.AggregatedDrop> drops = stats.getAggregatedDropsSorted();
@@ -376,7 +534,14 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
             JPanel lootGrid = createAggregatedLootGrid(drops, stats.getNpcName());
             lootGrid.setAlignmentX(Component.LEFT_ALIGNMENT);
             panel.add(lootGrid);
-            panel.add(Box.createVerticalStrut(4));
+            panel.add(RuneAlyticsUi.vSpace(4));
+        }
+        else
+        {
+            JLabel noDropsLabel = RuneAlyticsUi.subtitleLabel("All drops hidden (click 👁 to show)");
+            noDropsLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+            noDropsLabel.setBorder(new EmptyBorder(8, 8, 12, 8));
+            panel.add(noDropsLabel);
         }
 
         return panel;
@@ -440,8 +605,6 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
     {
         int visibleDrops = drops.size();
         int rows = (int) Math.ceil((double) visibleDrops / ITEMS_PER_ROW);
-
-        // Calculate exact height needed
         int gridHeight = (rows * ITEM_SIZE) + ((rows - 1) * ITEM_SPACING);
 
         JPanel wrapper = new JPanel(new BorderLayout());
@@ -480,9 +643,6 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
         return wrapper;
     }
 
-    /**
-     * Create item panel with right-click ignore option
-     */
     private JPanel createAggregatedItemPanel(BossKillStats.AggregatedDrop drop, String npcName)
     {
         JLayeredPane layeredPane = new JLayeredPane();
@@ -527,7 +687,7 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
             layeredPane.add(qtyLabel, JLayeredPane.PALETTE_LAYER);
         }
 
-        // Right-click menu for ignore
+        // Right-click menu
         JPopupMenu itemMenu = new JPopupMenu();
         JMenuItem ignoreItem = new JMenuItem(isIgnored ? "Unignore" : "Ignore");
         ignoreItem.addActionListener(e -> {
@@ -579,11 +739,11 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
 
     private static Color getValueColor(long value)
     {
-        if (value >= 10_000_000) return new Color(255, 170, 0);
-        if (value >= 1_000_000)  return new Color(200, 100, 255);
-        if (value >= 100_000)    return new Color(100, 200, 255);
-        if (value >= 1_000)      return new Color(100, 255, 100);
-        return new Color(255, 215, 0);
+        if (value >= 10_000_000) return new Color(255, 170, 0);  // Orange
+        if (value >= 1_000_000)  return new Color(200, 100, 255); // Purple
+        if (value >= 100_000)    return new Color(100, 200, 255); // Cyan
+        if (value >= 1_000)      return new Color(100, 255, 100); // Green
+        return new Color(255, 215, 0); // Gold
     }
 
     private String buildAggregatedItemTooltip(BossKillStats.AggregatedDrop drop)
@@ -604,6 +764,7 @@ public class LootTrackerPanel extends RuneAlyticsPanelBase implements LootTracke
 
     private String formatGp(long value)
     {
+        if (value >= 1_000_000_000) return String.format("%.2fB gp", value / 1_000_000_000.0);
         if (value >= 1_000_000) return String.format("%.2fM gp", value / 1_000_000.0);
         if (value >= 1_000) return String.format("%.1fK gp", value / 1_000.0);
         return value + " gp";

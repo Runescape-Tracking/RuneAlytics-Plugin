@@ -62,4 +62,8 @@ public class NpcKillRecord
     {
         return (int) drops.stream().filter(d -> !d.isHidden()).count();
     }
+
+    public long getTimestamp() {
+        return killTime.toEpochMilli();
+    }
 }

@@ -1,518 +1,281 @@
 package com.runealytics;
 
-import com.google.gson.JsonObject;
+import com.google.gson.Gson;
 import com.google.inject.Provides;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
-import net.runelite.api.events.GameStateChanged;
-import net.runelite.api.events.GameTick;
-import net.runelite.api.events.ActorDeath;
-import net.runelite.api.events.ItemContainerChanged;
-import net.runelite.api.events.StatChanged;
+import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.*;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.NpcLootReceived;
+import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
-import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.task.Schedule;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.ImageUtil;
-import okhttp3.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import com.runealytics.LootTrackerManager;
-import com.runealytics.LootTrackerPanel;
-import com.runealytics.ItemStack;
-import net.runelite.client.events.NpcLootReceived;
+import okhttp3.OkHttpClient;
 
 import javax.inject.Inject;
-import javax.swing.SwingUtilities;
+import javax.swing.*;
 import java.awt.image.BufferedImage;
-import java.io.IOException;
-import java.util.ArrayList;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.ScheduledExecutorService;
-import net.runelite.client.events.NpcLootReceived;
 
+@Slf4j
 @PluginDescriptor(
         name = "RuneAlytics",
-        description = "Sync your OSRS data with RuneAlytics.com",
-        tags = {"stats", "tracking", "analytics", "sync", "deathmatch"}
+        description = "Complete analytics and tracking for Old School RuneScape",
+        tags = {"analytics", "tracking", "loot", "stats", "runealytics"}
 )
 public class RuneAlyticsPlugin extends Plugin
 {
-    private static final Logger log = LoggerFactory.getLogger(RuneAlyticsPlugin.class);
-    private static final String VERIFY_STATUS_URL = "https://runealytics.com/api/check-verification";
+    @Inject private Client client;
+    @Inject private RunealyticsConfig config;
+    @Inject private ClientToolbar clientToolbar;
+    @Inject private OkHttpClient okHttpClient;
+    @Inject private Gson gson;
+    @Inject private ConfigManager configManager;
+    @Inject private ItemManager itemManager;
+    @Inject private LootTrackerManager lootManager;
+    @Inject private RuneAlyticsState state;
 
-    @Inject
-    private Client client;
-
-    @Inject
-    private ClientToolbar clientToolbar;
-
-    @Inject
-    private ScheduledExecutorService executorService;
-
-    @Inject
-    private RuneAlyticsPanel runeAlyticsPanel;
-
-    @Inject
-    private MatchmakingPanel matchmakingPanel;
-
-    @Inject
-    private MatchmakingManager matchmakingManager;
-
-    @Inject
-    private MatchmakingMinimapOverlay matchmakingMinimapOverlay;
-
-    @Inject
-    private OverlayManager overlayManager;
-
-    @Inject
-    private RuneAlyticsSettingsPanel settingsPanel;
-
-    @Inject
-    private OkHttpClient httpClient;
-
-    @Inject
-    private RuneAlyticsState runeAlyticsState;
-
-    @Inject
-    private RunealyticsApiClient apiClient;
-
-    @Inject
-    private BankDataManager bankDataManager;
-
-    @Inject
-    private XpTrackerManager xpTrackerManager;
-
-    @Inject
-    private RunealyticsConfig config;
-
-    @Inject
-    private LootTrackerManager lootTrackerManager;
-
-    @Inject
-    private LootTrackerPanel lootTrackerPanel;
+    @Getter
+    private LootTrackerPanel lootPanel;
 
     private NavigationButton navButton;
-    private boolean verificationCheckedForCurrentSession = false;
-    private final Map<Skill, Integer> lastXpMap = new HashMap<>();
+
+    // Boss death tracking for ground loot attribution
+    private NPC lastKilledBoss;
+    private Instant lastKillTime;
+
+    // ==================== LIFECYCLE ====================
 
     @Override
     protected void startUp()
     {
-        log.info("RuneAlytics plugin started!");
+        log.info("RuneAlytics started");
 
-        BufferedImage icon = ImageUtil.loadImageResource(
-                RuneAlyticsPlugin.class,
-                "/icon.png"
-        );
+        lootPanel = injector.getInstance(LootTrackerPanel.class);
 
         navButton = NavigationButton.builder()
-                .tooltip("RuneAlytics")
-                .icon(icon)
+                .tooltip("RuneAlytics - Loot Tracker")
+                .icon(loadPluginIcon())
                 .priority(5)
-                .panel(runeAlyticsPanel)
+                .panel(lootPanel) // now valid
                 .build();
 
         clientToolbar.addNavigation(navButton);
-        overlayManager.add(matchmakingMinimapOverlay);
-
-        updateLoginStateFromClient();
-        matchmakingPanel.refreshLoginState();
-        settingsPanel.refreshLoginState();
-
-        verificationCheckedForCurrentSession = false;
-        runeAlyticsPanel.addLootTrackerTab(lootTrackerPanel);
-
-        // Initialize loot tracker with username
-        String username = client.getLocalPlayer() != null
-                ? client.getLocalPlayer().getName()
-                : null;
-        if (username != null)
-        {
-            lootTrackerManager.initialize(username);
-        }
-
-        log.info("RuneAlytics plugin initialization complete");
+        lootManager.initialize();
     }
 
     @Override
     protected void shutDown()
     {
-        log.info("RuneAlytics plugin stopped!");
+        clientToolbar.removeNavigation(navButton);
 
-        if (navButton != null)
-        {
-            clientToolbar.removeNavigation(navButton);
-            navButton = null;
-        }
+        lootManager.shutdown();
+        lootPanel = null;
+        navButton = null;
+        lastKilledBoss = null;
+        lastKillTime = null;
 
-        overlayManager.remove(matchmakingMinimapOverlay);
-
-        runeAlyticsState.reset();
-        verificationCheckedForCurrentSession = false;
-        lastXpMap.clear();
-        matchmakingManager.reset();
+        log.info("RuneAlytics stopped");
     }
 
     @Provides
-    RunealyticsConfig provideConfig(ConfigManager configManager)
+    RunealyticsConfig provideConfig(ConfigManager manager)
     {
-        return configManager.getConfig(RunealyticsConfig.class);
+        return manager.getConfig(RunealyticsConfig.class);
     }
 
-    private void updateLoginStateFromClient()
-    {
-        boolean loggedIn = client.getGameState() == GameState.LOGGED_IN
-                && client.getLocalPlayer() != null;
-
-        runeAlyticsState.setLoggedIn(loggedIn);
-    }
-
-    @Subscribe
-    public void onGameStateChanged(GameStateChanged event)
-    {
-        boolean loggedIn = event.getGameState() == GameState.LOGGED_IN
-                && client.getLocalPlayer() != null;
-
-        runeAlyticsState.setLoggedIn(loggedIn);
-
-        matchmakingPanel.refreshLoginState();
-        settingsPanel.refreshLoginState();
-
-        if (event.getGameState() == GameState.LOGGED_IN)
-        {
-            log.info("GameStateChanged: LOGGED_IN, will check verification on GameTick");
-            verificationCheckedForCurrentSession = false;
-        }
-        else if (event.getGameState() == GameState.LOGIN_SCREEN
-                || event.getGameState() == GameState.HOPPING)
-        {
-            log.info("GameStateChanged: logged out/hopping; clearing verification state");
-            runeAlyticsState.reset();
-            verificationCheckedForCurrentSession = false;
-            lastXpMap.clear();
-            settingsPanel.refreshLoginState();
-            matchmakingPanel.refreshLoginState();
-            matchmakingManager.reset();
-        }
-    }
+    // ==================== NPC LOOT ====================
 
     @Subscribe
     public void onNpcLootReceived(NpcLootReceived event)
     {
-        if (!runeAlyticsState.isLoggedIn() || !config.enableLootTracking())
+        if (!config.enableLootTracking())
         {
             return;
         }
 
         NPC npc = event.getNpc();
-
-        // Convert event items to our internal ItemStack format
-        Collection<com.runealytics.ItemStack> items = new ArrayList<>();
-
-        // NpcLootReceived provides items in different ways depending on RuneLite version
-        // We'll handle it generically
-        try
+        if (npc == null)
         {
-            Collection<?> eventItems = event.getItems();
-            for (Object item : eventItems)
-            {
-                // Use reflection to get id and quantity to be version-agnostic
-                int id = (int) item.getClass().getMethod("getId").invoke(item);
-                int qty;
-
-                try
-                {
-                    qty = (int) item.getClass().getMethod("getQuantity").invoke(item);
-                }
-                catch (NoSuchMethodException e)
-                {
-                    // Try alternate method name
-                    qty = (int) item.getClass().getMethod("getQty").invoke(item);
-                }
-
-                items.add(new com.runealytics.ItemStack(id, qty));
-            }
-
-            if (npc != null && !items.isEmpty())
-            {
-                lootTrackerManager.recordKill(npc, items);
-            }
+            return;
         }
-        catch (Exception e)
+
+        Collection<ItemStack> items = event.getItems();
+        if (items == null || items.isEmpty())
         {
-            log.error("Error processing NPC loot", e);
+            return;
         }
+
+        if (!lootManager.isBoss(npc.getId(), npc.getName()))
+        {
+            return;
+        }
+
+        lootManager.processBossLoot(npc, items);
     }
 
-    @Subscribe
-    public void onGameTick(GameTick tick)
-    {
-        if (!runeAlyticsState.isLoggedIn())
-        {
-            return;
-        }
-
-        matchmakingManager.onGameTick();
-
-        if (verificationCheckedForCurrentSession)
-        {
-            return;
-        }
-
-        Player localPlayer = client.getLocalPlayer();
-        if (localPlayer == null)
-        {
-            log.debug("GameTick: localPlayer is null; waiting...");
-            return;
-        }
-
-        String rsn = localPlayer.getName();
-        log.debug("GameTick RSN: {}", rsn);
-
-        if (rsn == null || rsn.isEmpty())
-        {
-            log.debug("GameTick: RSN still null/empty; will try again next tick");
-            return;
-        }
-
-        verificationCheckedForCurrentSession = true;
-        runeAlyticsState.setVerifiedUsername(rsn);
-
-        initializeXpTracking();
-        checkVerificationAsync(rsn);
-    }
+    // ==================== BOSS DEATH ====================
 
     @Subscribe
     public void onActorDeath(ActorDeath event)
     {
-        if (!runeAlyticsState.isLoggedIn())
+        if (!config.enableLootTracking())
         {
             return;
         }
 
-        if (event.getActor() instanceof Player)
+        if (!(event.getActor() instanceof NPC))
         {
-            matchmakingManager.onActorDeath((Player) event.getActor());
+            return;
+        }
+
+        NPC npc = (NPC) event.getActor();
+
+        if (lootManager.isBoss(npc.getId(), npc.getName()))
+        {
+            lastKilledBoss = npc;
+            lastKillTime = Instant.now();
+
+            log.debug("Boss killed: {}", npc.getName());
         }
     }
 
-    private void checkVerificationAsync(String rsn)
+    // ==================== GROUND ITEM SPAWN ====================
+    // Correct modern RuneLite event
+
+    @Subscribe
+    public void onItemSpawned(ItemSpawned event)
     {
-        executorService.submit(() -> {
-            boolean verified = false;
-            String verificationCode = null;
+        if (!config.enableLootTracking())
+        {
+            return;
+        }
 
-            try
-            {
-                if (rsn == null || rsn.isEmpty())
-                {
-                    log.warn("RSN is empty in async call; skipping verification");
-                    return;
-                }
+        if (lastKilledBoss == null || lastKillTime == null)
+        {
+            return;
+        }
 
-                RequestBody body = new FormBody.Builder()
-                        .add("osrs_rsn", rsn)
-                        .build();
+        if (ChronoUnit.SECONDS.between(lastKillTime, Instant.now()) > 10)
+        {
+            return;
+        }
 
-                log.info("Checking verification status for RSN: {}", rsn);
+        TileItem item = event.getItem();
+        WorldPoint itemLoc = event.getTile().getWorldLocation();
+        WorldPoint bossLoc = lastKilledBoss.getWorldLocation();
 
-                Request request = new Request.Builder()
-                        .url(VERIFY_STATUS_URL)
-                        .post(body)
-                        .header("X-RuneAlytics-Client", "RuneLite-Plugin")
-                        .build();
+        if (itemLoc.distanceTo(bossLoc) <= 5)
+        {
+            log.debug(
+                    "Ground loot near {}: itemId={} qty={}",
+                    lastKilledBoss.getName(),
+                    item.getId(),
+                    item.getQuantity()
+            );
 
-                try (Response response = httpClient.newCall(request).execute())
-                {
-                    String responseBody = response.body() != null ? response.body().string() : "";
-
-                    log.info("Verification check - HTTP status: {}", response.code());
-                    log.debug("Verification response: {}", responseBody);
-
-                    if (response.isSuccessful())
-                    {
-                        verified = responseBody.contains("\"verified\":true");
-                        if (verified)
-                        {
-                            verificationCode = RuneAlyticsJson.extractStringField(responseBody, "verification_code");
-                        }
-                    }
-                }
-            }
-            catch (IOException e)
-            {
-                log.error("Error during verification check", e);
-            }
-
-            boolean finalVerified = verified;
-            String finalVerificationCode = verificationCode;
-
-            SwingUtilities.invokeLater(() -> {
-                runeAlyticsState.setVerified(finalVerified);
-                runeAlyticsState.setVerifiedUsername(finalVerified ? rsn : null);
-                runeAlyticsState.setVerificationCode(finalVerified ? finalVerificationCode : null);
-
-                if (finalVerified && finalVerificationCode != null && !finalVerificationCode.isEmpty())
-                {
-                    config.authToken(finalVerificationCode);
-                }
-
-                settingsPanel.updateVerificationStatus(finalVerified, runeAlyticsState.getVerifiedUsername());
-                matchmakingPanel.refreshLoginState();
-                log.info("Final verification state: {}, verificationCode={}", finalVerified, finalVerificationCode);
-            });
-        });
+            lootManager.processGroundItem(lastKilledBoss, item);
+        }
     }
 
-    private void initializeXpTracking()
+    // ==================== CHAT PARSING ====================
+
+    @Subscribe
+    public void onChatMessage(ChatMessage event)
     {
-        if (client.getGameState() == GameState.LOGGED_IN)
+        if (!config.enableLootTracking())
         {
-            for (Skill skill : Skill.values())
-            {
-                int xp = client.getSkillExperience(skill);
-                lastXpMap.put(skill, xp);
-            }
-            log.debug("XP tracking initialized");
+            return;
+        }
+
+        if (event.getType() != ChatMessageType.GAMEMESSAGE
+                && event.getType() != ChatMessageType.SPAM)
+        {
+            return;
+        }
+
+        String msg = event.getMessage();
+
+        if (msg.contains("kill count is:"))
+        {
+            lootManager.parseKillCountMessage(msg);
+        }
+    }
+
+    // ==================== GAME STATE ====================
+
+    @Subscribe
+    public void onGameTick(GameTick tick)
+    {
+        if (lastKillTime != null &&
+                ChronoUnit.SECONDS.between(lastKillTime, Instant.now()) > 30)
+        {
+            lastKilledBoss = null;
+            lastKillTime = null;
         }
     }
 
     @Subscribe
-    public void onStatChanged(StatChanged statChanged)
+    public void onGameStateChanged(GameStateChanged event)
     {
-        if (!runeAlyticsState.isVerified() || !runeAlyticsState.isLoggedIn())
+        state.setLoggedIn(event.getGameState() == GameState.LOGGED_IN);
+    }
+
+    // ==================== AUTO SYNC ====================
+
+    @Schedule(
+            period = 60000,
+            unit = ChronoUnit.MILLIS,
+            asynchronous = true
+    )
+    public void syncDataScheduled()
+    {
+        if (!config.syncLootToServer())
         {
             return;
         }
 
-        Skill skill = statChanged.getSkill();
-        int currentXp = statChanged.getXp();
-        Integer previousXp = lastXpMap.get(skill);
-
-        if (previousXp != null && currentXp > previousXp)
-        {
-            int xpGained = currentXp - previousXp;
-            lastXpMap.put(skill, currentXp);
-
-            String username = runeAlyticsState.getVerifiedUsername();
-
-            executorService.submit(() -> {
-                try
-                {
-                    xpTrackerManager.recordXpGain(
-                            config.authToken(),
-                            username,
-                            skill,
-                            xpGained,
-                            currentXp,
-                            client.getRealSkillLevel(skill)
-                    );
-                    log.debug("Recorded {} XP gain in {}", xpGained, skill.getName());
-                }
-                catch (Exception e)
-                {
-                    log.error("Failed to record XP gain", e);
-                }
-            });
-        }
-        else if (previousXp == null)
-        {
-            lastXpMap.put(skill, currentXp);
-        }
-    }
-
-    @Subscribe
-    public void onItemContainerChanged(ItemContainerChanged event)
-    {
-        if (!runeAlyticsState.isVerified() || !runeAlyticsState.isLoggedIn())
+        if (!state.isLoggedIn())
         {
             return;
         }
 
-        if (event.getContainerId() == InventoryID.BANK.getId())
-        {
-            ItemContainer bankContainer = event.getItemContainer();
-            if (bankContainer != null)
-            {
-                String username = runeAlyticsState.getVerifiedUsername();
+        lootManager.syncPendingLoot();
+    }
 
-                executorService.submit(() -> {
-                    try
-                    {
-                        bankDataManager.syncBankData(
-                                config.authToken(),
-                                username,
-                                bankContainer
-                        );
-                        log.info("Bank data synced successfully");
-                        settingsPanel.updateLastSyncTime();
-                    }
-                    catch (Exception e)
-                    {
-                        log.error("Failed to sync bank data", e);
-                    }
-                });
-            }
+    // ==================== HELPERS ====================
+
+    private BufferedImage loadPluginIcon()
+    {
+        try
+        {
+            return ImageUtil.loadImageResource(getClass(), "/runealytics_icon.png");
+        }
+        catch (Exception e)
+        {
+            BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+            var g = img.createGraphics();
+            g.setColor(new java.awt.Color(255, 215, 0));
+            g.fillRect(0, 0, 16, 16);
+            g.dispose();
+            return img;
         }
     }
 
-    public void verifyToken(String token, Runnable onSuccess, Runnable onFailure)
+    public void refreshLootPanel()
     {
-        executorService.submit(() -> {
-            try
-            {
-                boolean verified = apiClient.verifyToken(token);
-                if (verified)
-                {
-                    runeAlyticsState.setVerified(true);
-
-                    String username = client.getLocalPlayer() != null
-                            ? client.getLocalPlayer().getName()
-                            : null;
-                    runeAlyticsState.setVerifiedUsername(username);
-
-                    apiClient.autoVerifyAccount(token, username);
-
-                    if (onSuccess != null)
-                    {
-                        onSuccess.run();
-                    }
-
-                    log.info("Token verified and account auto-verified for {}", username);
-                }
-                else
-                {
-                    if (onFailure != null)
-                    {
-                        onFailure.run();
-                    }
-                    log.warn("Token verification failed");
-                }
-            }
-            catch (Exception e)
-            {
-                log.error("Error during token verification", e);
-                if (onFailure != null)
-                {
-                    onFailure.run();
-                }
-            }
-        });
-    }
-
-    public boolean isVerified()
-    {
-        return runeAlyticsState.isVerified();
-    }
-
-    public String getVerifiedUsername()
-    {
-        return runeAlyticsState.getVerifiedUsername();
+        if (lootPanel != null)
+        {
+            SwingUtilities.invokeLater(lootPanel::onDataRefresh);
+        }
     }
 }

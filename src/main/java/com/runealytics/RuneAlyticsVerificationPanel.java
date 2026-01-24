@@ -91,7 +91,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 
     public void refreshLoginState()
     {
-        updateUi();
+        SwingUtilities.invokeLater(this::updateUi);
     }
 
     public void setVerificationStatusListener(Runnable listener)
@@ -104,12 +104,10 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
         final boolean loggedIn = runeAlyticsState.isLoggedIn();
         final boolean isVerified = runeAlyticsState.isVerified();
 
-        // Hide the controls when verified, otherwise show
         formRow.setVisible(!isVerified);
 
         if (!loggedIn)
         {
-            // Not logged in → disabled
             setControlsEnabled(false);
             statusLabel.setText("You must be logged into RuneScape in RuneLite to link your account.");
             return;
@@ -117,7 +115,6 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 
         if (verifying)
         {
-            // In-flight request → disabled
             setControlsEnabled(false);
             statusLabel.setText("Verifying with RuneAlytics...");
             return;
@@ -125,13 +122,11 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 
         if (isVerified)
         {
-            // Verified → visible but disabled
             setControlsEnabled(false);
             statusLabel.setText("Your account has been successfully verified!");
             return;
         }
 
-        // Logged in, not verified, not currently verifying → enable controls
         setControlsEnabled(true);
         statusLabel.setText("Enter the link code from RuneAlytics.com.");
     }
@@ -140,13 +135,11 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
     {
         codeField.setEnabled(enabled);
         verifyButton.setEnabled(enabled);
-        // Response area stays readable even when "disabled"
         apiResponseArea.setEnabled(true);
     }
 
     private void verifyAccount()
     {
-        // If already verified, do nothing
         if (runeAlyticsState.isVerified())
         {
             statusLabel.setText("Your account is already verified.");
@@ -180,13 +173,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
             String rawResponse = null;
             String errorMessage = null;
 
-            String rsn = client.getLocalPlayer() != null
-                    ? client.getLocalPlayer().getName()
-                    : "";
-            if (rsn == null)
-            {
-                rsn = "";
-            }
+            String rsn = client.getLocalPlayer() != null ? client.getLocalPlayer().getName() : "";
 
             try
             {
@@ -202,22 +189,15 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 
                 try (Response response = httpClient.newCall(request).execute())
                 {
-                    rawResponse = response.body() != null
-                            ? response.body().string()
-                            : "";
-
+                    rawResponse = response.body() != null ? response.body().string() : "";
                     serverMessage = RuneAlyticsJson.extractMessage(rawResponse);
 
                     if (response.isSuccessful())
-                    {
                         success = true;
-                    }
                     else
-                    {
                         errorMessage = (serverMessage != null && !serverMessage.isEmpty())
                                 ? serverMessage
                                 : "HTTP " + response.code();
-                    }
                 }
             }
             catch (IOException ex)
@@ -243,28 +223,15 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                     runeAlyticsState.setVerificationCode(verificationCode);
 
                     if (verificationCode != null && !verificationCode.isEmpty())
-                    {
                         config.authToken(verificationCode);
-                    }
 
-                    String displayMessage =
-                            (finalServerMessage != null && !finalServerMessage.isEmpty())
-                                    ? finalServerMessage
-                                    : "Verification completed successfully.";
+                    String displayMessage = finalServerMessage != null && !finalServerMessage.isEmpty()
+                            ? finalServerMessage
+                            : "Verification completed successfully.";
 
                     statusLabel.setText(displayMessage);
-
-                    if (!finalRawResponse.isEmpty())
-                    {
-                        apiResponseArea.setText(
-                                "Message: " + (finalServerMessage != null ? finalServerMessage : "(none)") +
-                                        "\n\nRaw response:\n" + finalRawResponse
-                        );
-                    }
-                    else
-                    {
-                        apiResponseArea.setText("Message: " + displayMessage);
-                    }
+                    apiResponseArea.setText(finalRawResponse.isEmpty() ? displayMessage
+                            : "Message: " + displayMessage + "\n\nRaw response:\n" + finalRawResponse);
                 }
                 else
                 {
@@ -275,31 +242,15 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 
                     String displayMessage;
                     if (finalServerMessage != null && !finalServerMessage.isEmpty())
-                    {
                         displayMessage = finalServerMessage;
-                    }
                     else if (finalErrorMessage != null && !finalErrorMessage.isEmpty())
-                    {
                         displayMessage = "Verification failed. " + finalErrorMessage;
-                    }
                     else
-                    {
                         displayMessage = "Verification failed. Check the code and try again.";
-                    }
 
                     statusLabel.setText(displayMessage);
-
-                    if (!finalRawResponse.isEmpty())
-                    {
-                        apiResponseArea.setText(
-                                "Error message: " + displayMessage +
-                                        "\n\nRaw response:\n" + finalRawResponse
-                        );
-                    }
-                    else
-                    {
-                        apiResponseArea.setText("Error message: " + displayMessage);
-                    }
+                    apiResponseArea.setText(finalRawResponse.isEmpty() ? displayMessage
+                            : "Error message: " + displayMessage + "\n\nRaw response:\n" + finalRawResponse);
                 }
 
                 notifyVerificationStatusChange();
@@ -311,8 +262,16 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
     private void notifyVerificationStatusChange()
     {
         if (verificationStatusListener != null)
-        {
             verificationStatusListener.run();
-        }
+    }
+
+    /**
+     * Implement abstract method from RuneAlyticsPanelBase
+     */
+    @Override
+    public void onDataRefresh()
+    {
+        // Refresh the panel when underlying data changes
+        SwingUtilities.invokeLater(this::updateUi);
     }
 }

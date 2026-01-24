@@ -84,6 +84,11 @@ public class BossKillStats
         return killHistory.isEmpty() ? null : killHistory.get(killHistory.size() - 1);
     }
 
+    public long getLastKillTimestamp() {
+        NpcKillRecord recent = getMostRecentKill();
+        return recent != null ? recent.getTimestamp() : 0;
+    }
+
     /**
      * Get aggregated drops sorted by total value
      */
