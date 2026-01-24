@@ -10,6 +10,7 @@ import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.StatChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.NpcLootReceived;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.OverlayManager;
@@ -19,14 +20,21 @@ import net.runelite.client.util.ImageUtil;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.runealytics.LootTrackerManager;
+import com.runealytics.LootTrackerPanel;
+import com.runealytics.ItemStack;
+import net.runelite.client.events.NpcLootReceived;
 
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
+import net.runelite.client.events.NpcLootReceived;
 
 @PluginDescriptor(
         name = "RuneAlytics",
@@ -83,6 +91,12 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject
     private RunealyticsConfig config;
 
+    @Inject
+    private LootTrackerManager lootTrackerManager;
+
+    @Inject
+    private LootTrackerPanel lootTrackerPanel;
+
     private NavigationButton navButton;
     private boolean verificationCheckedForCurrentSession = false;
     private final Map<Skill, Integer> lastXpMap = new HashMap<>();
@@ -112,6 +126,16 @@ public class RuneAlyticsPlugin extends Plugin
         settingsPanel.refreshLoginState();
 
         verificationCheckedForCurrentSession = false;
+        runeAlyticsPanel.addLootTrackerTab(lootTrackerPanel);
+
+        // Initialize loot tracker with username
+        String username = client.getLocalPlayer() != null
+                ? client.getLocalPlayer().getName()
+                : null;
+        if (username != null)
+        {
+            lootTrackerManager.initialize(username);
+        }
 
         log.info("RuneAlytics plugin initialization complete");
     }
@@ -175,6 +199,54 @@ public class RuneAlyticsPlugin extends Plugin
             settingsPanel.refreshLoginState();
             matchmakingPanel.refreshLoginState();
             matchmakingManager.reset();
+        }
+    }
+
+    @Subscribe
+    public void onNpcLootReceived(NpcLootReceived event)
+    {
+        if (!runeAlyticsState.isLoggedIn() || !config.enableLootTracking())
+        {
+            return;
+        }
+
+        NPC npc = event.getNpc();
+
+        // Convert event items to our internal ItemStack format
+        Collection<com.runealytics.ItemStack> items = new ArrayList<>();
+
+        // NpcLootReceived provides items in different ways depending on RuneLite version
+        // We'll handle it generically
+        try
+        {
+            Collection<?> eventItems = event.getItems();
+            for (Object item : eventItems)
+            {
+                // Use reflection to get id and quantity to be version-agnostic
+                int id = (int) item.getClass().getMethod("getId").invoke(item);
+                int qty;
+
+                try
+                {
+                    qty = (int) item.getClass().getMethod("getQuantity").invoke(item);
+                }
+                catch (NoSuchMethodException e)
+                {
+                    // Try alternate method name
+                    qty = (int) item.getClass().getMethod("getQty").invoke(item);
+                }
+
+                items.add(new com.runealytics.ItemStack(id, qty));
+            }
+
+            if (npc != null && !items.isEmpty())
+            {
+                lootTrackerManager.recordKill(npc, items);
+            }
+        }
+        catch (Exception e)
+        {
+            log.error("Error processing NPC loot", e);
         }
     }
 
