@@ -117,7 +117,54 @@ public interface RunealyticsConfig extends Config
         return false;
     }
 
+
+    @ConfigSection(
+            name = "Loot Tracking",
+            description = "Configure loot and boss kill tracking",
+            position = 3
+    )
+    String lootSection = "loot";
+
+    // Add config items:
+    @ConfigItem(
+            keyName = "enableLootTracking",
+            name = "Enable Loot Tracking",
+            description = "Track all drops and boss kills",
+            section = lootSection,
+            position = 0
+    )
+    default boolean enableLootTracking()
+    {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "minimumLootValue",
+            name = "Minimum Loot Value",
+            description = "Only track drops worth more than this amount (0 = track all)",
+            section = lootSection,
+            position = 1
+    )
+    default int minimumLootValue()
+    {
+        return 0;
+    }
+
+    @ConfigItem(
+            keyName = "syncLootToServer",
+            name = "Sync to RuneAlytics",
+            description = "Automatically sync loot data to RuneAlytics server",
+            section = lootSection,
+            position = 2
+    )
+    default boolean syncLootToServer()
+    {
+        return true;
+    }
+
+
     // ==================== ADVANCED ====================
+
 
     @ConfigItem(
             keyName = "syncTimeout",

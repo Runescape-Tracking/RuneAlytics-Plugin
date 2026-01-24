@@ -1,5 +1,6 @@
 package com.runealytics;
 
+import com.runealytics.LootTrackerPanel;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.util.ImageUtil;
@@ -13,15 +14,18 @@ public class RuneAlyticsPanel extends PluginPanel
 {
     private static final String VIEW_MATCHMAKING = "matchmaking";
     private static final String VIEW_SETTINGS   = "settings";
+    private static final String VIEW_LOOT       = "loot";
 
     private final MatchmakingPanel matchmakingPanel;
     private final RuneAlyticsSettingsPanel settingsPanel;
+    private LootTrackerPanel lootTrackerPanel;
 
     private final JPanel contentPanel = new JPanel();
     private final CardLayout cardLayout = new CardLayout();
 
     private final JButton matchmakingButton = new JButton();
     private final JButton settingsButton = new JButton();
+    private final JButton lootButton = new JButton();
 
     @Inject
     public RuneAlyticsPanel(
@@ -36,15 +40,47 @@ public class RuneAlyticsPanel extends PluginPanel
         setBackground(ColorScheme.DARK_GRAY_COLOR);
         setOpaque(true);
 
-        buildNavBar();
         buildContent();
 
         // Default view
         showView(VIEW_MATCHMAKING);
     }
 
+    /**
+     * Add loot tracker tab to the panel
+     * Called from plugin startup
+     */
+    public void addLootTrackerTab(LootTrackerPanel lootTrackerPanel)
+    {
+        this.lootTrackerPanel = lootTrackerPanel;
+
+        // Add loot panel to card layout
+        contentPanel.add(lootTrackerPanel, VIEW_LOOT);
+
+        // Rebuild nav bar to include loot button
+        buildNavBar();
+
+        revalidate();
+        repaint();
+    }
+
     private void buildNavBar()
     {
+        // Remove old nav bar if exists
+        Component[] components = getComponents();
+        for (Component comp : components)
+        {
+            if (comp instanceof JPanel)
+            {
+                JPanel panel = (JPanel) comp;
+                if (panel.getComponentCount() > 0 && panel.getComponent(0) == matchmakingButton)
+                {
+                    remove(panel);
+                    break;
+                }
+            }
+        }
+
         JPanel navBar = new JPanel();
         navBar.setLayout(new BoxLayout(navBar, BoxLayout.X_AXIS));
         navBar.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
@@ -61,6 +97,19 @@ public class RuneAlyticsPanel extends PluginPanel
         styleNavButton(matchmakingButton, false);
         matchmakingButton.addActionListener(e -> showView(VIEW_MATCHMAKING));
 
+        // Loot tracker icon (only add if panel is set)
+        if (lootTrackerPanel != null)
+        {
+            BufferedImage lootImg = ImageUtil.loadImageResource(
+                    RuneAlyticsPlugin.class,
+                    "/loot_icon.png"
+            );
+            lootButton.setIcon(new ImageIcon(lootImg));
+            lootButton.setToolTipText("Loot Tracker");
+            styleNavButton(lootButton, false);
+            lootButton.addActionListener(e -> showView(VIEW_LOOT));
+        }
+
         // Settings icon
         BufferedImage settingsImg = ImageUtil.loadImageResource(
                 RuneAlyticsPlugin.class,
@@ -76,6 +125,13 @@ public class RuneAlyticsPanel extends PluginPanel
 
         navBar.add(matchmakingButton);
         navBar.add(Box.createRigidArea(new Dimension(4, 0)));
+
+        if (lootTrackerPanel != null)
+        {
+            navBar.add(lootButton);
+            navBar.add(Box.createRigidArea(new Dimension(4, 0)));
+        }
+
         navBar.add(settingsButton);
         navBar.add(Box.createHorizontalGlue());
 
@@ -113,18 +169,32 @@ public class RuneAlyticsPanel extends PluginPanel
     {
         cardLayout.show(contentPanel, view);
 
-        boolean duelActive = VIEW_MATCHMAKING.equals(view);
+        boolean matchmakingActive = VIEW_MATCHMAKING.equals(view);
+        boolean lootActive = VIEW_LOOT.equals(view);
+        boolean settingsActive = VIEW_SETTINGS.equals(view);
 
         // Re-style buttons based on which view is active
-        styleNavButton(matchmakingButton, duelActive);
-        styleNavButton(settingsButton, !duelActive);
+        styleNavButton(matchmakingButton, matchmakingActive);
+        if (lootTrackerPanel != null)
+        {
+            styleNavButton(lootButton, lootActive);
+        }
+        styleNavButton(settingsButton, settingsActive);
 
-        matchmakingButton.setEnabled(!duelActive);
-        settingsButton.setEnabled(duelActive);
+        matchmakingButton.setEnabled(!matchmakingActive);
+        if (lootTrackerPanel != null)
+        {
+            lootButton.setEnabled(!lootActive);
+        }
+        settingsButton.setEnabled(!settingsActive);
 
-        if (duelActive)
+        if (matchmakingActive)
         {
             matchmakingPanel.refreshLoginState();
+        }
+        else if (settingsActive)
+        {
+            settingsPanel.refreshLoginState();
         }
     }
 }
