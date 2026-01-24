@@ -24,6 +24,7 @@ public class MatchmakingManager
 
     private static final int POLL_INTERVAL_TICKS = 2;
     private static final int RALLY_DISTANCE = 15;
+    private static final long FAILURE_NOTIFY_INTERVAL_MS = 5000L;
 
     private final Client client;
     private final RuneAlyticsState runeAlyticsState;
@@ -42,6 +43,8 @@ public class MatchmakingManager
     private boolean itemsReported;
     private WorldPoint lastRallyPoint;
     private String lastHintPlayerName;
+    private String lastFailureSignature = "";
+    private long lastFailureAtMs;
 
     @Inject
     public MatchmakingManager(
@@ -150,6 +153,8 @@ public class MatchmakingManager
         itemsReportInFlight = false;
         resultReported = false;
         itemsReported = false;
+        lastFailureSignature = "";
+        lastFailureAtMs = 0L;
         clearHintArrow();
     }
 
@@ -674,13 +679,38 @@ public class MatchmakingManager
                 result.isTokenRefresh()
         );
 
-        notifyListener(update);
+        if (shouldNotify(update))
+        {
+            notifyListener(update);
+        }
 
         if (result.isTokenRefresh())
         {
             log.info("Matchmaking token refresh requested by server");
             refreshToken();
         }
+    }
+
+    private boolean shouldNotify(MatchmakingUpdate update)
+    {
+        if (update.isSuccess())
+        {
+            lastFailureSignature = "";
+            lastFailureAtMs = 0L;
+            return true;
+        }
+
+        String signature = update.getMessage() + "|" + update.getRawResponse();
+        long now = System.currentTimeMillis();
+
+        if (signature.equals(lastFailureSignature) && (now - lastFailureAtMs) < FAILURE_NOTIFY_INTERVAL_MS)
+        {
+            return false;
+        }
+
+        lastFailureSignature = signature;
+        lastFailureAtMs = now;
+        return true;
     }
 
     private void notifyListener(MatchmakingUpdate update)

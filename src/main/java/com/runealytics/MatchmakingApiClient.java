@@ -29,6 +29,7 @@ public class MatchmakingApiClient
     private static final String BEGIN_MATCH_PATH = MATCHMAKING_BASE + "/begin-match";
     private static final String REPORT_MATCH_PATH = MATCHMAKING_BASE + "/report-match";
     private static final String REPORT_ITEMS_PATH = MATCHMAKING_BASE + "/report-items";
+    private static final int RAW_RESPONSE_LIMIT = 256;
 
     private final OkHttpClient httpClient;
     private final RunealyticsConfig config;
@@ -128,6 +129,7 @@ public class MatchmakingApiClient
             String responseBody = response.body() != null ? response.body().string() : "";
             ParsedResponse parsedResponse = parseResponseBody(responseBody);
             JsonObject json = parsedResponse.getJsonObject();
+            String displayBody = json != null ? responseBody.trim() : sanitizeRawResponse(responseBody);
             String message = json != null ? getString(json, "message") : parsedResponse.getPrimitiveMessage();
             boolean tokenRefresh = json != null && (hasTrue(json, "token_refresh") || hasTrue(json, "refresh_token"));
             boolean success = response.isSuccessful() && (json != null || parsedResponse.isPrimitiveSuccess());
@@ -135,12 +137,12 @@ public class MatchmakingApiClient
             if (success && json != null)
             {
                 MatchmakingSession session = parseMatchSession(json, matchCode, osrsRsn);
-                return new MatchmakingApiResult(session, message, responseBody, true, tokenRefresh);
+                return new MatchmakingApiResult(session, message, displayBody, true, tokenRefresh);
             }
 
             if (success)
             {
-                return new MatchmakingApiResult(null, message, responseBody, true, tokenRefresh);
+                return new MatchmakingApiResult(null, message, displayBody, true, tokenRefresh);
             }
 
             if (!response.isSuccessful())
@@ -148,7 +150,7 @@ public class MatchmakingApiClient
                 log.debug("Matchmaking request failed: {} {}", response.code(), responseBody);
             }
 
-            return new MatchmakingApiResult(null, message, responseBody, false, tokenRefresh);
+            return new MatchmakingApiResult(null, message, displayBody, false, tokenRefresh);
         }
     }
 
@@ -163,6 +165,11 @@ public class MatchmakingApiClient
         if (trimmedBody.isEmpty())
         {
             return ParsedResponse.empty();
+        }
+
+        if (isLikelyHtmlResponse(trimmedBody))
+        {
+            return ParsedResponse.fromRaw(trimmedBody);
         }
 
         if (isLikelyPrimitiveResponse(trimmedBody))
@@ -193,6 +200,33 @@ public class MatchmakingApiClient
             log.debug("Failed to parse matchmaking response", ex);
             return ParsedResponse.fromRaw(trimmedBody);
         }
+    }
+
+    private static String sanitizeRawResponse(String responseBody)
+    {
+        if (responseBody == null)
+        {
+            return "";
+        }
+
+        String trimmed = responseBody.trim();
+        if (trimmed.length() <= RAW_RESPONSE_LIMIT)
+        {
+            return trimmed;
+        }
+
+        return trimmed.substring(0, RAW_RESPONSE_LIMIT) + "…(truncated)";
+    }
+
+    private boolean isLikelyHtmlResponse(String responseBody)
+    {
+        if (responseBody.isEmpty() || responseBody.charAt(0) != '<')
+        {
+            return false;
+        }
+
+        String lower = responseBody.toLowerCase(Locale.ROOT);
+        return lower.startsWith("<!doctype") || lower.startsWith("<html");
     }
 
     private boolean isLikelyPrimitiveResponse(String responseBody)
@@ -300,7 +334,12 @@ public class MatchmakingApiClient
                 return new ParsedResponse(null, false, "");
             }
 
-            return new ParsedResponse(null, false, rawBody);
+            if (rawBody.startsWith("<"))
+            {
+                return new ParsedResponse(null, false, "Matchmaking API returned HTML instead of JSON.");
+            }
+
+            return new ParsedResponse(null, false, sanitizeRawResponse(rawBody));
         }
 
         private JsonObject getJsonObject()
