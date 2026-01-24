@@ -1,6 +1,11 @@
 package com.runealytics;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import net.runelite.api.Client;
+import net.runelite.api.InventoryID;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
 import net.runelite.api.coords.WorldPoint;
 import org.slf4j.Logger;
@@ -32,7 +37,9 @@ public class MatchmakingManager
     private boolean requestInFlight;
     private boolean beginInFlight;
     private boolean reportInFlight;
+    private boolean itemsReportInFlight;
     private boolean resultReported;
+    private boolean itemsReported;
     private WorldPoint lastRallyPoint;
     private String lastHintPlayerName;
 
@@ -130,6 +137,7 @@ public class MatchmakingManager
         }
 
         attemptBeginMatchIfNeeded();
+        reportItemsIfNeeded();
     }
 
     public void reset()
@@ -139,7 +147,9 @@ public class MatchmakingManager
         requestInFlight = false;
         beginInFlight = false;
         reportInFlight = false;
+        itemsReportInFlight = false;
         resultReported = false;
+        itemsReported = false;
         clearHintArrow();
     }
 
@@ -367,6 +377,68 @@ public class MatchmakingManager
         });
     }
 
+    private void reportItemsIfNeeded()
+    {
+        if (session == null || itemsReportInFlight || itemsReported)
+        {
+            return;
+        }
+
+        if (!session.getStatus().equalsIgnoreCase("Fighting"))
+        {
+            return;
+        }
+
+        String token = session.getLocalToken();
+        String verificationCode = resolveVerificationCode();
+        String rsn = resolveLocalRsn();
+
+        if (token == null || token.isEmpty() || verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        {
+            return;
+        }
+
+        ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
+        ItemContainer gear = client.getItemContainer(InventoryID.EQUIPMENT);
+
+        JsonArray inventoryItems = buildItemPayload(inventory);
+        JsonArray gearItems = buildItemPayload(gear);
+
+        itemsReportInFlight = true;
+
+        executorService.submit(() -> {
+            MatchmakingApiResult result;
+            try
+            {
+                result = apiClient.reportItems(
+                        verificationCode,
+                        session.getMatchCode(),
+                        rsn,
+                        token,
+                        inventoryItems,
+                        gearItems
+                );
+            }
+            catch (IOException ex)
+            {
+                result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
+            }
+
+            handleResult(result);
+
+            if (result.isSuccess())
+            {
+                itemsReported = true;
+            }
+            else if (result.isTokenRefresh())
+            {
+                refreshToken();
+            }
+
+            itemsReportInFlight = false;
+        });
+    }
+
     private void refreshToken()
     {
         String verificationCode = resolveVerificationCode();
@@ -555,6 +627,35 @@ public class MatchmakingManager
         }
 
         return null;
+    }
+
+    private JsonArray buildItemPayload(ItemContainer container)
+    {
+        JsonArray items = new JsonArray();
+
+        if (container == null)
+        {
+            return items;
+        }
+
+        Item[] containerItems = container.getItems();
+        if (containerItems == null)
+        {
+            return items;
+        }
+
+        for (Item item : containerItems)
+        {
+            if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+            {
+                JsonObject itemData = new JsonObject();
+                itemData.addProperty("id", item.getId());
+                itemData.addProperty("qty", item.getQuantity());
+                items.add(itemData);
+            }
+        }
+
+        return items;
     }
 
     private void handleResult(MatchmakingApiResult result)
