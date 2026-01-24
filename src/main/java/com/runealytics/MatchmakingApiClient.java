@@ -3,6 +3,8 @@ package com.runealytics;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.gson.stream.JsonReader;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -13,6 +15,8 @@ import org.slf4j.LoggerFactory;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.io.IOException;
+import java.io.StringReader;
+import java.util.Locale;
 
 @Singleton
 public class MatchmakingApiClient
@@ -150,14 +154,22 @@ public class MatchmakingApiClient
 
     private ParsedResponse parseResponseBody(String responseBody)
     {
-        if (responseBody == null || responseBody.isEmpty())
+        if (responseBody == null)
+        {
+            return ParsedResponse.empty();
+        }
+
+        String trimmedBody = responseBody.trim();
+        if (trimmedBody.isEmpty())
         {
             return ParsedResponse.empty();
         }
 
         try
         {
-            JsonElement element = gson.fromJson(responseBody, JsonElement.class);
+            JsonReader reader = new JsonReader(new StringReader(trimmedBody));
+            reader.setLenient(true);
+            JsonElement element = JsonParser.parseReader(reader);
             if (element == null || element.isJsonNull())
             {
                 return ParsedResponse.empty();
@@ -174,7 +186,7 @@ public class MatchmakingApiClient
         catch (Exception ex)
         {
             log.debug("Failed to parse matchmaking response", ex);
-            return ParsedResponse.empty();
+            return ParsedResponse.fromRaw(trimmedBody);
         }
     }
 
@@ -237,6 +249,33 @@ public class MatchmakingApiClient
             }
 
             return new ParsedResponse(null, success, message);
+        }
+
+        private static ParsedResponse fromRaw(String rawBody)
+        {
+            String lower = rawBody.toLowerCase(Locale.ROOT);
+
+            if (lower.startsWith("true"))
+            {
+                return new ParsedResponse(null, true, "");
+            }
+
+            if (lower.startsWith("false"))
+            {
+                return new ParsedResponse(null, false, "");
+            }
+
+            if (lower.startsWith("1"))
+            {
+                return new ParsedResponse(null, true, "");
+            }
+
+            if (lower.startsWith("0"))
+            {
+                return new ParsedResponse(null, false, "");
+            }
+
+            return new ParsedResponse(null, false, rawBody);
         }
 
         private JsonObject getJsonObject()
