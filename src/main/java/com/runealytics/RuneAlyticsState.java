@@ -14,6 +14,7 @@ public class RuneAlyticsState
     private boolean verified;
     private String verifiedUsername;
     private String verificationCode;
+    private int prestige;
 
     // Additional state for loot tracking
     private boolean syncInProgress;

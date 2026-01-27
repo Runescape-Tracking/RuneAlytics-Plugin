@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @PluginDescriptor(
@@ -68,10 +69,10 @@ public class RuneAlyticsPlugin extends Plugin
     {
         log.info("RuneAlytics started");
 
-        // Log config values
+        // Log config values WITH ACTUAL VALUES
         log.info("=== CONFIGURATION ===");
         log.info("Enable Loot Tracking: {}", config.enableLootTracking());
-        log.info("Track All NPCs: {}", config.trackAllNpcs());
+        log.info("Track All NPCs: {} ← CHECK THIS VALUE", config.trackAllNpcs());
         log.info("Minimum Loot Value: {}", config.minimumLootValue());
         log.info("Sync to Server: {}", config.syncLootToServer());
         log.info("Auto Verification: {}", config.enableAutoVerification());
@@ -92,21 +93,29 @@ public class RuneAlyticsPlugin extends Plugin
                 .build();
 
         clientToolbar.addNavigation(navButton);
+
+        // Connect the panel to the loot manager BEFORE initializing
+        lootManager.setPanel(lootPanel); // ← ADD THIS LINE
+
+        // Initialize loot manager (this loads local data and syncs with server)
         lootManager.initialize();
     }
 
     @Override
     protected void shutDown()
     {
-        clientToolbar.removeNavigation(navButton);
+        log.info("RuneAlytics plugin shutting down");
 
-        lootManager.shutdown();
-        mainPanel = null;
-        navButton = null;
-        lastKilledBoss = null;
-        lastKillTime = null;
+        // Save loot data before shutdown
+        if (lootManager != null)
+        {
+            lootManager.shutdown();
+        }
 
-        log.info("RuneAlytics stopped");
+        if (navButton != null)
+        {
+            clientToolbar.removeNavigation(navButton);
+        }
     }
 
     @Provides
@@ -147,10 +156,12 @@ public class RuneAlyticsPlugin extends Plugin
         log.info("Loot contains {} items", items.size());
 
         boolean isBoss = lootManager.isBoss(npc.getId(), npc.getName());
-        log.info("Is boss: {}", isBoss);
+        boolean trackAllNpcs = config.trackAllNpcs();
+
+        log.info("Is boss: {}, Track all NPCs: {}", isBoss, trackAllNpcs);
 
         // Check if we should track this NPC
-        if (!isBoss && !config.trackAllNpcs())
+        if (!isBoss && !trackAllNpcs)
         {
             log.info("Not a tracked boss and trackAllNpcs is disabled, skipping");
             return;
@@ -314,7 +325,7 @@ public class RuneAlyticsPlugin extends Plugin
                     item.getQuantity()
             );
 
-            lootManager.processGroundItem(lastKilledBoss, item);
+            //lootManager.processGroundItem(lastKilledBoss, item);
         }
     }
 
@@ -401,19 +412,22 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onGameStateChanged(GameStateChanged event)
     {
-        GameState newState = event.getGameState();
+        log.info("=== GAME STATE CHANGED: {} ===", event.getGameState());
 
-        if (newState == GameState.LOGGED_IN)
+        if (event.getGameState() == GameState.LOGGED_IN)
         {
+            log.info("Player logged in (waiting for player spawn for verification)");
             state.setLoggedIn(true);
-            log.info("Game state changed to LOGGED_IN, scheduling verification check");
+
+            // Don't check username here - it's null at this point
+            // Wait for onPlayerSpawned event instead
         }
-        else if (newState == GameState.LOGIN_SCREEN || newState == GameState.HOPPING)
+        else if (event.getGameState() == GameState.LOGIN_SCREEN)
         {
+            log.info("Player logged out");
             state.setLoggedIn(false);
         }
     }
-
     @Subscribe
     public void onPlayerSpawned(PlayerSpawned event)
     {
@@ -423,12 +437,34 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
+        log.info("Local player spawned, checking verification");
+
         // Now the player is definitely available
         if (config.enableAutoVerification() && !state.isVerified())
         {
-            log.info("Local player spawned, checking verification");
             checkVerificationStatus();
         }
+
+        // ⚠️ THIS PART IS MISSING OR NOT WORKING ⚠️
+        executorService.schedule(() -> {
+            log.info("=== POST-LOGIN SYNC CHECK ===");
+            log.info("Username: {}", state.getVerifiedUsername());
+            log.info("Is Verified: {}", state.isVerified());
+            log.info("Sync Enabled: {}", config.syncLootToServer());
+            log.info("==============================");
+
+            if (state.isVerified() && config.syncLootToServer())
+            {
+                log.info("✓ Conditions met - triggering loot sync");
+                lootManager.onPlayerLoggedInAndVerified();
+            }
+            else
+            {
+                log.warn("✗ Sync conditions not met:");
+                log.warn("  - Verified: {}", state.isVerified());
+                log.warn("  - Sync enabled: {}", config.syncLootToServer());
+            }
+        }, 5, TimeUnit.SECONDS);
     }
 
     private void checkVerificationStatus()

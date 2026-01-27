@@ -1,69 +1,100 @@
 package com.runealytics;
 
-import lombok.Data;
-import java.time.Instant;
+import lombok.Getter;
+import lombok.Setter;
+
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
- * Represents a single NPC kill with all drops
+ * Represents a single NPC kill with all associated loot drops
  */
-@Data
+@Getter
+@Setter
 public class NpcKillRecord
 {
-    private final String npcName;
-    private final int npcId;
-    private final int combatLevel;
-    private final Instant killTime;
-    private final List<LootDrop> drops;
-    private final int worldNumber;
+    private String npcName;
+    private int npcId;
+    private int combatLevel;
+    private int worldNumber;
+    private long timestamp;
+    private int killNumber;
+    private List<LootDrop> drops;
 
     public NpcKillRecord(String npcName, int npcId, int combatLevel, int worldNumber)
     {
         this.npcName = npcName;
         this.npcId = npcId;
         this.combatLevel = combatLevel;
-        this.killTime = Instant.now();
-        this.drops = new ArrayList<>();
         this.worldNumber = worldNumber;
+        this.timestamp = System.currentTimeMillis();
+        this.drops = new ArrayList<>();
+        this.killNumber = 0;
     }
 
+    /**
+     * Override setDrops to ensure it's never null
+     */
+    public void setDrops(List<LootDrop> drops)
+    {
+        this.drops = drops != null ? drops : new ArrayList<>();
+    }
+
+    /**
+     * Get drops - guaranteed to never return null
+     */
+    public List<LootDrop> getDrops()
+    {
+        if (drops == null)
+        {
+            drops = new ArrayList<>();
+        }
+        return drops;
+    }
+
+    /**
+     * Add a loot drop to this kill
+     */
     public void addDrop(LootDrop drop)
     {
+        if (drops == null)
+        {
+            drops = new ArrayList<>();
+        }
         drops.add(drop);
     }
 
     /**
-     * Get total value of all drops (excluding hidden)
+     * Calculate total value of all drops in this kill
      */
     public long getTotalValue()
     {
+        if (drops == null)
+        {
+            return 0;
+        }
         return drops.stream()
-                .filter(d -> !d.isHidden())
-                .mapToLong(LootDrop::getTotalValue)
+                .mapToLong(drop -> drop.getGePrice() * drop.getQuantity())
                 .sum();
     }
 
     /**
-     * Get visible drops only
+     * Get the number of drops in this kill
      */
-    public List<LootDrop> getVisibleDrops()
+    public int getDropCount()
     {
-        return drops.stream()
-                .filter(d -> !d.isHidden())
-                .collect(Collectors.toList());
+        return drops != null ? drops.size() : 0;
     }
 
     /**
-     * Get number of visible drops
+     * Get only visible (non-hidden) drops
      */
-    public int getVisibleDropCount()
+    public List<LootDrop> getVisibleDrops()
     {
-        return (int) drops.stream().filter(d -> !d.isHidden()).count();
-    }
-
-    public long getTimestamp() {
-        return killTime.toEpochMilli();
+        if (drops == null)
+        {
+            return new ArrayList<>();
+        }
+        return new ArrayList<>(drops);
     }
 }
