@@ -42,6 +42,7 @@ public class MatchmakingManager
     private boolean itemsReported;
     private WorldPoint lastRallyPoint;
     private String lastHintPlayerName;
+    private String lastFailureSignature = "";
 
     @Inject
     public MatchmakingManager(
@@ -150,6 +151,7 @@ public class MatchmakingManager
         itemsReportInFlight = false;
         resultReported = false;
         itemsReported = false;
+        lastFailureSignature = "";
         clearHintArrow();
     }
 
@@ -660,21 +662,54 @@ public class MatchmakingManager
 
     private void handleResult(MatchmakingApiResult result)
     {
+        MatchmakingSession sessionForUpdate = result.getSession();
+        if (sessionForUpdate == null && result.isSuccess())
+        {
+            sessionForUpdate = session;
+        }
+
         MatchmakingUpdate update = new MatchmakingUpdate(
-                result.getSession(),
+                sessionForUpdate,
                 result.getMessage(),
                 result.getRawResponse(),
                 result.isSuccess(),
                 result.isTokenRefresh()
         );
 
-        notifyListener(update);
+        if (shouldNotify(update))
+        {
+            notifyListener(update);
+        }
 
         if (result.isTokenRefresh())
         {
             log.info("Matchmaking token refresh requested by server");
             refreshToken();
         }
+    }
+
+    private boolean shouldNotify(MatchmakingUpdate update)
+    {
+        if (update.isSuccess())
+        {
+            lastFailureSignature = "";
+            return true;
+        }
+
+        String message = update.getMessage() != null ? update.getMessage() : "";
+        String rawResponse = update.getRawResponse() != null ? update.getRawResponse() : "";
+
+        boolean htmlFailure = message.equalsIgnoreCase("Matchmaking API returned HTML instead of JSON.")
+                || rawResponse.startsWith("<");
+
+        String signature = htmlFailure ? message : message + "|" + rawResponse;
+        if (signature.equals(lastFailureSignature))
+        {
+            return false;
+        }
+
+        lastFailureSignature = signature;
+        return true;
     }
 
     private void notifyListener(MatchmakingUpdate update)
