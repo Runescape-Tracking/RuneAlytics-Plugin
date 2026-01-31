@@ -5,7 +5,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
-
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.io.IOException;
@@ -13,6 +12,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.runealytics.LootStorageData;
+import java.util.*;
+
+import static com.runealytics.RuneAlyticsHttp.JSON;
+
 
 /**
  * API client for syncing loot data to RuneAlytics
@@ -182,9 +186,81 @@ public class LootTrackerApiClient
     }
 
     /**
-     * Fetch detailed kill history from server
+     * Bulk sync multiple kills to server
      */
-    public Map<String, List<NpcKillRecord>> fetchKillHistoryFromServer(String username) throws IOException
+    public boolean bulkSyncKills(String username, Map<String, List<LootStorageData.KillRecord>> killsByBoss) throws IOException
+    {
+        // Convert to API format
+        JsonArray killsArray = new JsonArray();
+
+        for (Map.Entry<String, List<LootStorageData.KillRecord>> entry : killsByBoss.entrySet())
+        {
+            String npcName = entry.getKey();
+
+            for (LootStorageData.KillRecord kill : entry.getValue())
+            {
+                JsonObject killObj = new JsonObject();
+                killObj.addProperty("npc_name", npcName);
+                killObj.addProperty("npc_id", kill.getWorld()); // You'll need to store npc_id properly
+                killObj.addProperty("combat_level", kill.getCombatLevel());
+                killObj.addProperty("kill_count", kill.getKillNumber());
+                killObj.addProperty("world", kill.getWorld());
+                killObj.addProperty("timestamp", kill.getTimestamp());
+                killObj.addProperty("prestige", 0); // Add prestige support
+
+                long totalValue = 0;
+                JsonArray dropsArray = new JsonArray();
+
+                for (LootStorageData.DropRecord drop : kill.getDrops())
+                {
+                    JsonObject dropObj = new JsonObject();
+                    dropObj.addProperty("item_id", drop.getItemId());
+                    dropObj.addProperty("item_name", drop.getItemName());
+                    dropObj.addProperty("quantity", drop.getQuantity());
+                    dropObj.addProperty("ge_price", drop.getGePrice());
+                    dropObj.addProperty("high_alch", drop.getHighAlch());
+                    dropObj.addProperty("total_value", drop.getTotalValue());
+
+                    dropsArray.add(dropObj);
+                    totalValue += drop.getTotalValue();
+                }
+
+                killObj.add("drops", dropsArray);
+                killObj.addProperty("total_loot_value", totalValue);
+                killObj.addProperty("drop_count", kill.getDrops().size());
+
+                killsArray.add(killObj);
+            }
+        }
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("username", username);
+        payload.add("kills", killsArray);
+
+        RequestBody body = RequestBody.create(JSON, payload.toString());
+
+        Request request = new Request.Builder()
+                .url(config.apiUrl() + "/loot/bulk-sync")
+                .post(body)
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute())
+        {
+            if (!response.isSuccessful())
+            {
+                log.error("Bulk sync failed: HTTP {}", response.code());
+                return false;
+            }
+
+            log.info("Bulk sync successful - {} kills", killsArray.size());
+            return true;
+        }
+    }
+
+    /**
+     * Fetch complete kill history from server with all drops
+     */
+    public Map<String, LootStorageData.BossKillData> fetchKillHistoryFromServer(String username) throws IOException
     {
         Request request = new Request.Builder()
                 .url(config.apiUrl() + "/loot/history/" + username)
@@ -195,67 +271,175 @@ public class LootTrackerApiClient
         {
             if (!response.isSuccessful() || response.body() == null)
             {
-                log.warn("Failed to fetch kill history from server: HTTP {}", response.code());
+                log.warn("Failed to fetch kill history: HTTP {}", response.code());
                 return new HashMap<>();
             }
 
             String json = response.body().string();
-            log.debug("Kill history response: {}", json);
+            log.debug("Server response: {}", json);
 
             JsonObject responseObj = gson.fromJson(json, JsonObject.class);
 
             if (!responseObj.has("kills") || !responseObj.get("kills").isJsonArray())
             {
-                log.warn("Invalid kill history response format");
+                log.warn("Invalid server response format - missing 'kills' array");
                 return new HashMap<>();
             }
 
             JsonArray killsArray = responseObj.getAsJsonArray("kills");
-            Map<String, List<NpcKillRecord>> killHistoryMap = new HashMap<>();
+            Map<String, LootStorageData.BossKillData> result = new HashMap<>();
 
             for (int i = 0; i < killsArray.size(); i++)
             {
                 JsonObject killObj = killsArray.get(i).getAsJsonObject();
 
-                String npcName = killObj.get("boss_name").getAsString();
-                int npcId = killObj.get("boss_id").getAsInt();
+                String bossName = killObj.get("boss_name").getAsString();
+                int bossId = killObj.get("boss_id").getAsInt();
                 int combatLevel = killObj.get("combat_level").getAsInt();
                 int world = killObj.get("world").getAsInt();
-                long timestamp = killObj.get("kill_time").getAsLong() * 1000; // Convert to millis
+                long killTimeSeconds = killObj.get("kill_time").getAsLong();
+                long killTimeMs = killTimeSeconds * 1000; // Convert seconds to milliseconds
 
-                NpcKillRecord kill = new NpcKillRecord(npcName, npcId, combatLevel, world);
-                kill.setTimestamp(timestamp);
+                // Get or create boss data
+                LootStorageData.BossKillData bossData = result.computeIfAbsent(bossName, k -> {
+                    LootStorageData.BossKillData bd = new LootStorageData.BossKillData();
+                    bd.setNpcName(bossName);
+                    bd.setNpcId(bossId);
+                    bd.setKillCount(0);
+                    bd.setPrestige(0);
+                    bd.setTotalLootValue(0);
+                    bd.setKills(new ArrayList<>());
+                    bd.setAggregatedDrops(new HashMap<>());
+                    return bd;
+                });
 
-                // Add drops if available
+                // Create kill record
+                LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
+                killRecord.setTimestamp(killTimeMs);
+                killRecord.setWorld(world);
+                killRecord.setCombatLevel(combatLevel);
+                killRecord.setSyncedToServer(true);
+                killRecord.setDrops(new ArrayList<>());
+
+                // Parse drops
                 if (killObj.has("drops") && killObj.get("drops").isJsonArray())
                 {
                     JsonArray dropsArray = killObj.getAsJsonArray("drops");
+
                     for (int j = 0; j < dropsArray.size(); j++)
                     {
                         JsonObject dropObj = dropsArray.get(j).getAsJsonObject();
 
-                        LootDrop drop = new LootDrop(
-                                dropObj.get("item_id").getAsInt(),
-                                dropObj.get("item_name").getAsString(),
-                                dropObj.get("quantity").getAsInt(),
-                                dropObj.get("ge_price").getAsLong(),
-                                dropObj.get("high_alch").getAsInt()
-                        );
+                        LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
+                        drop.setItemId(dropObj.get("item_id").getAsInt());
+                        drop.setItemName(dropObj.get("item_name").getAsString());
+                        drop.setQuantity(dropObj.get("quantity").getAsInt());
+                        drop.setGePrice(dropObj.get("ge_price").getAsInt());
+                        drop.setHighAlch(dropObj.get("high_alch").getAsInt());
 
-                        kill.addDrop(drop);
+                        // Calculate total value
+                        int totalValue = drop.getGePrice() * drop.getQuantity();
+                        drop.setTotalValue(totalValue);
+                        drop.setHidden(false);
+
+                        killRecord.getDrops().add(drop);
                     }
                 }
 
-                killHistoryMap.computeIfAbsent(npcName, k -> new ArrayList<>()).add(kill);
+                bossData.getKills().add(killRecord);
+                bossData.setKillCount(bossData.getKillCount() + 1);
             }
 
-            log.info("Fetched kill history: {} bosses", killHistoryMap.size());
-            return killHistoryMap;
+            log.info("Fetched {} bosses with total {} kills from server",
+                    result.size(),
+                    result.values().stream().mapToInt(b -> b.getKills().size()).sum());
+
+            return result;
         }
         catch (Exception e)
         {
             log.error("Error fetching kill history from server", e);
             return new HashMap<>();
+        }
+    }
+
+    /**
+     * Sync a single kill to the server
+     */
+    public void syncSingleKill(
+            String username,
+            String npcName,
+            int npcId,
+            int combatLevel,
+            int killNumber,
+            int world,
+            long timestamp,
+            int prestige,
+            List<LootStorageData.DropRecord> drops) throws IOException
+    {
+        if (!state.isVerified() || state.getVerificationCode() == null)
+        {
+            log.warn("Cannot sync - not verified or no auth token");
+            return;
+        }
+
+        // Calculate total loot value and drop count
+        int totalLootValue = 0;
+        int dropCount = drops.size();
+
+        for (LootStorageData.DropRecord drop : drops)
+        {
+            totalLootValue += drop.getTotalValue();
+        }
+
+        // Add drops array
+        JsonArray dropsArray = new JsonArray();
+        for (LootStorageData.DropRecord drop : drops)
+        {
+            JsonObject dropObj = new JsonObject();
+            dropObj.addProperty("item_id", drop.getItemId());
+            dropObj.addProperty("item_name", drop.getItemName());
+            dropObj.addProperty("quantity", drop.getQuantity());
+            dropObj.addProperty("ge_price", drop.getGePrice());
+            dropObj.addProperty("high_alch", drop.getHighAlch());
+            dropObj.addProperty("total_value", drop.getTotalValue());
+            dropObj.addProperty("hidden", drop.isHidden());
+            dropsArray.add(dropObj);
+        }
+
+        // Build payload to match server expectations
+        JsonObject payload = new JsonObject();
+        payload.addProperty("username", username);
+        payload.addProperty("npc_name", npcName);
+        payload.addProperty("npc_id", npcId);
+        payload.addProperty("combat_level", combatLevel);
+        payload.addProperty("kill_count", killNumber); // ← Changed from kill_number
+        payload.addProperty("world", world);
+        payload.addProperty("timestamp", timestamp / 1000); // Convert to seconds
+        payload.addProperty("prestige", prestige);
+        payload.addProperty("total_loot_value", totalLootValue); // ← Added
+        payload.addProperty("drop_count", dropCount); // ← Added
+        payload.add("drops", dropsArray);
+
+        String jsonPayload = new Gson().toJson(payload);
+        RequestBody body = RequestBody.create(JSON, jsonPayload);
+
+        Request request = new Request.Builder()
+                .url(config.apiUrl() + "/loot/sync")
+                .addHeader("Authorization", "Bearer " + state.getVerificationCode())
+                .post(body)
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute())
+        {
+            if (!response.isSuccessful())
+            {
+                String errorBody = response.body() != null ? response.body().string() : "No error body";
+                log.error("Failed to sync kill: HTTP {} - {}", response.code(), errorBody);
+                throw new IOException("Sync failed: " + response.code());
+            }
+
+            log.debug("Successfully synced kill: {} #{}", npcName, killNumber);
         }
     }
 

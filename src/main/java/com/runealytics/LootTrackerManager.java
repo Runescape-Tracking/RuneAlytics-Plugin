@@ -2,19 +2,17 @@ package com.runealytics;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.gson.Gson;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
+import com.runealytics.LootStorageData;
+import com.runealytics.LootStorageManager;
+import com.runealytics.LootTrackerApiClient;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.api.Client;
-import net.runelite.api.NPC;
-import net.runelite.api.TileItem;
+import net.runelite.api.*;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.game.ItemManager;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.swing.*;
-import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
@@ -25,23 +23,9 @@ import java.util.regex.Pattern;
 @Singleton
 public class LootTrackerManager
 {
+    // ==================== CONSTANTS ====================
+
     private static final Pattern KC_PATTERN = Pattern.compile("Your (.+) kill count is: (\\d+)");
-
-    private final Client client;
-    private final ItemManager itemManager;
-    private final RunealyticsConfig config;
-    private final RuneAlyticsState state;
-    private final LootStorageManager storageManager;
-    private final LootTrackerApiClient apiClient;
-    private final ScheduledExecutorService executorService;
-
-    private LootTrackerPanel panel;
-    private boolean hasAttemptedSync = false;
-
-    private final Map<String, BossKillStats> bossStats = new ConcurrentHashMap<>();
-    private final List<LootTrackerUpdateListener> listeners = new ArrayList<>();
-    private final Map<String, Set<Integer>> hiddenDrops = new HashMap<>();
-    private final Queue<NpcKillRecord> pendingSync = new LinkedList<>();
 
     // Comprehensive list of boss NPC IDs
     private static final Set<Integer> TRACKED_BOSS_IDS = ImmutableSet.of(
@@ -89,69 +73,279 @@ public class LootTrackerManager
             .put("The Leviathan", 12193)
             .put("Vardorvis", 12205)
             .put("The Whisperer", 12225)
+            .put("Alchemical Hydra", 8609)
+            .put("Cerberus", 5862)
+            .put("The Nightmare", 9415)
+            .put("Phosani's Nightmare", 9416)
+            .put("Nex", 11278)
+            .put("Barrows", 2025)
+            .put("Corrupted Gauntlet", 9036)
+            .put("The Gauntlet", 9035)
             .build();
+
+    // ==================== DEPENDENCIES ====================
+
+    private final Client client;
+    private final ClientThread clientThread;
+    private final ItemManager itemManager;
+    private final RunealyticsConfig config;
+    private final RuneAlyticsState state;
+    private final LootStorageManager storageManager;
+    private final LootTrackerApiClient apiClient;
+    private final ScheduledExecutorService executorService;
+
+    // ==================== STATE ====================
+
+    private LootTrackerPanel panel;
+    private boolean hasAttemptedSync = false;
+
+    private final Map<String, BossKillStats> bossKillStats = new ConcurrentHashMap<>();
+    private final List<LootTrackerUpdateListener> listeners = new ArrayList<>();
+    private final Map<String, Set<Integer>> hiddenDrops = new HashMap<>();
+
+    // ==================== CONSTRUCTOR ====================
 
     @Inject
     public LootTrackerManager(
             Client client,
+            ClientThread clientThread,
+            ItemManager itemManager,
             RunealyticsConfig config,
             RuneAlyticsState state,
             LootStorageManager storageManager,
             LootTrackerApiClient apiClient,
-            ItemManager itemManager,
-            ScheduledExecutorService executorService
-    )
+            ScheduledExecutorService executorService)
     {
         this.client = client;
+        this.clientThread = clientThread;
+        this.itemManager = itemManager;
         this.config = config;
         this.state = state;
         this.storageManager = storageManager;
         this.apiClient = apiClient;
-        this.itemManager = itemManager;
         this.executorService = executorService;
     }
 
-    /**
-     * Set the panel reference for UI updates
-     */
+    // ==================== LIFECYCLE ====================
+
     public void setPanel(LootTrackerPanel panel)
     {
         this.panel = panel;
         log.info("Panel reference set");
     }
 
-    /**
-     * Initialize the loot tracker
-     */
     public void initialize()
     {
         log.info("Initializing LootTrackerManager");
-
-        // Load local data first
-        loadFromStorage();
         hasAttemptedSync = false;
-
-        log.info("Boss stats loaded: {}", bossStats.size());
-        for (Map.Entry<String, BossKillStats> entry : bossStats.entrySet())
-        {
-            BossKillStats stats = entry.getValue();
-            log.info("  - {}: {} kills, {} history records, {} gp",
-                    stats.getNpcName(),
-                    stats.getKillCount(),
-                    stats.getKillHistory().size(),
-                    stats.getTotalLootValue());
-        }
-
-        log.info("LootTrackerManager initialized - sync will run after login");
+        log.info("LootTrackerManager initialized - data will load on login");
     }
 
-    /**
-     * Shutdown and save data
-     */
     public void shutdown()
     {
         log.info("Shutting down LootTrackerManager - saving data for {}", state.getVerifiedUsername());
-        saveToStorage();
+        storageManager.saveData();
+    }
+
+    // ==================== LOOT PROCESSING ====================
+
+    /**
+     * Process NPC loot from NpcLootReceived event
+     */
+    public void processNpcLoot(NPC npc, List<ItemStack> items)
+    {
+        if (!config.enableLootTracking() || !state.isVerified())
+        {
+            return;
+        }
+
+        String npcName = normalizeBossName(npc.getName());
+        int npcId = npc.getId();
+        int combatLevel = npc.getCombatLevel();
+        int world = client.getWorld();
+
+        boolean isBoss = isBoss(npcId, npcName);
+        boolean trackAllNpcs = config.trackAllNpcs();
+
+        if (!isBoss && !trackAllNpcs)
+        {
+            log.debug("Skipping non-boss NPC: {}", npcName);
+            return;
+        }
+
+        // Convert ItemStack to DropRecord
+        List<LootStorageData.DropRecord> drops = convertItemStacksToDropRecords(items);
+
+        if (drops.isEmpty())
+        {
+            return;
+        }
+
+        // Record the kill
+        recordKill(npcName, npcId, combatLevel, world, drops);
+    }
+
+    /**
+     * Process player loot from PlayerLootReceived event (chests, PvP, etc.)
+     */
+    public void processPlayerLoot(String sourceName, List<ItemStack> items)
+    {
+        if (!config.enableLootTracking() || !state.isVerified())
+        {
+            return;
+        }
+
+        String normalizedName = normalizeBossName(sourceName);
+        int world = client.getWorld();
+
+        // Convert items
+        List<LootStorageData.DropRecord> drops = convertItemStacksToDropRecords(items);
+
+        if (drops.isEmpty())
+        {
+            return;
+        }
+
+        // Get NPC ID for the source
+        Integer npcId = getBossIdFromName(normalizedName);
+        if (npcId == null) npcId = 0;
+
+        // Record the kill
+        recordKill(normalizedName, npcId, 0, world, drops);
+    }
+
+    /**
+     * Convert ItemStacks to DropRecords with value filtering
+     */
+    private List<LootStorageData.DropRecord> convertItemStacksToDropRecords(List<ItemStack> items)
+    {
+        List<LootStorageData.DropRecord> drops = new ArrayList<>();
+
+        for (ItemStack item : items)
+        {
+            ItemComposition itemComp = itemManager.getItemComposition(item.getId());
+            String itemName = itemComp.getName();
+            int gePrice = itemManager.getItemPrice(item.getId());
+            int highAlch = itemComp.getHaPrice();
+            int totalValue = gePrice * item.getQuantity();
+
+            // Filter by minimum value
+            if (totalValue < config.minimumLootValue())
+            {
+                continue;
+            }
+
+            LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
+            drop.setItemId(item.getId());
+            drop.setItemName(itemName);
+            drop.setQuantity(item.getQuantity());
+            drop.setGePrice(gePrice);
+            drop.setHighAlch(highAlch);
+            drop.setTotalValue(totalValue);
+            drop.setHidden(false);
+
+            drops.add(drop);
+        }
+
+        return drops;
+    }
+
+    /**
+     * Record a kill to local storage and sync to server
+     */
+    private void recordKill(String npcName, int npcId, int combatLevel, int world,
+                            List<LootStorageData.DropRecord> drops)
+    {
+        // Get or create stats
+        BossKillStats stats = bossKillStats.computeIfAbsent(npcName, k ->
+                new BossKillStats(npcName, npcId)
+        );
+
+        stats.setKillCount(stats.getKillCount() + 1);
+        stats.setPrestige(state.getPrestige());
+        int killNumber = stats.getKillCount();
+
+        // Create NpcKillRecord for BossKillStats
+        NpcKillRecord killRecord = new NpcKillRecord(npcName, npcId, combatLevel, world);
+        killRecord.setKillNumber(killNumber);
+
+        // Convert DropRecords to LootDrops
+        for (LootStorageData.DropRecord drop : drops)
+        {
+            LootDrop lootDrop = new LootDrop(
+                    drop.getItemId(),
+                    drop.getItemName(),
+                    drop.getQuantity(),
+                    drop.getGePrice(),
+                    drop.getHighAlch()
+            );
+            killRecord.addDrop(lootDrop);
+        }
+
+        // Add to stats (this populates killHistory for aggregation)
+        stats.addKill(killRecord);
+
+        // Save to local storage
+        storageManager.addKill(npcName, npcId, combatLevel, killNumber, world, state.getPrestige(), drops);
+
+        // Sync to server asynchronously
+        if (config.syncLootToServer())
+        {
+            syncKillToServer(npcName, npcId, combatLevel, killNumber, world, drops);
+        }
+
+        // Update UI
+        if (panel != null)
+        {
+            clientThread.invokeLater(() -> panel.refreshDisplay());
+        }
+
+        // Notify listeners
+        notifyKillRecorded(stats);
+
+        log.info("Recorded kill for {}: #{}, {} drops", npcName, killNumber, drops.size());
+    }
+
+    // ==================== SERVER SYNC ====================
+
+    /**
+     * Sync single kill to server
+     */
+    private void syncKillToServer(String npcName, int npcId, int combatLevel,
+                                  int killNumber, int world,
+                                  List<LootStorageData.DropRecord> drops)
+    {
+        if (!state.canSync())
+        {
+            log.debug("Cannot sync - sync in progress");
+            return;
+        }
+
+        executorService.submit(() -> {
+            try
+            {
+                apiClient.syncSingleKill(
+                        state.getVerifiedUsername(),
+                        npcName,
+                        npcId,
+                        combatLevel,
+                        killNumber,
+                        world,
+                        System.currentTimeMillis(),
+                        state.getPrestige(),
+                        drops
+                );
+
+                // Mark as synced
+                storageManager.markKillsSynced(npcName, System.currentTimeMillis(), System.currentTimeMillis());
+
+                log.debug("Synced kill to server: {} #{}", npcName, killNumber);
+            }
+            catch (Exception e)
+            {
+                log.error("Failed to sync kill to server", e);
+            }
+        });
     }
 
     /**
@@ -161,479 +355,445 @@ public class LootTrackerManager
     {
         if (hasAttemptedSync)
         {
-            log.info("Sync already attempted this session, skipping");
+            log.info("Sync already attempted this session");
             return;
         }
 
-        if (!config.syncLootToServer())
+        if (!config.syncLootToServer() || !state.isVerified())
         {
-            log.info("Server sync disabled in config");
+            log.info("Sync disabled or not verified");
             hasAttemptedSync = true;
             return;
         }
 
-        if (!state.isVerified())
-        {
-            log.warn("Player not verified, cannot sync");
-            hasAttemptedSync = true;
-            return;
-        }
-
-        log.info("Player logged in and verified - starting loot sync...");
+        log.info("Player logged in and verified - starting loot sync");
         syncWithServerOnStartup();
         hasAttemptedSync = true;
     }
 
     /**
-     * Called when account changes - reload data for new account
+     * Download kill history from server and merge with local
      */
+    public void downloadKillHistoryFromServer()
+    {
+        String username = state.getVerifiedUsername();
+        if (username == null || username.isEmpty() || !state.canSync())
+        {
+            log.warn("Cannot download history");
+            return;
+        }
+
+        try
+        {
+            state.startSync();
+            log.info("Downloading kill history from server for {}", username);
+
+            Map<String, LootStorageData.BossKillData> serverData = apiClient.fetchKillHistoryFromServer(username);
+
+            if (serverData == null || serverData.isEmpty())
+            {
+                log.info("No kill history on server for {}", username);
+                return;
+            }
+
+            storageManager.mergeServerData(serverData);
+            refreshLootDisplay();
+
+            log.info("Successfully downloaded and merged {} bosses from server", serverData.size());
+        }
+        catch (Exception e)
+        {
+            log.error("Failed to download kill history from server", e);
+        }
+        finally
+        {
+            state.endSync();
+        }
+    }
+
+    /**
+     * Upload unsynced kills to server
+     */
+    /**
+     * Upload unsynced kills to server in batches
+     */
+    public void uploadUnsyncedKills()
+    {
+        String username = state.getVerifiedUsername();
+        if (username == null || username.isEmpty() || !state.canSync())
+        {
+            return;
+        }
+
+        try
+        {
+            state.startSync();
+
+            Map<String, List<LootStorageData.KillRecord>> unsyncedKills = storageManager.getAllUnsyncedKills();
+
+            if (unsyncedKills.isEmpty())
+            {
+                log.debug("No unsynced kills to upload");
+                return;
+            }
+
+            int totalKills = unsyncedKills.values().stream().mapToInt(List::size).sum();
+            log.info("Uploading {} unsynced kills across {} bosses", totalKills, unsyncedKills.size());
+
+            // BATCH PROCESSING - Upload in chunks of 50 kills max
+            final int BATCH_SIZE = 50;
+            List<LootStorageData.KillRecord> allKills = new ArrayList<>();
+            Map<String, String> killToBossName = new HashMap<>();
+
+            // Flatten all kills into a single list
+            for (Map.Entry<String, List<LootStorageData.KillRecord>> entry : unsyncedKills.entrySet())
+            {
+                for (LootStorageData.KillRecord kill : entry.getValue())
+                {
+                    allKills.add(kill);
+                    killToBossName.put(String.valueOf(kill.getTimestamp()), entry.getKey());
+                }
+            }
+
+            // Split into batches
+            for (int i = 0; i < allKills.size(); i += BATCH_SIZE)
+            {
+                int end = Math.min(i + BATCH_SIZE, allKills.size());
+                List<LootStorageData.KillRecord> batch = allKills.subList(i, end);
+
+                // Group batch by boss name
+                Map<String, List<LootStorageData.KillRecord>> batchByBoss = new HashMap<>();
+                for (LootStorageData.KillRecord kill : batch)
+                {
+                    String bossName = killToBossName.get(String.valueOf(kill.getTimestamp()));
+                    batchByBoss.computeIfAbsent(bossName, k -> new ArrayList<>()).add(kill);
+                }
+
+                log.info("Uploading batch {}/{} ({} kills)",
+                        (i / BATCH_SIZE) + 1,
+                        (allKills.size() + BATCH_SIZE - 1) / BATCH_SIZE,
+                        batch.size());
+
+                boolean success = apiClient.bulkSyncKills(username, batchByBoss);
+
+                if (success)
+                {
+                    // Mark this batch as synced
+                    for (Map.Entry<String, List<LootStorageData.KillRecord>> entry : batchByBoss.entrySet())
+                    {
+                        String npcName = entry.getKey();
+                        List<LootStorageData.KillRecord> kills = entry.getValue();
+
+                        if (!kills.isEmpty())
+                        {
+                            long minTs = kills.stream().mapToLong(LootStorageData.KillRecord::getTimestamp).min().orElse(0);
+                            long maxTs = kills.stream().mapToLong(LootStorageData.KillRecord::getTimestamp).max().orElse(Long.MAX_VALUE);
+                            storageManager.markKillsSynced(npcName, minTs, maxTs);
+                        }
+                    }
+                }
+                else
+                {
+                    log.error("Failed to upload batch, stopping");
+                    break;
+                }
+
+                // Small delay between batches to avoid overwhelming the server
+                if (i + BATCH_SIZE < allKills.size())
+                {
+                    Thread.sleep(500);
+                }
+            }
+
+            log.info("Successfully uploaded kills in batches");
+        }
+        catch (Exception e)
+        {
+            log.error("Failed to upload unsynced kills", e);
+        }
+        finally
+        {
+            state.endSync();
+        }
+    }
+
+    /**
+     * Load only local data for a user without syncing
+     */
+    public void loadLocalDataForUser(String username) {
+        log.info("Loading local loot data for: {}", username);
+
+        // Load from storage
+        LootStorageData storageData = storageManager.loadLootData(username);
+
+        if (storageData == null || storageData.getBossKills().isEmpty()) {
+            log.info("No local data found for {}", username);
+            clientThread.invokeLater(() -> {
+                bossKillStats.clear();
+                if (panel != null) {
+                    panel.refreshDisplay();
+                }
+            });
+            return;
+        }
+
+        log.info("Loading stored loot data - {} bosses", storageData.getBossKills().size());
+
+        // Convert and display
+        clientThread.invokeLater(() -> {
+            refreshLootDisplay();
+        });
+    }
+
+    /**
+     * Manual sync button action - bidirectional sync
+     */
+    public void performManualSync(String username) {
+        if (username == null || username.isEmpty()) {
+            log.warn("Cannot sync: no username provided");
+            return;
+        }
+
+        log.info("=== MANUAL SYNC STARTED ===");
+        log.info("Username: {}", username);
+
+        executorService.submit(() -> {
+            try {
+                // Step 1: Download from server
+                log.info("Step 1: Downloading kill history from server");
+                downloadKillHistoryFromServer();
+
+                // Step 2: Upload unsynced local kills
+                log.info("Step 2: Uploading unsynced local kills");
+                uploadUnsyncedKills();
+
+                // Step 3: Refresh display with merged data
+                log.info("Step 3: Refreshing display");
+                clientThread.invokeLater(this::refreshLootDisplay);
+
+                log.info("=== MANUAL SYNC COMPLETED ===");
+
+                // Notify user
+                clientThread.invokeLater(() -> {
+                    if (panel != null) {
+                        panel.showSyncCompleted();
+                    }
+                });
+
+            } catch (Exception e) {
+                log.error("Manual sync failed", e);
+                clientThread.invokeLater(() -> {
+                    if (panel != null) {
+                        panel.showSyncFailed(e.getMessage());
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Perform full bidirectional sync with server
+     */
+    public void syncWithServerOnStartup()
+    {
+        executorService.submit(() -> {  // ← Changed from clientThread.invokeLater
+            try
+            {
+                log.info("Starting bidirectional sync");
+
+                downloadKillHistoryFromServer();
+                Thread.sleep(500);
+                uploadUnsyncedKills();
+
+                // Refresh UI on client thread
+                clientThread.invokeLater(this::refreshLootDisplay);
+
+                log.info("Bidirectional sync completed");
+            }
+            catch (Exception e)
+            {
+                log.error("Error during bidirectional sync", e);
+            }
+        });
+    }
+
+    // ==================== DATA MANAGEMENT ====================
+
+    /**
+     * Load data from storage on startup
+     */
+    public void loadFromStorage()
+    {
+        LootStorageData data = storageManager.loadData();
+        if (data == null || data.getBossKills().isEmpty())
+        {
+            log.info("No stored loot data found");
+            return;
+        }
+
+        log.info("Loading stored loot data - {} bosses", data.getBossKills().size());
+        refreshLootDisplay();
+    }
+
+    /**
+     * Refresh display from storage data - converts to BossKillStats with full kill history
+     */
+    private void refreshLootDisplay()
+    {
+        LootStorageData data = storageManager.getCurrentData();
+
+        log.info("=== REFRESH DISPLAY DEBUG ===");
+
+        if (data == null || data.getBossKills().isEmpty())
+        {
+            log.info("No boss kills data to display");
+            if (panel != null)
+            {
+                clientThread.invokeLater(() -> panel.refreshDisplay());
+            }
+            return;
+        }
+
+        log.info("Boss kills count: {}", data.getBossKills().size());
+
+        // Convert storage data to BossKillStats with kill history
+        bossKillStats.clear();
+
+        for (Map.Entry<String, LootStorageData.BossKillData> entry : data.getBossKills().entrySet())
+        {
+            String bossName = entry.getKey();
+            LootStorageData.BossKillData bossData = entry.getValue();
+
+            log.info("Processing boss: {}, KC: {}", bossName, bossData.getKillCount());
+
+            BossKillStats stats = new BossKillStats(bossData.getNpcName(), bossData.getNpcId());
+            stats.setKillCount(bossData.getKillCount());
+            stats.setPrestige(bossData.getPrestige());
+            stats.setTotalLootValue(bossData.getTotalLootValue());
+
+            // Convert kill records to populate killHistory
+            List<LootStorageData.KillRecord> killRecords = bossData.getKills(); // ← Fixed!
+
+            if (killRecords != null && !killRecords.isEmpty())
+            {
+                log.info("Found {} kill records for {}", killRecords.size(), bossName);
+
+                for (LootStorageData.KillRecord killRecord : killRecords)
+                {
+                    NpcKillRecord npcKill = new NpcKillRecord(
+                            bossData.getNpcName(),
+                            bossData.getNpcId(),
+                            killRecord.getCombatLevel(),
+                            killRecord.getWorld()
+                    );
+                    npcKill.setTimestamp(killRecord.getTimestamp());
+                    npcKill.setKillNumber(killRecord.getKillNumber());
+
+                    // Convert drops
+                    for (LootStorageData.DropRecord drop : killRecord.getDrops())
+                    {
+                        LootDrop lootDrop = new LootDrop(
+                                drop.getItemId(),
+                                drop.getItemName(),
+                                drop.getQuantity(),
+                                drop.getGePrice(),
+                                drop.getHighAlch()
+                        );
+                        npcKill.addDrop(lootDrop);
+                    }
+
+                    stats.addKill(npcKill);
+                }
+            }
+            else
+            {
+                log.warn("No kill records for {}, using aggregated data only", bossName);
+            }
+
+            log.info("Added stats for {} with {} aggregated drops",
+                    bossName, stats.getAggregatedDrops().size());
+
+            bossKillStats.put(stats.getNpcName(), stats);
+        }
+
+        log.info("Total bosses in memory: {}", bossKillStats.size());
+        log.info("=== END REFRESH DISPLAY DEBUG ===");
+
+        // Update panel
+        if (panel != null)
+        {
+            clientThread.invokeLater(() -> {
+                log.info("Triggering panel refresh");
+                panel.refreshDisplay();
+            });
+        }
+    }
+
     public void onAccountChanged(String newUsername)
     {
         log.info("Account changed to: {}", newUsername);
-
-        // Clear current data
-        bossStats.clear();
-
-        // Reload for new account
+        bossKillStats.clear();
+        hasAttemptedSync = false;
         loadFromStorage();
 
-        // Notify panel to refresh
         if (panel != null)
         {
             SwingUtilities.invokeLater(() -> panel.refreshDisplay());
         }
     }
 
-    private void syncWithServerOnStartup()
-    {
-        String username = state.getVerifiedUsername();
-        if (username == null || username.isEmpty())
-        {
-            log.warn("No verified username, cannot sync with server");
-            return;
-        }
-
-        try
-        {
-            log.info("Fetching boss stats from server for: {}", username);
-            Map<String, LootTrackerApiClient.ServerBossStats> serverStats =
-                    apiClient.fetchBossStatsFromServer(username);
-
-            int localTotalKills = bossStats.values().stream()
-                    .mapToInt(BossKillStats::getKillCount)
-                    .sum();
-
-            log.info("Local data: {} bosses, {} total kills",
-                    bossStats.size(), localTotalKills);
-
-            // If local is empty but server has data, download from server
-            if (bossStats.isEmpty() && !serverStats.isEmpty())
-            {
-                log.info("Local storage empty, downloading {} bosses from server", serverStats.size());
-                downloadKillHistoryFromServer(username);
-                saveToStorage(); // Save downloaded data
-
-                // Notify panel to refresh
-                if (panel != null)
-                {
-                    SwingUtilities.invokeLater(() -> panel.refreshDisplay());
-                }
-                return;
-            }
-
-            if (serverStats.isEmpty())
-            {
-                log.info("No server data found - uploading all local data");
-
-                if (localTotalKills > 0)
-                {
-                    uploadAllLocalDataToServer(username);
-                }
-                return;
-            }
-
-            int serverTotalKills = serverStats.values().stream()
-                    .mapToInt(s -> s.killCount)
-                    .sum();
-
-            log.info("Server data: {} bosses, {} total kills",
-                    serverStats.size(), serverTotalKills);
-
-            boolean needsSync = false;
-
-            // Check for missing data on either side
-            for (Map.Entry<String, LootTrackerApiClient.ServerBossStats> serverEntry : serverStats.entrySet())
-            {
-                String bossName = serverEntry.getKey();
-                LootTrackerApiClient.ServerBossStats serverStat = serverEntry.getValue();
-                BossKillStats localStat = bossStats.get(bossName);
-
-                if (localStat == null)
-                {
-                    log.warn("Server has {} but local does not ({} kills) - will download",
-                            bossName, serverStat.killCount);
-                    needsSync = true;
-                }
-                else if (localStat.getKillCount() < serverStat.killCount)
-                {
-                    log.warn("Server has more kills for {}: Server {} vs Local {}",
-                            bossName, serverStat.killCount, localStat.getKillCount());
-                    needsSync = true;
-                }
-                else if (localStat.getKillCount() > serverStat.killCount)
-                {
-                    log.warn("Local has more kills for {}: Local {} vs Server {}",
-                            bossName, localStat.getKillCount(), serverStat.killCount);
-                    needsSync = true;
-                }
-            }
-
-            if (needsSync)
-            {
-                // Download missing data from server
-                log.info("Syncing data from server...");
-                downloadKillHistoryFromServer(username);
-
-                // Then upload any local data that's newer
-                uploadAllLocalDataToServer(username);
-
-                saveToStorage();
-
-                // Notify panel to refresh
-                if (panel != null)
-                {
-                    SwingUtilities.invokeLater(() -> panel.refreshDisplay());
-                }
-            }
-            else
-            {
-                log.info("✓ Local and server data synchronized");
-            }
-
-        }
-        catch (IOException e)
-        {
-            log.error("Failed to sync with server on startup", e);
-        }
-    }
-
-    /**
-     * Download kill history from server and merge with local data
-     */
-    private void downloadKillHistoryFromServer(String username)
-    {
-        try
-        {
-            Map<String, List<NpcKillRecord>> serverKillHistory =
-                    apiClient.fetchKillHistoryFromServer(username);
-
-            for (Map.Entry<String, List<NpcKillRecord>> entry : serverKillHistory.entrySet())
-            {
-                String npcName = entry.getKey();
-                List<NpcKillRecord> kills = entry.getValue();
-
-                if (kills.isEmpty())
-                {
-                    continue;
-                }
-
-                // Get first kill to determine NPC ID
-                NpcKillRecord firstKill = kills.get(0);
-
-                BossKillStats stats = bossStats.computeIfAbsent(
-                        npcName,
-                        name -> new BossKillStats(name, firstKill.getNpcId())
-                );
-
-                // Add each kill from server
-                for (NpcKillRecord kill : kills)
-                {
-                    // Check if we already have this kill (by timestamp)
-                    boolean alreadyExists = stats.getKillHistory().stream()
-                            .anyMatch(existing -> Math.abs(existing.getTimestamp() - kill.getTimestamp()) < 1000);
-
-                    if (!alreadyExists)
-                    {
-                        stats.addKill(kill);
-                    }
-                }
-
-                log.info("Downloaded {} kill records for {}", kills.size(), npcName);
-            }
-        }
-        catch (IOException e)
-        {
-            log.error("Failed to download kill history from server", e);
-        }
-    }
-
-    /**
-     * Upload all local loot data to server
-     */
-    private void uploadAllLocalDataToServer(String username)
-    {
-        try
-        {
-            int totalKills = bossStats.values().stream()
-                    .mapToInt(stats -> stats.getKillHistory().size())
-                    .sum();
-
-            log.info("Starting bulk upload of {} kill records from {} bosses...",
-                    totalKills, bossStats.size());
-
-            for (Map.Entry<String, BossKillStats> entry : bossStats.entrySet())
-            {
-                BossKillStats stats = entry.getValue();
-                log.info("  - {}: {} kill records (KC: {}, Value: {} gp)",
-                        stats.getNpcName(),
-                        stats.getKillHistory().size(),
-                        stats.getKillCount(),
-                        stats.getTotalLootValue());
-            }
-
-            apiClient.bulkSyncAllLoot(username, bossStats);
-            log.info("✓ Bulk upload completed successfully ({} kills synced)", totalKills);
-        }
-        catch (IOException e)
-        {
-            log.error("Failed to bulk upload loot data to server", e);
-        }
-    }
-
-    /**
-     * Process NPC loot
-     */
-    public void processNpcLoot(NPC npc, List<ItemStack> items)
-    {
-        log.info(">>> processNpcLoot called for NPC: {} (ID: {})", npc.getName(), npc.getId());
-        processLoot(npc.getName(), npc.getId(), npc.getCombatLevel(), client.getWorld(), items, "NPC");
-    }
-
-    /**
-     * Process player loot (PvP)
-     */
-    public void processPlayerLoot(String playerName, List<ItemStack> items)
-    {
-        log.info(">>> processPlayerLoot called for player: {}", playerName);
-        processLoot(playerName, 0, 0, client.getWorld(), items, "PLAYER");
-    }
-
-    /**
-     * Process generic loot (chests, clues, etc.)
-     */
-    public void processGenericLoot(String source, String type, List<ItemStack> items)
-    {
-        log.info(">>> processGenericLoot called for source: {} (type: {})", source, type);
-        processLoot(source, 0, 0, client.getWorld(), items, type);
-    }
-
-    /**
-     * Unified loot processing
-     */
-    private void processLoot(String sourceName, int sourceId, int combatLevel, int world, List<ItemStack> items, String lootType)
-    {
-        log.info(">>> processLoot: source={}, id={}, combat={}, world={}, items={}, type={}",
-                sourceName, sourceId, combatLevel, world, items.size(), lootType);
-
-        if (!config.enableLootTracking())
-        {
-            log.warn("Loot tracking is disabled, exiting");
-            return;
-        }
-
-        String normalizedName = normalizeBossName(sourceName);
-        log.info(">>> Normalized name: {}", normalizedName);
-
-        NpcKillRecord kill = new NpcKillRecord(normalizedName, sourceId, combatLevel, world);
-
-        int dropsAdded = 0;
-        for (ItemStack item : items)
-        {
-            long gePrice = itemManager.getItemPrice(item.getId());
-            int highAlch = itemManager.getItemComposition(item.getId()).getHaPrice();
-            String itemName = itemManager.getItemComposition(item.getId()).getName();
-            long totalValue = gePrice * item.getQuantity();
-
-            log.info(">>> Item: {} (ID: {}), Qty: {}, GE: {}, Total: {}",
-                    itemName, item.getId(), item.getQuantity(), gePrice, totalValue);
-
-            if (totalValue < config.minimumLootValue())
-            {
-                log.info(">>> Item value {} below threshold {}, skipping", totalValue, config.minimumLootValue());
-                continue;
-            }
-
-            LootDrop drop = new LootDrop(item.getId(), itemName, item.getQuantity(), gePrice, highAlch);
-            kill.addDrop(drop);
-            dropsAdded++;
-            log.info(">>> Added drop #{}", dropsAdded);
-        }
-
-        if (kill.getDrops().isEmpty())
-        {
-            log.warn(">>> No drops to record for {} (all items below threshold)", normalizedName);
-            return;
-        }
-
-        log.info(">>> Recording kill with {} drops", kill.getDrops().size());
-        addKill(kill);
-
-        BossKillStats stats = bossStats.get(normalizedName);
-        log.info(">>> Notifying {} listeners", listeners.size());
-        notifyKillRecorded(kill, stats);
-        log.info(">>> Recorded {} kill: {} items, {} gp", normalizedName, kill.getDrops().size(), kill.getTotalValue());
-    }
-
-    /**
-     * Add a kill to statistics
-     */
-    public void addKill(NpcKillRecord kill)
-    {
-        BossKillStats stats = bossStats.computeIfAbsent(
-                kill.getNpcName(),
-                name -> new BossKillStats(name, kill.getNpcId())
-        );
-
-        stats.addKill(kill);
-        log.info("Added kill for {}: KC now {}", kill.getNpcName(), stats.getKillCount());
-
-        // Save to local storage
-        saveToStorage();
-
-        // Notify panel to update UI
-        if (panel != null)
-        {
-            SwingUtilities.invokeLater(() -> panel.onKillAdded(stats));
-        }
-
-        // Sync to server if enabled
-        if (config.syncLootToServer() && state.isVerified())
-        {
-            executorService.submit(() -> {
-                try
-                {
-                    syncKillToServer(kill);
-                }
-                catch (Exception e)
-                {
-                    log.error("Failed to sync kill to server", e);
-                }
-            });
-        }
-    }
-
-    /**
-     * Sync a single kill to the server
-     */
-    private void syncKillToServer(NpcKillRecord kill)
-    {
-        try
-        {
-            JsonObject payload = apiClient.buildKillPayload(kill);
-            if (payload != null)
-            {
-                apiClient.syncKillData(payload);
-                log.debug("Synced kill to server: {}", kill.getNpcName());
-            }
-        }
-        catch (IOException e)
-        {
-            log.error("Failed to sync kill to server", e);
-            pendingSync.offer(kill);
-        }
-    }
-
-    /**
-     * Load data from storage
-     */
-    private void loadFromStorage()
-    {
-        LootStorageManager.LootStorageData data = storageManager.loadLootData();
-        if (data != null && data.bossStats != null)
-        {
-            bossStats.putAll(data.bossStats);
-            log.info("Loaded {} boss stats from storage", bossStats.size());
-        }
-    }
-
-    /**
-     * Save data to storage
-     */
-    private void saveToStorage()
-    {
-        storageManager.saveLootData(bossStats, 0);
-    }
-
-    /**
-     * Get all boss statistics
-     */
     public List<BossKillStats> getAllBossStats()
     {
-        return new ArrayList<>(bossStats.values());
+        return new ArrayList<>(bossKillStats.values());
     }
 
-    /**
-     * Clear all data
-     */
+    public Map<String, BossKillStats> getBossKillStats()
+    {
+        return Collections.unmodifiableMap(bossKillStats);
+    }
+
     public void clearAllData()
     {
-        bossStats.clear();
+        bossKillStats.clear();
         hiddenDrops.clear();
-        pendingSync.clear();
-        saveToStorage();
+        storageManager.clearData();
 
-        for (LootTrackerUpdateListener listener : listeners)
+        if (panel != null)
         {
-            listener.onDataRefresh();
+            clientThread.invokeLater(() -> panel.refreshDisplay());
+        }
+
+        notifyDataRefresh();
+    }
+
+    public void clearBossData(String npcName)
+    {
+        bossKillStats.remove(npcName);
+        hiddenDrops.remove(npcName);
+        storageManager.saveData();
+
+        if (panel != null)
+        {
+            clientThread.invokeLater(() -> panel.refreshDisplay());
         }
     }
 
-    /**
-     * Prestige a boss
-     */
     public void prestigeBoss(String npcName)
     {
-        BossKillStats stats = bossStats.get(npcName);
+        BossKillStats stats = bossKillStats.get(npcName);
         if (stats != null)
         {
             stats.prestige();
-            saveToStorage();
+            storageManager.saveData();
+
+            if (panel != null)
+            {
+                clientThread.invokeLater(() -> panel.refreshDisplay());
+            }
         }
     }
 
-    /**
-     * Clear data for a specific boss
-     */
-    public void clearBossData(String npcName)
-    {
-        bossStats.remove(npcName);
-        hiddenDrops.remove(npcName);
-        saveToStorage();
-    }
-
-    /**
-     * Add an update listener
-     */
-    public void addListener(LootTrackerUpdateListener listener)
-    {
-        listeners.add(listener);
-    }
-
-    /**
-     * Notify listeners of a kill
-     */
-    private void notifyKillRecorded(NpcKillRecord kill, BossKillStats stats)
-    {
-        for (LootTrackerUpdateListener listener : listeners)
-        {
-            listener.onKillRecorded(kill, stats);
-        }
-
-        for (LootTrackerUpdateListener listener : listeners)
-        {
-            listener.onDataRefresh();
-        }
-    }
+    // ==================== HIDDEN DROPS ====================
 
     /**
      * Check if an item drop is hidden
@@ -650,7 +810,7 @@ public class LootTrackerManager
     public void hideDropForNpc(String npcName, int itemId)
     {
         hiddenDrops.computeIfAbsent(npcName, k -> new HashSet<>()).add(itemId);
-        saveToStorage();
+        storageManager.saveData();
     }
 
     /**
@@ -663,144 +823,56 @@ public class LootTrackerManager
         {
             hidden.remove(itemId);
             if (hidden.isEmpty()) hiddenDrops.remove(npcName);
-            saveToStorage();
+            storageManager.saveData();
         }
     }
 
-    /**
-     * Check if NPC is a boss
-     */
+    // ==================== UTILITY ====================
+
     public boolean isBoss(int npcId, String npcName)
     {
-        if (TRACKED_BOSS_IDS.contains(npcId))
-        {
-            return true;
-        }
-
-        if (npcName != null)
-        {
-            return isBossName(npcName);
-        }
-
-        return false;
+        return TRACKED_BOSS_IDS.contains(npcId) ||
+                (npcName != null && isBossName(npcName));
     }
 
-    /**
-     * Check if name is a boss name
-     */
     private boolean isBossName(String name)
     {
-        if (name == null || name.isEmpty())
-        {
-            return false;
-        }
-
-        String lowerName = name.toLowerCase();
-
-        return lowerName.contains("duke") || lowerName.contains("sucellus") ||
-                lowerName.contains("leviathan") || lowerName.contains("vardorvis") ||
-                lowerName.contains("whisperer") || lowerName.contains("zulrah") ||
-                lowerName.contains("vorkath") || lowerName.contains("cerberus") ||
-                lowerName.contains("nightmare") || lowerName.contains("nex") ||
-                lowerName.contains("graardor") || lowerName.contains("zilyana") ||
-                lowerName.contains("kree") || lowerName.contains("kril") ||
-                lowerName.contains("corporeal") || lowerName.contains("kalphite queen") ||
-                lowerName.contains("dagannoth") || lowerName.contains("hydra") ||
-                lowerName.contains("kraken") || lowerName.contains("mole");
+        if (name == null) return false;
+        String lower = name.toLowerCase();
+        return lower.contains("duke") || lower.contains("leviathan") ||
+                lower.contains("vardorvis") || lower.contains("whisperer") ||
+                lower.contains("zulrah") || lower.contains("vorkath") ||
+                lower.contains("cerberus") || lower.contains("nightmare") ||
+                lower.contains("gauntlet") || lower.contains("barrows");
     }
 
-    /**
-     * Normalize boss names for consistency
-     */
     public String normalizeBossName(String name)
     {
-        if (name == null || name.isEmpty())
-        {
-            return "Unknown";
-        }
+        if (name == null || name.isEmpty()) return "Unknown";
+        String lower = name.toLowerCase();
 
-        String lowerName = name.toLowerCase();
-
-        // Gauntlet
-        if (lowerName.contains("corrupted gauntlet")) return "Corrupted Gauntlet";
-        if (lowerName.contains("gauntlet")) return "The Gauntlet";
-
-        // Chests and special loot sources
-        if (lowerName.contains("barrows chest") || lowerName.contains("barrows")) return "Barrows";
-        if (lowerName.contains("crystal chest")) return "Crystal Chest";
-        if (lowerName.contains("casket") || lowerName.contains("clue scroll")) return "Clue Scroll";
-        if (lowerName.contains("reward chest")) return "Reward Chest";
-        if (lowerName.contains("chambers of xeric")) return "Chambers of Xeric";
-        if (lowerName.contains("theatre of blood")) return "Theatre of Blood";
-        if (lowerName.contains("tombs of amascut")) return "Tombs of Amascut";
-
-        // DT2 Bosses
-        if (lowerName.contains("duke") || lowerName.contains("sucellus")) return "Duke Sucellus";
-        if (lowerName.contains("leviathan")) return "The Leviathan";
-        if (lowerName.contains("vardorvis")) return "Vardorvis";
-        if (lowerName.contains("whisperer")) return "The Whisperer";
-
-        // Other bosses
-        if (lowerName.contains("zulrah")) return "Zulrah";
-        if (lowerName.contains("vorkath")) return "Vorkath";
-        if (lowerName.contains("cerberus")) return "Cerberus";
-        if (lowerName.contains("nightmare")) return lowerName.contains("phosani") ? "Phosani's Nightmare" : "The Nightmare";
-        if (lowerName.contains("nex")) return "Nex";
-        if (lowerName.contains("graardor")) return "General Graardor";
-        if (lowerName.contains("zilyana")) return "Commander Zilyana";
-        if (lowerName.contains("kree")) return "Kree'arra";
-        if (lowerName.contains("kril")) return "K'ril Tsutsaroth";
-        if (lowerName.contains("corporeal")) return "Corporeal Beast";
-        if (lowerName.contains("kalphite")) return "Kalphite Queen";
-        if (lowerName.contains("hydra")) return "Alchemical Hydra";
+        if (lower.contains("corrupted gauntlet")) return "Corrupted Gauntlet";
+        if (lower.contains("gauntlet")) return "The Gauntlet";
+        if (lower.contains("barrows")) return "Barrows";
+        if (lower.contains("chambers of xeric")) return "Chambers of Xeric";
+        if (lower.contains("theatre of blood")) return "Theatre of Blood";
+        if (lower.contains("tombs of amascut")) return "Tombs of Amascut";
+        if (lower.contains("duke") || lower.contains("sucellus")) return "Duke Sucellus";
+        if (lower.contains("leviathan")) return "The Leviathan";
+        if (lower.contains("vardorvis")) return "Vardorvis";
+        if (lower.contains("whisperer")) return "The Whisperer";
+        if (lower.contains("zulrah")) return "Zulrah";
+        if (lower.contains("vorkath")) return "Vorkath";
+        if (lower.contains("cerberus")) return "Cerberus";
+        if (lower.contains("hydra")) return "Alchemical Hydra";
+        if (lower.contains("graardor")) return "General Graardor";
+        if (lower.contains("zilyana")) return "Commander Zilyana";
+        if (lower.contains("kree")) return "Kree'arra";
+        if (lower.contains("kril")) return "K'ril Tsutsaroth";
 
         return name.trim();
     }
 
-    /**
-     * Sync any pending loot that failed to sync previously
-     */
-    public void syncPendingLoot()
-    {
-        if (pendingSync.isEmpty() || !state.isVerified())
-        {
-            return;
-        }
-
-        if (!config.syncLootToServer())
-        {
-            return;
-        }
-
-        log.info("Syncing {} pending kills to server", pendingSync.size());
-
-        executorService.submit(() -> {
-            int synced = 0;
-            int failed = 0;
-
-            while (!pendingSync.isEmpty())
-            {
-                NpcKillRecord kill = pendingSync.poll();
-                try
-                {
-                    syncKillToServer(kill);
-                    synced++;
-                }
-                catch (Exception e)
-                {
-                    log.error("Failed to sync pending kill", e);
-                    failed++;
-                    // Don't re-add to queue to avoid infinite loop
-                }
-            }
-
-            log.info("Pending sync complete: {} synced, {} failed", synced, failed);
-        });
-    }
-
-    /**
-     * Parse kill count message from chat
-     */
     public void parseKillCountMessage(String message)
     {
         Matcher matcher = KC_PATTERN.matcher(message);
@@ -809,24 +881,34 @@ public class LootTrackerManager
             String bossName = normalizeBossName(matcher.group(1));
             int kc = Integer.parseInt(matcher.group(2));
             log.debug("Parsed KC from chat: {} = {}", bossName, kc);
-
-            // Update local KC if we have stats for this boss
-            BossKillStats stats = bossStats.get(bossName);
-            if (stats != null && kc > stats.getKillCount())
-            {
-                log.info("Updating {} KC from {} to {} (from chat message)",
-                        bossName, stats.getKillCount(), kc);
-                // Note: This just logs it. The actual KC is tracked from kill records.
-            }
         }
     }
 
-    /**
-     * Get boss ID from name
-     */
     public Integer getBossIdFromName(String bossName)
     {
-        String normalized = normalizeBossName(bossName);
-        return BOSS_NAME_TO_ID.get(normalized);
+        return BOSS_NAME_TO_ID.get(normalizeBossName(bossName));
+    }
+
+    // ==================== LISTENERS ====================
+
+    public void addListener(LootTrackerUpdateListener listener)
+    {
+        listeners.add(listener);
+    }
+
+    private void notifyKillRecorded(BossKillStats stats)
+    {
+        for (LootTrackerUpdateListener listener : listeners)
+        {
+            listener.onDataRefresh();
+        }
+    }
+
+    private void notifyDataRefresh()
+    {
+        for (LootTrackerUpdateListener listener : listeners)
+        {
+            listener.onDataRefresh();
+        }
     }
 }

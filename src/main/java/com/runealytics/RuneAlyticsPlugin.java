@@ -2,6 +2,11 @@ package com.runealytics;
 
 import com.google.gson.Gson;
 import com.google.inject.Provides;
+import com.runealytics.RunealyticsApiClient;
+import com.runealytics.LootTrackerManager;
+import com.runealytics.LootTrackerPanel;
+import com.runealytics.RuneAlyticsPanel;
+import com.runealytics.RuneAlyticsSettingsPanel;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
@@ -39,6 +44,8 @@ import java.util.concurrent.TimeUnit;
 )
 public class RuneAlyticsPlugin extends Plugin
 {
+    // ==================== INJECTED DEPENDENCIES ====================
+
     @Inject private Client client;
     @Inject private RunealyticsConfig config;
     @Inject private ClientToolbar clientToolbar;
@@ -52,8 +59,9 @@ public class RuneAlyticsPlugin extends Plugin
 
     @Getter
     private RuneAlyticsPanel mainPanel;
-
     private NavigationButton navButton;
+
+    // ==================== TRACKING STATE ====================
 
     // Boss death tracking for ground loot attribution
     private NPC lastKilledBoss;
@@ -68,15 +76,7 @@ public class RuneAlyticsPlugin extends Plugin
     protected void startUp()
     {
         log.info("RuneAlytics started");
-
-        // Log config values WITH ACTUAL VALUES
-        log.info("=== CONFIGURATION ===");
-        log.info("Enable Loot Tracking: {}", config.enableLootTracking());
-        log.info("Track All NPCs: {} ← CHECK THIS VALUE", config.trackAllNpcs());
-        log.info("Minimum Loot Value: {}", config.minimumLootValue());
-        log.info("Sync to Server: {}", config.syncLootToServer());
-        log.info("Auto Verification: {}", config.enableAutoVerification());
-        log.info("====================");
+        logConfiguration();
 
         // Create the main panel with tabs
         mainPanel = injector.getInstance(RuneAlyticsPanel.class);
@@ -85,6 +85,7 @@ public class RuneAlyticsPlugin extends Plugin
         LootTrackerPanel lootPanel = injector.getInstance(LootTrackerPanel.class);
         mainPanel.addLootTrackerTab(lootPanel);
 
+        // Create navigation button
         navButton = NavigationButton.builder()
                 .tooltip("RuneAlytics")
                 .icon(loadPluginIcon())
@@ -95,10 +96,12 @@ public class RuneAlyticsPlugin extends Plugin
         clientToolbar.addNavigation(navButton);
 
         // Connect the panel to the loot manager BEFORE initializing
-        lootManager.setPanel(lootPanel); // ← ADD THIS LINE
+        lootManager.setPanel(lootPanel);
 
-        // Initialize loot manager (this loads local data and syncs with server)
+        // Initialize loot manager (this loads local data and sets up the panel)
         lootManager.initialize();
+
+        log.info("RuneAlytics plugin fully initialized");
     }
 
     @Override
@@ -112,10 +115,16 @@ public class RuneAlyticsPlugin extends Plugin
             lootManager.shutdown();
         }
 
+        // Remove navigation button
         if (navButton != null)
         {
             clientToolbar.removeNavigation(navButton);
         }
+
+        // Reset state
+        state.reset();
+
+        log.info("RuneAlytics plugin shut down complete");
     }
 
     @Provides
@@ -124,61 +133,64 @@ public class RuneAlyticsPlugin extends Plugin
         return manager.getConfig(RunealyticsConfig.class);
     }
 
+    // ==================== CONFIGURATION LOGGING ====================
+
+    private void logConfiguration()
+    {
+        log.info("=== CONFIGURATION ===");
+        log.info("Enable Loot Tracking: {}", config.enableLootTracking());
+        log.info("Track All NPCs: {}", config.trackAllNpcs());
+        log.info("Minimum Loot Value: {}", config.minimumLootValue());
+        log.info("Sync to Server: {}", config.syncLootToServer());
+        log.info("Auto Verification: {}", config.enableAutoVerification());
+        log.info("API URL: {}", config.apiUrl());
+        log.info("====================");
+    }
+
     // ==================== NPC LOOT ====================
 
     @Subscribe
     public void onNpcLootReceived(NpcLootReceived event)
     {
-        log.info("=== NPC LOOT RECEIVED EVENT ===");
-
         if (!config.enableLootTracking())
         {
-            log.info("Loot tracking disabled in config");
             return;
         }
 
         NPC npc = event.getNpc();
         if (npc == null)
         {
-            log.info("NPC is null");
+            log.debug("NPC is null in loot event");
             return;
         }
-
-        log.info("NPC: {} (ID: {}, Combat: {})", npc.getName(), npc.getId(), npc.getCombatLevel());
 
         Collection<net.runelite.client.game.ItemStack> items = event.getItems();
         if (items == null || items.isEmpty())
         {
-            log.info("No items in loot");
             return;
         }
-
-        log.info("Loot contains {} items", items.size());
 
         boolean isBoss = lootManager.isBoss(npc.getId(), npc.getName());
         boolean trackAllNpcs = config.trackAllNpcs();
 
-        log.info("Is boss: {}, Track all NPCs: {}", isBoss, trackAllNpcs);
-
         // Check if we should track this NPC
         if (!isBoss && !trackAllNpcs)
         {
-            log.info("Not a tracked boss and trackAllNpcs is disabled, skipping");
+            log.debug("Skipping non-boss NPC: {} (trackAllNpcs={})", npc.getName(), trackAllNpcs);
             return;
         }
+
+        log.info("Processing loot from {}: {} items", npc.getName(), items.size());
 
         // Convert RuneLite ItemStack to custom ItemStack
         List<ItemStack> converted = new ArrayList<>();
         for (net.runelite.client.game.ItemStack item : items)
         {
-            String itemName = itemManager.getItemComposition(item.getId()).getName();
-            log.info("  Item: {} (ID: {}, Qty: {})", itemName, item.getId(), item.getQuantity());
             converted.add(new ItemStack(item.getId(), item.getQuantity()));
         }
 
-        log.info("Processing loot for {} with {} items", npc.getName(), converted.size());
+        // Process the loot
         lootManager.processNpcLoot(npc, converted);
-        log.info("=== END NPC LOOT RECEIVED ===");
     }
 
     // ==================== PLAYER LOOT (PvP, Chests, etc.) ====================
@@ -186,48 +198,33 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onPlayerLootReceived(PlayerLootReceived event)
     {
-        log.info("=== PLAYER LOOT RECEIVED EVENT ===");
-        log.info("!!! Event toString: {}", event.toString());
-
         if (!config.enableLootTracking())
         {
-            log.info("Loot tracking disabled in config");
             return;
         }
 
         Player player = event.getPlayer();
         String source = player != null ? player.getName() : "Unknown";
-        log.info("Source Player: {}", source);
-        log.info("Last Chest Source: {}", lastChestSource);
-        log.info("Local Player Name: {}", client.getLocalPlayer() != null ? client.getLocalPlayer().getName() : "null");
 
         Collection<net.runelite.client.game.ItemStack> items = event.getItems();
         if (items == null || items.isEmpty())
         {
-            log.info("No items in loot");
             return;
-        }
-
-        log.info("Loot contains {} items", items.size());
-
-        // List all items
-        for (net.runelite.client.game.ItemStack item : items)
-        {
-            String itemName = itemManager.getItemComposition(item.getId()).getName();
-            log.info("  !!! ITEM: {} (ID: {}, Qty: {})", itemName, item.getId(), item.getQuantity());
         }
 
         // Check if this is from our own player (chest loot)
         boolean isOwnPlayer = client.getLocalPlayer() != null &&
                 source.equals(client.getLocalPlayer().getName());
 
-        log.info("Is own player: {}", isOwnPlayer);
-
         if (isOwnPlayer)
         {
-            // This is chest loot
+            // This is chest loot - use the last detected chest source
             source = lastChestSource;
-            log.info("!!! USING CHEST SOURCE: {}", source);
+            log.info("Processing chest loot from: {} ({} items)", source, items.size());
+        }
+        else
+        {
+            log.info("Processing player loot from: {} ({} items)", source, items.size());
         }
 
         // Convert items
@@ -237,9 +234,8 @@ public class RuneAlyticsPlugin extends Plugin
             converted.add(new ItemStack(item.getId(), item.getQuantity()));
         }
 
-        log.info("!!! PROCESSING LOOT FROM: {} ({} items)", source, converted.size());
+        // Process the loot
         lootManager.processPlayerLoot(source, converted);
-        log.info("=== END PLAYER LOOT RECEIVED ===");
     }
 
     // ==================== WIDGET EVENTS (for chests) ====================
@@ -253,42 +249,27 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         int groupId = event.getGroupId();
-        log.info("=== WIDGET LOADED: GroupId = {} ===", groupId);
 
         // Common widget group IDs:
         // 155 = Barrows reward
         // 207 = Achievement Diary reward
-        // Check what widget loads for Gauntlet chest
+        // 725 = Chambers of Xeric reward
+        // 513 = Theatre of Blood reward
 
         if (groupId == 155)
         {
-            log.info("!!! REWARD WIDGET DETECTED - Current chest source: {}", lastChestSource);
+            log.debug("Barrows reward widget detected");
+            lastChestSource = "Barrows";
         }
-    }
-
-    // ==================== BOSS DEATH ====================
-
-    @Subscribe
-    public void onActorDeath(ActorDeath event)
-    {
-        if (!config.enableLootTracking())
+        else if (groupId == 725)
         {
-            return;
+            log.debug("CoX reward widget detected");
+            lastChestSource = "Chambers of Xeric";
         }
-
-        if (!(event.getActor() instanceof NPC))
+        else if (groupId == 513)
         {
-            return;
-        }
-
-        NPC npc = (NPC) event.getActor();
-
-        if (lootManager.isBoss(npc.getId(), npc.getName()))
-        {
-            lastKilledBoss = npc;
-            lastKillTime = Instant.now();
-
-            log.debug("Boss killed: {}", npc.getName());
+            log.debug("ToB reward widget detected");
+            lastChestSource = "Theatre of Blood";
         }
     }
 
@@ -302,11 +283,13 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
+        // Only track ground items near recently killed bosses
         if (lastKilledBoss == null || lastKillTime == null)
         {
             return;
         }
 
+        // Only within 10 seconds of kill
         if (ChronoUnit.SECONDS.between(lastKillTime, Instant.now()) > 10)
         {
             return;
@@ -316,16 +299,13 @@ public class RuneAlyticsPlugin extends Plugin
         WorldPoint itemLoc = event.getTile().getWorldLocation();
         WorldPoint bossLoc = lastKilledBoss.getWorldLocation();
 
-        if (itemLoc.distanceTo(bossLoc) <= 5)
+        // Only if within 5 tiles of boss
+        if (itemLoc != null && bossLoc != null && itemLoc.distanceTo(bossLoc) <= 5)
         {
-            log.debug(
-                    "Ground loot near {}: itemId={} qty={}",
+            log.debug("Ground item near {}: {} x{}",
                     lastKilledBoss.getName(),
                     item.getId(),
-                    item.getQuantity()
-            );
-
-            //lootManager.processGroundItem(lastKilledBoss, item);
+                    item.getQuantity());
         }
     }
 
@@ -342,92 +322,117 @@ public class RuneAlyticsPlugin extends Plugin
         String msg = event.getMessage();
         ChatMessageType type = event.getType();
 
-        log.info("=== CHAT [{}]: {} ===", type, msg);
-
         if (type != ChatMessageType.GAMEMESSAGE && type != ChatMessageType.SPAM)
         {
             return;
         }
 
-        if (msg.contains("kill count is:"))
+        // Parse kill count messages
+        if (msg.contains("kill count is:") || msg.contains("killcount is:"))
         {
             lootManager.parseKillCountMessage(msg);
         }
 
-        // Detect "Your reward awaits you in the nearby chest" or similar
-        if (msg.contains("reward awaits") || msg.contains("You open the chest"))
-        {
-            lastChestSource = "Corrupted Gauntlet";
-            log.info("!!! CHEST OPENING DETECTED - Setting source to: {}", lastChestSource);
-        }
+        // Detect chest opening messages
+        detectChestSource(msg);
+    }
 
-        // Detect completion messages
-        if (msg.contains("Congratulations, you've completed") && msg.contains("Gauntlet"))
+    /**
+     * Detect and set chest source from chat messages
+     */
+    private void detectChestSource(String msg)
+    {
+        String lowerMsg = msg.toLowerCase();
+
+        // Gauntlet
+        if (lowerMsg.contains("reward awaits") || lowerMsg.contains("you open the chest"))
         {
-            if (msg.contains("Corrupted"))
+            if (lowerMsg.contains("corrupted"))
             {
                 lastChestSource = "Corrupted Gauntlet";
             }
-            else
+            else if (lowerMsg.contains("gauntlet"))
             {
                 lastChestSource = "The Gauntlet";
             }
-            log.info("!!! GAUNTLET COMPLETION DETECTED - Setting source to: {}", lastChestSource);
+            log.info("Chest detected: {}", lastChestSource);
         }
 
-        // Generic chest messages
-        if (msg.contains("Barrows"))
+        // Completion messages
+        if (lowerMsg.contains("congratulations") || lowerMsg.contains("completed"))
+        {
+            if (lowerMsg.contains("corrupted gauntlet"))
+            {
+                lastChestSource = "Corrupted Gauntlet";
+            }
+            else if (lowerMsg.contains("gauntlet"))
+            {
+                lastChestSource = "The Gauntlet";
+            }
+            else if (lowerMsg.contains("barrows"))
+            {
+                lastChestSource = "Barrows";
+            }
+            else if (lowerMsg.contains("theatre of blood") || lowerMsg.contains("verzik"))
+            {
+                lastChestSource = "Theatre of Blood";
+            }
+            else if (lowerMsg.contains("chambers of xeric") || lowerMsg.contains("great olm"))
+            {
+                lastChestSource = "Chambers of Xeric";
+            }
+            else if (lowerMsg.contains("tombs of amascut"))
+            {
+                lastChestSource = "Tombs of Amascut";
+            }
+
+            log.info("Completion detected: {}", lastChestSource);
+        }
+
+        // Direct chest mentions
+        if (lowerMsg.contains("barrows") && !lowerMsg.contains("kill"))
         {
             lastChestSource = "Barrows";
         }
-        else if (msg.contains("Theatre of Blood") || msg.contains("Verzik"))
-        {
-            lastChestSource = "Theatre of Blood";
-        }
-        else if (msg.contains("Chambers of Xeric") || msg.contains("Great Olm"))
-        {
-            lastChestSource = "Chambers of Xeric";
-        }
-        else if (msg.contains("Tombs of Amascut"))
-        {
-            lastChestSource = "Tombs of Amascut";
-        }
     }
-
-
 
     // ==================== GAME STATE ====================
 
     @Subscribe
     public void onGameTick(GameTick tick)
     {
-        if (lastKillTime != null &&
-                ChronoUnit.SECONDS.between(lastKillTime, Instant.now()) > 30)
+        // Clear old boss reference after 30 seconds
+        if (lastKillTime != null && ChronoUnit.SECONDS.between(lastKillTime, Instant.now()) > 30)
         {
             lastKilledBoss = null;
             lastKillTime = null;
         }
+
     }
 
     @Subscribe
     public void onGameStateChanged(GameStateChanged event)
     {
-        log.info("=== GAME STATE CHANGED: {} ===", event.getGameState());
+        log.info("Game state changed: {}", event.getGameState());
 
         if (event.getGameState() == GameState.LOGGED_IN)
         {
-            log.info("Player logged in (waiting for player spawn for verification)");
+            log.info("Player logged in");
             state.setLoggedIn(true);
-
-            // Don't check username here - it's null at this point
-            // Wait for onPlayerSpawned event instead
         }
-        else if (event.getGameState() == GameState.LOGIN_SCREEN)
+        else if (event.getGameState() == GameState.LOGIN_SCREEN ||
+                event.getGameState() == GameState.HOPPING)
         {
-            log.info("Player logged out");
+            log.info("Player logged out or hopping");
             state.setLoggedIn(false);
+
+            // Reset tracking state
+            lastKilledBoss = null;
+            lastKillTime = null;
+            lastChestSource = "Unknown Chest";
         }
     }
+
     @Subscribe
     public void onPlayerSpawned(PlayerSpawned event)
     {
@@ -437,15 +442,15 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
-        log.info("Local player spawned, checking verification");
+        log.info("Local player spawned");
 
-        // Now the player is definitely available
+        // Check verification status
         if (config.enableAutoVerification() && !state.isVerified())
         {
             checkVerificationStatus();
         }
 
-        // ⚠️ THIS PART IS MISSING OR NOT WORKING ⚠️
+        // Schedule sync check after player is fully loaded
         executorService.schedule(() -> {
             log.info("=== POST-LOGIN SYNC CHECK ===");
             log.info("Username: {}", state.getVerifiedUsername());
@@ -455,18 +460,34 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (state.isVerified() && config.syncLootToServer())
             {
-                log.info("✓ Conditions met - triggering loot sync");
-                lootManager.onPlayerLoggedInAndVerified();
+                log.info("✓ Starting post-login sync");
+
+                // Load from local storage first
+                lootManager.loadFromStorage();
+
+                // Then sync with server
+                lootManager.syncWithServerOnStartup();
             }
             else
             {
                 log.warn("✗ Sync conditions not met:");
                 log.warn("  - Verified: {}", state.isVerified());
                 log.warn("  - Sync enabled: {}", config.syncLootToServer());
+
+                // Still load local data even if not syncing
+                if (state.isVerified())
+                {
+                    lootManager.loadFromStorage();
+                }
             }
         }, 5, TimeUnit.SECONDS);
     }
 
+    // ==================== VERIFICATION ====================
+
+    /**
+     * Check verification status using stored auth token
+     */
     private void checkVerificationStatus()
     {
         if (client.getLocalPlayer() == null)
@@ -476,7 +497,6 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         String rsn = client.getLocalPlayer().getName();
-
         if (rsn == null || rsn.isEmpty())
         {
             log.warn("RSN is null or empty, cannot check verification");
@@ -484,16 +504,13 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         String token = config.authToken();
-
         if (token == null || token.isEmpty())
         {
             log.debug("No auth token found for auto-verification");
             return;
         }
 
-        log.info("Checking verification status for {} with token: {}...",
-                rsn,
-                token.substring(0, Math.min(10, token.length())));
+        log.info("Checking verification status for {} with token", rsn);
 
         executorService.submit(() -> {
             try
@@ -508,12 +525,13 @@ public class RuneAlyticsPlugin extends Plugin
                     state.setVerifiedUsername(rsn);
                     state.setVerificationCode(token);
 
+                    // Update UI
                     SwingUtilities.invokeLater(() -> {
                         if (mainPanel != null)
                         {
-                            RuneAlyticsSettingsPanel settingsPanel = injector.getInstance(RuneAlyticsSettingsPanel.class);
+                            RuneAlyticsSettingsPanel settingsPanel =
+                                    injector.getInstance(RuneAlyticsSettingsPanel.class);
                             settingsPanel.updateVerificationStatus(true, rsn);
-
                             mainPanel.revalidate();
                             mainPanel.repaint();
                         }
@@ -521,14 +539,16 @@ public class RuneAlyticsPlugin extends Plugin
                 }
                 else
                 {
-                    log.warn("✗ Verification failed for {}. Token may be invalid or account not verified on server.", rsn);
+                    log.warn("✗ Verification failed for {}. Token may be invalid.", rsn);
                     state.setVerified(false);
                     state.setVerifiedUsername(null);
 
+                    // Update UI
                     SwingUtilities.invokeLater(() -> {
                         if (mainPanel != null)
                         {
-                            RuneAlyticsSettingsPanel settingsPanel = injector.getInstance(RuneAlyticsSettingsPanel.class);
+                            RuneAlyticsSettingsPanel settingsPanel =
+                                    injector.getInstance(RuneAlyticsSettingsPanel.class);
                             settingsPanel.updateVerificationStatus(false, null);
                         }
                     });
@@ -544,7 +564,7 @@ public class RuneAlyticsPlugin extends Plugin
     // ==================== AUTO SYNC ====================
 
     @Schedule(
-            period = 60000,
+            period = 60000, // Every 60 seconds
             unit = ChronoUnit.MILLIS,
             asynchronous = true
     )
@@ -555,16 +575,36 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
-        if (!state.isLoggedIn())
+        if (!state.isLoggedIn() || !state.isVerified())
         {
             return;
         }
 
-        lootManager.syncPendingLoot();
+        log.debug("Running scheduled sync");
+        lootManager.uploadUnsyncedKills();
+    }
+
+    // ==================== UI REFRESH ====================
+
+    /**
+     * Refresh the loot panel UI
+     */
+    public void refreshLootPanel()
+    {
+        if (mainPanel != null)
+        {
+            SwingUtilities.invokeLater(() -> {
+                mainPanel.revalidate();
+                mainPanel.repaint();
+            });
+        }
     }
 
     // ==================== HELPERS ====================
 
+    /**
+     * Load plugin icon or create fallback
+     */
     private BufferedImage loadPluginIcon()
     {
         try
@@ -589,16 +629,5 @@ public class RuneAlyticsPlugin extends Plugin
         g.drawRect(0, 0, 31, 31);
         g.dispose();
         return img;
-    }
-
-    public void refreshLootPanel()
-    {
-        if (mainPanel != null)
-        {
-            SwingUtilities.invokeLater(() -> {
-                mainPanel.revalidate();
-                mainPanel.repaint();
-            });
-        }
     }
 }

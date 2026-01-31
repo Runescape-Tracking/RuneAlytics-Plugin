@@ -7,285 +7,478 @@ import net.runelite.client.RuneLite;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
-import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
+import java.io.*;
 import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
-/**
- * Manages local storage of loot tracking data
- * Data is stored per-username to support multiple accounts
- */
 @Slf4j
 @Singleton
 public class LootStorageManager
 {
-    private static final String LOOT_DATA_FILE_PATTERN = "runealytics-loot-%s.json";
-    private static final String DEFAULT_FILE = "runealytics-loot-default.json";
-
+    private static final String STORAGE_FILE_PREFIX = "runealytics-loot-";
+    private static final String STORAGE_FILE_SUFFIX = ".json";
+    private String currentUsername;
     private final Gson gson;
     private final RuneAlyticsState state;
+
+    private LootStorageData currentData;
 
     @Inject
     public LootStorageManager(RuneAlyticsState state)
     {
+        this.state = state;
         this.gson = new GsonBuilder()
                 .setPrettyPrinting()
                 .create();
-        this.state = state;
     }
 
     /**
-     * Get the loot data file for the current user
+     * Load loot data for current username
      */
-    private File getLootDataFile()
+    public LootStorageData loadData()
     {
         String username = state.getVerifiedUsername();
-
-        String filename;
         if (username == null || username.isEmpty())
         {
-            filename = DEFAULT_FILE;
-            log.debug("Using default loot file (no verified username)");
-        }
-        else
-        {
-            filename = String.format(LOOT_DATA_FILE_PATTERN, username.toLowerCase());
-            log.debug("Using loot file for user: {}", username);
+            log.warn("No verified username, cannot load loot data");
+            currentData = new LootStorageData();
+            return currentData;
         }
 
-        return new File(RuneLite.RUNELITE_DIR, filename);
-    }
-
-    /**
-     * Save loot data to local storage
-     */
-    public void saveLootData(Map<String, BossKillStats> bossStats, int currentPrestige)
-    {
-        File file = getLootDataFile();
-
-        try
+        File file = getStorageFile(username);
+        if (!file.exists())
         {
-            LootStorageData data = new LootStorageData();
-            data.bossStats = bossStats;
-            data.currentPrestige = currentPrestige;
-            data.lastSaved = System.currentTimeMillis();
-            data.username = state.getVerifiedUsername();
+            log.info("No existing loot data file for {}", username);
+            currentData = new LootStorageData();
+            currentData.setUsername(username);
+            return currentData;
+        }
 
-            try (FileWriter writer = new FileWriter(file))
+        try (Reader reader = Files.newBufferedReader(file.toPath()))
+        {
+            currentData = gson.fromJson(reader, LootStorageData.class);
+            if (currentData == null)
             {
-                gson.toJson(data, writer);
+                currentData = new LootStorageData();
+                currentData.setUsername(username);
             }
-
-            log.info("Saved loot data to {} (Prestige: {}, Bosses: {})",
-                    file.getName(), currentPrestige, bossStats.size());
+            log.info("Loaded loot data for {} - {} bosses, {} total kills",
+                    username,
+                    currentData.getBossKills().size(),
+                    currentData.getBossKills().values().stream()
+                            .mapToInt(LootStorageData.BossKillData::getKillCount)
+                            .sum());
+            return currentData;
         }
         catch (Exception e)
         {
-            log.error("Failed to save loot data to {}", file.getName(), e);
+            log.error("Failed to load loot data for {}", username, e);
+            currentData = new LootStorageData();
+            currentData.setUsername(username);
+            return currentData;
         }
     }
 
+
     /**
-     * Load loot data from local storage for the current user
+     * Load loot data for a specific username
+     */
+    public LootStorageData loadLootData(String username)
+    {
+        if (username == null || username.isEmpty())
+        {
+            log.warn("Cannot load data: username is null or empty");
+            return null;
+        }
+
+        this.currentUsername = username;
+        return loadLootData();
+    }
+
+    public void setCurrentUsername(String username)
+    {
+        this.currentUsername = username;
+        log.info("Set current username to: {}", username);
+    }
+
+    /**
+     * Load loot data for the current username
      */
     public LootStorageData loadLootData()
     {
-        File file = getLootDataFile();
+        if (currentUsername == null || currentUsername.isEmpty())
+        {
+            log.warn("Cannot load data: no current username set");
+            return null;
+        }
+
+        File file = new File(getStorageDirectory(), currentUsername + ".json");
 
         if (!file.exists())
         {
-            log.info("No loot data file found: {}", file.getName());
-            return createEmptyData();
+            log.info("No stored loot data found for {}", currentUsername);
+            return new LootStorageData();
         }
 
-        try (FileReader reader = new FileReader(file))
+        try
         {
-            LootStorageData data = gson.fromJson(reader, LootStorageData.class);
+            String json = new String(Files.readAllBytes(file.toPath()));
+            LootStorageData data = gson.fromJson(json, LootStorageData.class);
 
-            // Validate and initialize data
             if (data == null)
             {
-                log.warn("Loaded null data from {}, creating empty", file.getName());
-                return createEmptyData();
+                log.warn("Failed to parse loot data for {}, returning empty data", currentUsername);
+                return new LootStorageData();
             }
 
-            if (data.bossStats == null)
-            {
-                data.bossStats = new HashMap<>();
-            }
-
-            // Ensure all drops lists are initialized
-            for (BossKillStats stats : data.bossStats.values())
-            {
-                if (stats.getKillHistory() != null)
-                {
-                    for (NpcKillRecord kill : stats.getKillHistory())
-                    {
-                        if (kill.getDrops() == null)
-                        {
-                            kill.setDrops(new ArrayList<>());
-                        }
-                    }
-                }
-            }
-
-            log.info("Loaded loot data from {} (Prestige: {}, Bosses: {})",
-                    file.getName(), data.currentPrestige, data.bossStats.size());
-
-            // Log details of what was loaded
-            for (Map.Entry<String, BossKillStats> entry : data.bossStats.entrySet())
-            {
-                BossKillStats stats = entry.getValue();
-                log.info("  - {}: {} kills, {} history records, {} gp",
-                        stats.getNpcName(),
-                        stats.getKillCount(),
-                        stats.getKillHistory().size(),
-                        stats.getTotalLootValue());
-            }
+            log.info("Loaded loot data for {} - {} bosses, {} total kills",
+                    currentUsername,
+                    data.getBossKills().size(),
+                    data.getBossKills().values().stream()
+                            .mapToInt(bossData -> bossData.getKills().size())
+                            .sum());
 
             return data;
         }
         catch (Exception e)
         {
-            log.error("Failed to load loot data from {}", file.getName(), e);
-            return createEmptyData();
+            log.error("Failed to load loot data for {}", currentUsername, e);
+            return new LootStorageData();
         }
     }
 
     /**
-     * Create empty data structure
+     * Get the directory where loot data is stored
      */
-    private LootStorageData createEmptyData()
+    private File getStorageDirectory()
     {
-        LootStorageData data = new LootStorageData();
-        data.bossStats = new HashMap<>();
-        data.currentPrestige = 0;
-        data.lastSaved = 0;
-        data.username = state.getVerifiedUsername();
-        return data;
-    }
+        File dir = new File(RuneLite.RUNELITE_DIR, "runealytics-loot");
 
-    /**
-     * Delete local storage file for current user
-     */
-    public void clearStorage()
-    {
-        File file = getLootDataFile();
-
-        if (file.exists())
+        if (!dir.exists())
         {
-            try
+            if (dir.mkdirs())
             {
-                Files.delete(file.toPath());
-                log.info("Cleared local loot storage: {}", file.getName());
+                log.info("Created loot storage directory: {}", dir.getAbsolutePath());
             }
-            catch (Exception e)
+            else
             {
-                log.error("Failed to delete {}", file.getName(), e);
+                log.error("Failed to create loot storage directory: {}", dir.getAbsolutePath());
             }
         }
+
+        return dir;
     }
 
     /**
-     * Delete storage file for a specific username
+     * Save current loot data
      */
-    public void clearStorageForUser(String username)
+    public void saveData()
     {
-        if (username == null || username.isEmpty())
+        if (currentData == null)
         {
+            log.warn("No data to save");
             return;
         }
 
-        String filename = String.format(LOOT_DATA_FILE_PATTERN, username.toLowerCase());
-        File file = new File(RuneLite.RUNELITE_DIR, filename);
-
-        if (file.exists())
+        String username = state.getVerifiedUsername();
+        if (username == null || username.isEmpty())
         {
-            try
+            log.warn("No verified username, cannot save loot data");
+            return;
+        }
+
+        File file = getStorageFile(username);
+
+        try
+        {
+            // Ensure parent directory exists
+            File parentDir = file.getParentFile();
+            if (parentDir != null && !parentDir.exists())
             {
-                Files.delete(file.toPath());
-                log.info("Cleared loot storage for user: {}", username);
+                parentDir.mkdirs();
             }
-            catch (Exception e)
+
+            // Write data
+            try (Writer writer = Files.newBufferedWriter(file.toPath()))
             {
-                log.error("Failed to delete storage for {}", username, e);
+                gson.toJson(currentData, writer);
+            }
+
+            log.info("Saved loot data for {} - {} bosses", username, currentData.getBossKills().size());
+        }
+        catch (Exception e)
+        {
+            log.error("Failed to save loot data for {}", username, e);
+        }
+    }
+
+    /**
+     * Add a kill to storage
+     */
+    public void addKill(String npcName, int npcId, int combatLevel, int killNumber, int world,
+                        int prestige, List<LootStorageData.DropRecord> drops)
+    {
+        if (currentData == null)
+        {
+            currentData = loadData();
+        }
+
+        // Get or create boss data
+        LootStorageData.BossKillData bossData = currentData.getBossKills()
+                .computeIfAbsent(npcName, k -> {
+                    LootStorageData.BossKillData newBoss = new LootStorageData.BossKillData();
+                    newBoss.setNpcName(npcName);
+                    newBoss.setNpcId(npcId);
+                    newBoss.setKillCount(0);
+                    newBoss.setPrestige(prestige);
+                    newBoss.setTotalLootValue(0);
+                    return newBoss;
+                });
+
+        // Create kill record
+        LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
+        killRecord.setTimestamp(System.currentTimeMillis());
+        killRecord.setKillNumber(killNumber);
+        killRecord.setWorld(world);
+        killRecord.setCombatLevel(combatLevel);
+        killRecord.setDrops(drops);
+        killRecord.setSyncedToServer(false);
+
+        // Add kill to list
+        bossData.getKills().add(killRecord);
+
+        // Update aggregated stats
+        bossData.setKillCount(killNumber);
+        bossData.setPrestige(prestige);
+
+        long killValue = 0;
+        for (LootStorageData.DropRecord drop : drops)
+        {
+            killValue += drop.getTotalValue();
+
+            // Update aggregated drops
+            LootStorageData.AggregatedDrop aggDrop = bossData.getAggregatedDrops()
+                    .computeIfAbsent(drop.getItemId(), k -> {
+                        LootStorageData.AggregatedDrop newAgg = new LootStorageData.AggregatedDrop();
+                        newAgg.setItemId(drop.getItemId());
+                        newAgg.setItemName(drop.getItemName());
+                        newAgg.setTotalQuantity(0);
+                        newAgg.setDropCount(0);
+                        newAgg.setTotalValue(0);
+                        newAgg.setGePrice(drop.getGePrice());
+                        newAgg.setHighAlch(drop.getHighAlch());
+                        return newAgg;
+                    });
+
+            aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
+            aggDrop.setDropCount(aggDrop.getDropCount() + 1);
+            aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
+        }
+
+        bossData.setTotalLootValue(bossData.getTotalLootValue() + killValue);
+
+        // Save immediately
+        saveData();
+
+        log.debug("Added kill #{} for {} - {} drops, {} gp",
+                killNumber, npcName, drops.size(), killValue);
+    }
+
+    /**
+     * Mark kills as synced to server
+     */
+    public void markKillsSynced(String npcName, long fromTimestamp, long toTimestamp)
+    {
+        if (currentData == null) return;
+
+        LootStorageData.BossKillData bossData = currentData.getBossKills().get(npcName);
+        if (bossData == null) return;
+
+        int syncedCount = 0;
+        for (LootStorageData.KillRecord kill : bossData.getKills())
+        {
+            if (kill.getTimestamp() >= fromTimestamp && kill.getTimestamp() <= toTimestamp)
+            {
+                kill.setSyncedToServer(true);
+                syncedCount++;
             }
         }
-    }
 
-    /**
-     * Check if local storage exists for current user
-     */
-    public boolean hasLocalStorage()
-    {
-        return getLootDataFile().exists();
-    }
-
-    /**
-     * Get checksum of local data for comparison
-     */
-    public String getLocalDataChecksum()
-    {
-        LootStorageData data = loadLootData();
-        if (data == null || data.bossStats == null)
+        if (syncedCount > 0)
         {
-            return "";
+            saveData();
+            log.info("Marked {} kills as synced for {}", syncedCount, npcName);
         }
-
-        // Create a simple checksum based on total kills and total value
-        long totalKills = 0;
-        long totalValue = 0;
-
-        for (BossKillStats stats : data.bossStats.values())
-        {
-            totalKills += stats.getKillCount();
-            totalValue += stats.getTotalLootValue();
-        }
-
-        return String.format("%d_%d_%d", totalKills, totalValue, data.bossStats.size());
     }
 
     /**
-     * List all loot data files
+     * Get unsynced kills for upload
      */
-    public Map<String, File> getAllLootFiles()
+    public List<LootStorageData.KillRecord> getUnsyncedKills(String npcName)
     {
-        Map<String, File> files = new HashMap<>();
-        File runeliteDir = RuneLite.RUNELITE_DIR;
+        if (currentData == null) return Collections.emptyList();
 
-        if (runeliteDir.exists() && runeliteDir.isDirectory())
+        LootStorageData.BossKillData bossData = currentData.getBossKills().get(npcName);
+        if (bossData == null) return Collections.emptyList();
+
+        List<LootStorageData.KillRecord> unsynced = new ArrayList<>();
+        for (LootStorageData.KillRecord kill : bossData.getKills())
         {
-            File[] allFiles = runeliteDir.listFiles((dir, name) ->
-                    name.startsWith("runealytics-loot-") && name.endsWith(".json")
-            );
-
-            if (allFiles != null)
+            if (!kill.isSyncedToServer())
             {
-                for (File file : allFiles)
+                unsynced.add(kill);
+            }
+        }
+
+        return unsynced;
+    }
+
+    /**
+     * Get all unsynced kills across all bosses
+     */
+    public Map<String, List<LootStorageData.KillRecord>> getAllUnsyncedKills()
+    {
+        if (currentData == null) return Collections.emptyMap();
+
+        Map<String, List<LootStorageData.KillRecord>> result = new HashMap<>();
+
+        for (Map.Entry<String, LootStorageData.BossKillData> entry : currentData.getBossKills().entrySet())
+        {
+            List<LootStorageData.KillRecord> unsynced = getUnsyncedKills(entry.getKey());
+            if (!unsynced.isEmpty())
+            {
+                result.put(entry.getKey(), unsynced);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Merge server data with local data
+     */
+    public void mergeServerData(Map<String, LootStorageData.BossKillData> serverData)
+    {
+        if (currentData == null)
+        {
+            currentData = loadData();
+        }
+
+        int killsAdded = 0;
+
+        for (Map.Entry<String, LootStorageData.BossKillData> entry : serverData.entrySet())
+        {
+            String npcName = entry.getKey();
+            LootStorageData.BossKillData serverBoss = entry.getValue();
+
+            LootStorageData.BossKillData localBoss = currentData.getBossKills()
+                    .computeIfAbsent(npcName, k -> {
+                        LootStorageData.BossKillData newBoss = new LootStorageData.BossKillData();
+                        newBoss.setNpcName(npcName);
+                        newBoss.setNpcId(serverBoss.getNpcId());
+                        newBoss.setKillCount(0);
+                        newBoss.setPrestige(0);
+                        newBoss.setTotalLootValue(0);
+                        return newBoss;
+                    });
+
+            // Merge kills - avoid duplicates by timestamp
+            Set<Long> existingTimestamps = new HashSet<>();
+            for (LootStorageData.KillRecord kill : localBoss.getKills())
+            {
+                existingTimestamps.add(kill.getTimestamp());
+            }
+
+            for (LootStorageData.KillRecord serverKill : serverBoss.getKills())
+            {
+                // Check if kill already exists (within 1 second tolerance)
+                boolean exists = false;
+                for (long existingTs : existingTimestamps)
                 {
-                    String username = file.getName()
-                            .replace("runealytics-loot-", "")
-                            .replace(".json", "");
-                    files.put(username, file);
+                    if (Math.abs(existingTs - serverKill.getTimestamp()) <= 1000)
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+
+                if (!exists)
+                {
+                    // Mark as already synced since it came from server
+                    serverKill.setSyncedToServer(true);
+                    localBoss.getKills().add(serverKill);
+                    killsAdded++;
+
+                    // Update aggregated drops
+                    for (LootStorageData.DropRecord drop : serverKill.getDrops())
+                    {
+                        LootStorageData.AggregatedDrop aggDrop = localBoss.getAggregatedDrops()
+                                .computeIfAbsent(drop.getItemId(), k -> {
+                                    LootStorageData.AggregatedDrop newAgg = new LootStorageData.AggregatedDrop();
+                                    newAgg.setItemId(drop.getItemId());
+                                    newAgg.setItemName(drop.getItemName());
+                                    newAgg.setTotalQuantity(0);
+                                    newAgg.setDropCount(0);
+                                    newAgg.setTotalValue(0);
+                                    newAgg.setGePrice(drop.getGePrice());
+                                    newAgg.setHighAlch(drop.getHighAlch());
+                                    return newAgg;
+                                });
+
+                        aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
+                        aggDrop.setDropCount(aggDrop.getDropCount() + 1);
+                        aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
+                    }
                 }
             }
+
+            // Update stats from server
+            localBoss.setKillCount(Math.max(localBoss.getKillCount(), serverBoss.getKillCount()));
+            localBoss.setPrestige(Math.max(localBoss.getPrestige(), serverBoss.getPrestige()));
         }
 
-        return files;
+        if (killsAdded > 0)
+        {
+            currentData.setLastSyncTimestamp(System.currentTimeMillis());
+            saveData();
+            log.info("Merged {} kills from server", killsAdded);
+        }
     }
 
     /**
-     * Container for stored loot data
+     * Get current data
      */
-    public static class LootStorageData
+    public LootStorageData getCurrentData()
     {
-        public Map<String, BossKillStats> bossStats;
-        public int currentPrestige;
-        public long lastSaved;
-        public String username; // Track which user this data belongs to
+        if (currentData == null)
+        {
+            return loadData();
+        }
+        return currentData;
+    }
+
+    /**
+     * Clear all data for current user
+     */
+    public void clearData()
+    {
+        String username = state.getVerifiedUsername();
+        if (username == null || username.isEmpty()) return;
+
+        currentData = new LootStorageData();
+        currentData.setUsername(username);
+        saveData();
+
+        log.info("Cleared all loot data for {}", username);
+    }
+
+    /**
+     * Get storage file for username
+     */
+    private File getStorageFile(String username)
+    {
+        String sanitized = username.toLowerCase().replaceAll("[^a-z0-9_-]", "_");
+        String filename = STORAGE_FILE_PREFIX + sanitized + STORAGE_FILE_SUFFIX;
+        return new File(RuneLite.RUNELITE_DIR, filename);
     }
 }
