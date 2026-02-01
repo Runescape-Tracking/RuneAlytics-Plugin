@@ -26,6 +26,7 @@ public class LootTrackerManager
     // ==================== CONSTANTS ====================
 
     private static final Pattern KC_PATTERN = Pattern.compile("Your (.+) kill count is: (\\d+)");
+    private static final long KILL_DEDUPE_WINDOW_MS = 2000; // 2 second window for deduplication
 
     // Comprehensive list of boss NPC IDs
     private static final Set<Integer> TRACKED_BOSS_IDS = ImmutableSet.of(
@@ -98,10 +99,14 @@ public class LootTrackerManager
 
     private LootTrackerPanel panel;
     private boolean hasAttemptedSync = false;
+    private boolean allowSync = false; // ONLY true when manual sync button pressed
 
     private final Map<String, BossKillStats> bossKillStats = new ConcurrentHashMap<>();
     private final List<LootTrackerUpdateListener> listeners = new ArrayList<>();
     private final Map<String, Set<Integer>> hiddenDrops = new HashMap<>();
+
+    // Deduplication tracking
+    private final Map<String, Long> lastKillTimestamp = new ConcurrentHashMap<>();
 
     // ==================== CONSTRUCTOR ====================
 
@@ -173,6 +178,16 @@ public class LootTrackerManager
             return;
         }
 
+        // DEDUPLICATION: Check if this is a duplicate kill within the time window
+        long now = System.currentTimeMillis();
+        Long lastKill = lastKillTimestamp.get(npcName);
+        if (lastKill != null && (now - lastKill) < KILL_DEDUPE_WINDOW_MS)
+        {
+            log.debug("Duplicate kill detected for {} within {}ms window - skipping", npcName, KILL_DEDUPE_WINDOW_MS);
+            return;
+        }
+        lastKillTimestamp.put(npcName, now);
+
         // Convert ItemStack to DropRecord
         List<LootStorageData.DropRecord> drops = convertItemStacksToDropRecords(items);
 
@@ -197,6 +212,16 @@ public class LootTrackerManager
 
         String normalizedName = normalizeBossName(sourceName);
         int world = client.getWorld();
+
+        // DEDUPLICATION: Check if this is a duplicate kill within the time window
+        long now = System.currentTimeMillis();
+        Long lastKill = lastKillTimestamp.get(normalizedName);
+        if (lastKill != null && (now - lastKill) < KILL_DEDUPE_WINDOW_MS)
+        {
+            log.debug("Duplicate player loot detected for {} within {}ms window - skipping", normalizedName, KILL_DEDUPE_WINDOW_MS);
+            return;
+        }
+        lastKillTimestamp.put(normalizedName, now);
 
         // Convert items
         List<LootStorageData.DropRecord> drops = convertItemStacksToDropRecords(items);
@@ -261,9 +286,8 @@ public class LootTrackerManager
                 new BossKillStats(npcName, npcId)
         );
 
-        stats.setKillCount(stats.getKillCount() + 1);
-        stats.setPrestige(state.getPrestige());
-        int killNumber = stats.getKillCount();
+        // Get current kill count from storage to ensure consistency
+        int killNumber = stats.getKillCount() + 1;
 
         // Create NpcKillRecord for BossKillStats
         NpcKillRecord killRecord = new NpcKillRecord(npcName, npcId, combatLevel, world);
@@ -282,7 +306,7 @@ public class LootTrackerManager
             killRecord.addDrop(lootDrop);
         }
 
-        // Add to stats (this populates killHistory for aggregation)
+        // Add to stats (this will increment kill count and populate killHistory)
         stats.addKill(killRecord);
 
         // Save to local storage
@@ -294,10 +318,13 @@ public class LootTrackerManager
             syncKillToServer(npcName, npcId, combatLevel, killNumber, world, drops);
         }
 
-        // Update UI
+        // Update UI and highlight this boss
         if (panel != null)
         {
-            clientThread.invokeLater(() -> panel.refreshDisplay());
+            clientThread.invokeLater(() -> {
+                panel.highlightBoss(npcName);
+                panel.refreshDisplay();
+            });
         }
 
         // Notify listeners
@@ -350,32 +377,37 @@ public class LootTrackerManager
 
     /**
      * Called when player logs in and verification is complete
+     * LOADS LOCAL DATA ONLY - no automatic server sync
      */
     public void onPlayerLoggedInAndVerified()
     {
         if (hasAttemptedSync)
         {
-            log.info("Sync already attempted this session");
+            log.info("Already loaded data this session");
             return;
         }
 
-        if (!config.syncLootToServer() || !state.isVerified())
-        {
-            log.info("Sync disabled or not verified");
-            hasAttemptedSync = true;
-            return;
-        }
+        log.info("Player logged in and verified - loading LOCAL data only (no auto-sync)");
 
-        log.info("Player logged in and verified - starting loot sync");
-        syncWithServerOnStartup();
+        // Load only from local storage - NO SERVER SYNC
+        loadFromStorage();
+
         hasAttemptedSync = true;
     }
 
     /**
      * Download kill history from server and merge with local
+     * ONLY callable from manual sync button - automatic sync disabled
      */
     public void downloadKillHistoryFromServer()
     {
+        // CRITICAL: Block all automatic syncs - only allow manual sync
+        if (!allowSync)
+        {
+            log.warn("Automatic sync blocked - use manual sync button only");
+            return;
+        }
+
         String username = state.getVerifiedUsername();
         if (username == null || username.isEmpty() || !state.canSync())
         {
@@ -411,9 +443,6 @@ public class LootTrackerManager
         }
     }
 
-    /**
-     * Upload unsynced kills to server
-     */
     /**
      * Upload unsynced kills to server in batches
      */
@@ -547,6 +576,7 @@ public class LootTrackerManager
 
     /**
      * Manual sync button action - bidirectional sync
+     * ONLY way to sync with server
      */
     public void performManualSync(String username) {
         if (username == null || username.isEmpty()) {
@@ -559,6 +589,9 @@ public class LootTrackerManager
 
         executorService.submit(() -> {
             try {
+                // ENABLE sync for this manual operation ONLY
+                allowSync = true;
+
                 // Step 1: Download from server
                 log.info("Step 1: Downloading kill history from server");
                 downloadKillHistoryFromServer();
@@ -587,34 +620,22 @@ public class LootTrackerManager
                         panel.showSyncFailed(e.getMessage());
                     }
                 });
+            } finally {
+                // DISABLE sync flag after manual operation completes
+                allowSync = false;
             }
         });
     }
 
     /**
-     * Perform full bidirectional sync with server
+     * DEPRECATED: Auto-sync on startup is disabled
+     * Use performManualSync() instead
      */
     public void syncWithServerOnStartup()
     {
-        executorService.submit(() -> {  // ← Changed from clientThread.invokeLater
-            try
-            {
-                log.info("Starting bidirectional sync");
-
-                downloadKillHistoryFromServer();
-                Thread.sleep(500);
-                uploadUnsyncedKills();
-
-                // Refresh UI on client thread
-                clientThread.invokeLater(this::refreshLootDisplay);
-
-                log.info("Bidirectional sync completed");
-            }
-            catch (Exception e)
-            {
-                log.error("Error during bidirectional sync", e);
-            }
-        });
+        log.warn("syncWithServerOnStartup() called but automatic sync is DISABLED");
+        log.warn("Use manual sync button instead");
+        // Do nothing - automatic sync disabled
     }
 
     // ==================== DATA MANAGEMENT ====================
@@ -647,6 +668,7 @@ public class LootTrackerManager
         if (data == null || data.getBossKills().isEmpty())
         {
             log.info("No boss kills data to display");
+            bossKillStats.clear();
             if (panel != null)
             {
                 clientThread.invokeLater(() -> panel.refreshDisplay());
@@ -657,12 +679,22 @@ public class LootTrackerManager
         log.info("Boss kills count: {}", data.getBossKills().size());
 
         // Convert storage data to BossKillStats with kill history
+        // CLEAR FIRST to prevent duplicates
         bossKillStats.clear();
+
+        log.info("Cleared bossKillStats map - starting fresh");
 
         for (Map.Entry<String, LootStorageData.BossKillData> entry : data.getBossKills().entrySet())
         {
             String bossName = entry.getKey();
             LootStorageData.BossKillData bossData = entry.getValue();
+
+            // Skip if already exists (safety check)
+            if (bossKillStats.containsKey(bossName))
+            {
+                log.warn("DUPLICATE DETECTED: Boss {} already in map - skipping", bossName);
+                continue;
+            }
 
             log.info("Processing boss: {}, KC: {}", bossName, bossData.getKillCount());
 
@@ -672,7 +704,7 @@ public class LootTrackerManager
             stats.setTotalLootValue(bossData.getTotalLootValue());
 
             // Convert kill records to populate killHistory
-            List<LootStorageData.KillRecord> killRecords = bossData.getKills(); // ← Fixed!
+            List<LootStorageData.KillRecord> killRecords = bossData.getKills();
 
             if (killRecords != null && !killRecords.isEmpty())
             {
@@ -717,6 +749,7 @@ public class LootTrackerManager
         }
 
         log.info("Total bosses in memory: {}", bossKillStats.size());
+        log.info("Boss names: {}", bossKillStats.keySet());
         log.info("=== END REFRESH DISPLAY DEBUG ===");
 
         // Update panel
@@ -756,6 +789,7 @@ public class LootTrackerManager
     {
         bossKillStats.clear();
         hiddenDrops.clear();
+        lastKillTimestamp.clear();
         storageManager.clearData();
 
         if (panel != null)
@@ -770,6 +804,7 @@ public class LootTrackerManager
     {
         bossKillStats.remove(npcName);
         hiddenDrops.remove(npcName);
+        lastKillTimestamp.remove(npcName);
         storageManager.saveData();
 
         if (panel != null)

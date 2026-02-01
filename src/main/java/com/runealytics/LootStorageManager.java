@@ -355,93 +355,167 @@ public class LootStorageManager
     }
 
     /**
-     * Merge server data with local data
+     * Merge server data with local data - NEVER overwrite client when client has equal or more kills
+     * CRITICAL: Should ONLY be called during manual sync operations
      */
     public void mergeServerData(Map<String, LootStorageData.BossKillData> serverData)
     {
+        log.warn("⚠️ mergeServerData() called - this should ONLY happen during manual sync!");
+        log.warn("⚠️ Call stack: ", new Exception("Trace sync caller"));
+
+        // CRITICAL: Always reload from disk to ensure we have the latest client data
+        currentData = loadData();
+
         if (currentData == null)
         {
-            currentData = loadData();
+            log.error("Failed to load client data - aborting merge");
+            return;
         }
 
         int killsAdded = 0;
+        int dropsAdded = 0;
+        int bossesSkipped = 0;
 
         for (Map.Entry<String, LootStorageData.BossKillData> entry : serverData.entrySet())
         {
             String npcName = entry.getKey();
             LootStorageData.BossKillData serverBoss = entry.getValue();
 
-            LootStorageData.BossKillData localBoss = currentData.getBossKills()
-                    .computeIfAbsent(npcName, k -> {
-                        LootStorageData.BossKillData newBoss = new LootStorageData.BossKillData();
-                        newBoss.setNpcName(npcName);
-                        newBoss.setNpcId(serverBoss.getNpcId());
-                        newBoss.setKillCount(0);
-                        newBoss.setPrestige(0);
-                        newBoss.setTotalLootValue(0);
-                        return newBoss;
-                    });
+            // Check if boss exists in client data
+            LootStorageData.BossKillData localBoss = currentData.getBossKills().get(npcName);
 
-            // Merge kills - avoid duplicates by timestamp
+            // If boss exists locally
+            if (localBoss != null)
+            {
+                // CRITICAL: Client has equal or MORE kills - DO NOT TOUCH CLIENT DATA
+                if (localBoss.getKillCount() >= serverBoss.getKillCount())
+                {
+                    log.info("❌ SKIPPING SERVER DATA: {} - Client KC {} >= Server KC {}",
+                            npcName, localBoss.getKillCount(), serverBoss.getKillCount());
+                    bossesSkipped++;
+                    continue; // Skip this boss entirely - client has fresher data
+                }
+
+                // Server has MORE kills - merge the new ones
+                log.info("✅ MERGING: {} - Server KC {} > Client KC {}",
+                        npcName, serverBoss.getKillCount(), localBoss.getKillCount());
+            }
+            else
+            {
+                // Boss doesn't exist locally - create new from server
+                log.info("➕ NEW BOSS from server: {} with {} kills", npcName, serverBoss.getKillCount());
+                localBoss = new LootStorageData.BossKillData();
+                localBoss.setNpcName(npcName);
+                localBoss.setNpcId(serverBoss.getNpcId());
+                localBoss.setKillCount(0);
+                localBoss.setPrestige(0);
+                localBoss.setTotalLootValue(0);
+                currentData.getBossKills().put(npcName, localBoss);
+            }
+
+            // Build set of existing kill timestamps and kill numbers (client data)
             Set<Long> existingTimestamps = new HashSet<>();
+            Set<Integer> existingKillNumbers = new HashSet<>();
+
             for (LootStorageData.KillRecord kill : localBoss.getKills())
             {
                 existingTimestamps.add(kill.getTimestamp());
+                existingKillNumbers.add(kill.getKillNumber());
             }
 
+            // Add ONLY new kills from server that we don't have
             for (LootStorageData.KillRecord serverKill : serverBoss.getKills())
             {
-                // Check if kill already exists (within 1 second tolerance)
-                boolean exists = false;
+                // Check by both timestamp (±1 second) AND kill number
+                boolean existsByTimestamp = false;
                 for (long existingTs : existingTimestamps)
                 {
                     if (Math.abs(existingTs - serverKill.getTimestamp()) <= 1000)
                     {
-                        exists = true;
+                        existsByTimestamp = true;
                         break;
                     }
                 }
 
-                if (!exists)
+                boolean existsByKillNumber = existingKillNumbers.contains(serverKill.getKillNumber());
+
+                // Skip if exists by either method
+                if (existsByTimestamp || existsByKillNumber)
                 {
-                    // Mark as already synced since it came from server
-                    serverKill.setSyncedToServer(true);
-                    localBoss.getKills().add(serverKill);
-                    killsAdded++;
+                    continue;
+                }
 
-                    // Update aggregated drops
-                    for (LootStorageData.DropRecord drop : serverKill.getDrops())
-                    {
-                        LootStorageData.AggregatedDrop aggDrop = localBoss.getAggregatedDrops()
-                                .computeIfAbsent(drop.getItemId(), k -> {
-                                    LootStorageData.AggregatedDrop newAgg = new LootStorageData.AggregatedDrop();
-                                    newAgg.setItemId(drop.getItemId());
-                                    newAgg.setItemName(drop.getItemName());
-                                    newAgg.setTotalQuantity(0);
-                                    newAgg.setDropCount(0);
-                                    newAgg.setTotalValue(0);
-                                    newAgg.setGePrice(drop.getGePrice());
-                                    newAgg.setHighAlch(drop.getHighAlch());
-                                    return newAgg;
-                                });
+                // This is a NEW kill - add it
+                serverKill.setSyncedToServer(true);
+                localBoss.getKills().add(serverKill);
+                killsAdded++;
 
-                        aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
-                        aggDrop.setDropCount(aggDrop.getDropCount() + 1);
-                        aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
-                    }
+                log.debug("Added missing kill #{} from server: {} at timestamp {}",
+                        serverKill.getKillNumber(), npcName, serverKill.getTimestamp());
+
+                // Update aggregated drops
+                for (LootStorageData.DropRecord drop : serverKill.getDrops())
+                {
+                    LootStorageData.AggregatedDrop aggDrop = localBoss.getAggregatedDrops()
+                            .computeIfAbsent(drop.getItemId(), k -> {
+                                LootStorageData.AggregatedDrop newAgg = new LootStorageData.AggregatedDrop();
+                                newAgg.setItemId(drop.getItemId());
+                                newAgg.setItemName(drop.getItemName());
+                                newAgg.setTotalQuantity(0);
+                                newAgg.setDropCount(0);
+                                newAgg.setTotalValue(0);
+                                newAgg.setGePrice(drop.getGePrice());
+                                newAgg.setHighAlch(drop.getHighAlch());
+                                return newAgg;
+                            });
+
+                    aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
+                    aggDrop.setDropCount(aggDrop.getDropCount() + 1);
+                    aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
+                    dropsAdded++;
                 }
             }
 
-            // Update stats from server
-            localBoss.setKillCount(Math.max(localBoss.getKillCount(), serverBoss.getKillCount()));
-            localBoss.setPrestige(Math.max(localBoss.getPrestige(), serverBoss.getPrestige()));
+            // Update kill count and prestige from server (only if we merged data)
+            if (killsAdded > 0)
+            {
+                int originalKillCount = localBoss.getKillCount();
+                int originalPrestige = localBoss.getPrestige();
+                long originalValue = localBoss.getTotalLootValue();
+
+                localBoss.setKillCount(serverBoss.getKillCount()); // Server has more, use that
+                localBoss.setPrestige(Math.max(localBoss.getPrestige(), serverBoss.getPrestige()));
+
+                // Recalculate total value from ALL kills in memory
+                long recalculatedValue = 0;
+                for (LootStorageData.KillRecord kill : localBoss.getKills())
+                {
+                    for (LootStorageData.DropRecord drop : kill.getDrops())
+                    {
+                        recalculatedValue += drop.getTotalValue();
+                    }
+                }
+                localBoss.setTotalLootValue(recalculatedValue);
+
+                log.info("Updated {} stats - KC: {} -> {}, Prestige: {} -> {}, Value: {} -> {}",
+                        npcName,
+                        originalKillCount, localBoss.getKillCount(),
+                        originalPrestige, localBoss.getPrestige(),
+                        originalValue, localBoss.getTotalLootValue());
+            }
         }
 
-        if (killsAdded > 0)
+        if (killsAdded > 0 || dropsAdded > 0)
         {
             currentData.setLastSyncTimestamp(System.currentTimeMillis());
             saveData();
-            log.info("Merged {} kills from server", killsAdded);
+            log.info("Merge complete: Added {} kills, {} drops from server ({} bosses skipped - client data equal/newer)",
+                    killsAdded, dropsAdded, bossesSkipped);
+        }
+        else
+        {
+            log.info("Merge complete: No new data from server ({} bosses skipped - client data equal/newer)",
+                    bossesSkipped);
         }
     }
 

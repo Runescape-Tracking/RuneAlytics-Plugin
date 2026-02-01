@@ -16,6 +16,7 @@ import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +43,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private String highlightedBoss = null;
     private Timer highlightTimeoutTimer;
 
+    // Refresh guard
+    private volatile boolean isRefreshing = false;
+
     // Filter buttons
     private JButton eyeButton;
     private JButton sortButton;
@@ -51,19 +55,21 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private Timer highlightTimer;
     private Timer fadeTimer;
     private static final int HIGHLIGHT_TIMEOUT_MS = 10_000;
+    private static final int SYNC_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+    private long lastSyncTime = 0;
 
     private boolean showIgnoredItems = false;
     private String lastKilledBoss = null;
-    private SortMode currentSort = SortMode.VALUE;
+    private SortMode currentSort = SortMode.RECENT; // Default to most recent kills
     // Track expanded/collapsed state per boss
     private final Map<String, Boolean> bossExpandedState = new HashMap<>();
 
     @Getter
     private enum SortMode
     {
-        VALUE("Sort by Value"),
-        KILLS("Sort by Kills"),
-        RECENT("Sort by Recent");
+        VALUE("Sort: By Value"),
+        KILLS("Sort: By Kills"),
+        RECENT("Sort: By Recent");
 
         private final String tooltip;
 
@@ -196,6 +202,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
         sortButton = createFilterButton("⇅");
         sortButton.setToolTipText(currentSort.getTooltip());
+        // Set initial color for RECENT mode (default)
+        sortButton.setBackground(new Color(70, 100, 70));
         sortButton.addActionListener(e -> cycleSortMode());
 
         clearButton = createFilterButton("🗑");
@@ -250,6 +258,25 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private void onSyncButtonClicked()
     {
+        // Check cooldown
+        long now = System.currentTimeMillis();
+        long timeSinceLastSync = now - lastSyncTime;
+
+        if (timeSinceLastSync < SYNC_COOLDOWN_MS)
+        {
+            long remainingSeconds = (SYNC_COOLDOWN_MS - timeSinceLastSync) / 1000;
+            long minutes = remainingSeconds / 60;
+            long seconds = remainingSeconds % 60;
+
+            JOptionPane.showMessageDialog(
+                    this,
+                    String.format("Please wait %d:%02d before syncing again", minutes, seconds),
+                    "Sync Cooldown",
+                    JOptionPane.INFORMATION_MESSAGE
+            );
+            return;
+        }
+
         // Get current username from plugin
         String username = runeAlyticsState.getVerifiedUsername();
 
@@ -275,6 +302,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             );
             return;
         }
+
+        // Update last sync time
+        lastSyncTime = now;
 
         // Disable button and show syncing state
         syncButton.setEnabled(false);
@@ -340,9 +370,21 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 {
                     bg = ColorScheme.BRAND_ORANGE;
                 }
-                else if (button == sortButton && currentSort != SortMode.VALUE)
+                else if (button == sortButton)
                 {
-                    bg = new Color(70, 70, 100);
+                    // Restore sort mode color
+                    if (currentSort == SortMode.VALUE)
+                    {
+                        bg = ColorScheme.DARK_GRAY_COLOR;
+                    }
+                    else if (currentSort == SortMode.KILLS)
+                    {
+                        bg = new Color(70, 70, 100);
+                    }
+                    else // RECENT
+                    {
+                        bg = new Color(70, 100, 70);
+                    }
                 }
                 button.setBackground(bg);
             }
@@ -363,7 +405,24 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     {
         currentSort = currentSort.next();
         sortButton.setToolTipText(currentSort.getTooltip());
-        sortButton.setBackground(currentSort == SortMode.VALUE ? ColorScheme.DARK_GRAY_COLOR : new Color(70, 70, 100));
+
+        // Update button color based on mode
+        Color buttonColor;
+        if (currentSort == SortMode.VALUE)
+        {
+            buttonColor = ColorScheme.DARK_GRAY_COLOR;
+        }
+        else if (currentSort == SortMode.KILLS)
+        {
+            buttonColor = new Color(70, 70, 100);
+        }
+        else // RECENT
+        {
+            buttonColor = new Color(70, 100, 70);
+        }
+        sortButton.setBackground(buttonColor);
+
+        log.info("Sort mode changed to: {}", currentSort);
         refreshDisplay();
     }
 
@@ -401,7 +460,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         });
     }
 
-    private void highlightBoss(String npcName)
+    /**
+     * PUBLIC: Highlight a boss panel (called from LootTrackerManager)
+     */
+    public void highlightBoss(String npcName)
     {
         // Track highlighted boss by name (NOT panel)
         highlightedBoss = npcName;
@@ -468,39 +530,69 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     public void refreshDisplay()
     {
-        bossListPanel.removeAll();
-
-        List<BossKillStats> allStats = lootManager.getAllBossStats();
-
-        if (allStats.isEmpty())
+        // Prevent concurrent refreshes
+        if (isRefreshing)
         {
-            bossListPanel.add(createEmptyStatePanel());
+            log.debug("Refresh already in progress - skipping");
+            return;
         }
-        else
+
+        isRefreshing = true;
+
+        try
         {
-            sortBossStats(allStats);
+            bossListPanel.removeAll();
 
-            long totalValue = 0;
-            int totalKills = 0;
+            List<BossKillStats> allStats = lootManager.getAllBossStats();
 
-            for (BossKillStats stats : allStats)
+            if (allStats.isEmpty())
             {
-                totalValue += stats.getTotalLootValue();
-                totalKills += stats.getKillCount();
+                bossListPanel.add(createEmptyStatePanel());
+            }
+            else
+            {
+                // Deduplicate by boss name (safety check)
+                Map<String, BossKillStats> uniqueBosses = new HashMap<>();
+                for (BossKillStats stats : allStats)
+                {
+                    String bossName = stats.getNpcName();
+                    if (uniqueBosses.containsKey(bossName))
+                    {
+                        log.warn("Duplicate boss detected in display: {} - using first occurrence", bossName);
+                        continue;
+                    }
+                    uniqueBosses.put(bossName, stats);
+                }
 
-                JPanel bossPanel = createBossPanel(stats);
-                bossPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-                bossPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, bossPanel.getPreferredSize().height));
-                bossListPanel.add(bossPanel);
-                bossListPanel.add(RuneAlyticsUi.vSpace(8));
+                List<BossKillStats> dedupedStats = new ArrayList<>(uniqueBosses.values());
+                sortBossStats(dedupedStats);
+
+                long totalValue = 0;
+                int totalKills = 0;
+
+                for (BossKillStats stats : dedupedStats)
+                {
+                    totalValue += stats.getTotalLootValue();
+                    totalKills += stats.getKillCount();
+
+                    JPanel bossPanel = createBossPanel(stats);
+                    bossPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+                    // No size constraints - panel manages its own size
+                    bossListPanel.add(bossPanel);
+                    bossListPanel.add(RuneAlyticsUi.vSpace(8));
+                }
+
+                totalCountLabel.setText(String.valueOf(totalKills));
+                totalValueLabel.setText(formatGp(totalValue));
             }
 
-            totalCountLabel.setText(String.valueOf(totalKills));
-            totalValueLabel.setText(formatGp(totalValue));
+            bossListPanel.revalidate();
+            bossListPanel.repaint();
         }
-
-        bossListPanel.revalidate();
-        bossListPanel.repaint();
+        finally
+        {
+            isRefreshing = false;
+        }
     }
 
     private JPanel createEmptyStatePanel()
@@ -532,43 +624,55 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private void sortBossStats(List<BossKillStats> stats)
     {
+        log.debug("Sorting {} bosses by: {}", stats.size(), currentSort);
+
         switch (currentSort)
         {
             case VALUE:
                 stats.sort((a, b) -> {
-                    if (lastKilledBoss != null)
+                    // PRIORITY: Highlighted boss always first
+                    if (highlightedBoss != null)
                     {
-                        if (a.getNpcName().equals(lastKilledBoss) && !b.getNpcName().equals(lastKilledBoss))
+                        if (a.getNpcName().equals(highlightedBoss) && !b.getNpcName().equals(highlightedBoss))
                             return -1;
-                        if (b.getNpcName().equals(lastKilledBoss) && !a.getNpcName().equals(lastKilledBoss))
+                        if (b.getNpcName().equals(highlightedBoss) && !a.getNpcName().equals(highlightedBoss))
                             return 1;
                     }
                     return Long.compare(b.getTotalLootValue(), a.getTotalLootValue());
                 });
+                log.debug("Sorted by value - top boss: {} with {} gp",
+                        stats.get(0).getNpcName(), stats.get(0).getTotalLootValue());
                 break;
+
             case KILLS:
                 stats.sort((a, b) -> {
-                    if (lastKilledBoss != null)
+                    if (highlightedBoss != null)
                     {
-                        if (a.getNpcName().equals(lastKilledBoss) && !b.getNpcName().equals(lastKilledBoss))
+                        if (a.getNpcName().equals(highlightedBoss) && !b.getNpcName().equals(highlightedBoss))
                             return -1;
-                        if (b.getNpcName().equals(lastKilledBoss) && !a.getNpcName().equals(lastKilledBoss))
+                        if (b.getNpcName().equals(highlightedBoss) && !a.getNpcName().equals(highlightedBoss))
                             return 1;
                     }
                     return Integer.compare(b.getKillCount(), a.getKillCount());
                 });
+                log.debug("Sorted by kills - top boss: {} with {} KC",
+                        stats.get(0).getNpcName(), stats.get(0).getKillCount());
                 break;
+
             case RECENT:
                 stats.sort((a, b) -> {
-                    if (lastKilledBoss != null)
+                    if (highlightedBoss != null)
                     {
-                        if (a.getNpcName().equals(lastKilledBoss) && !b.getNpcName().equals(lastKilledBoss))
+                        if (a.getNpcName().equals(highlightedBoss) && !b.getNpcName().equals(highlightedBoss))
                             return -1;
-                        if (b.getNpcName().equals(lastKilledBoss) && !a.getNpcName().equals(lastKilledBoss))
+                        if (b.getNpcName().equals(highlightedBoss) && !a.getNpcName().equals(highlightedBoss))
                             return 1;
                     }
+                    // Most recent kill first (higher timestamp = more recent)
                     return Long.compare(b.getLastKillTimestamp(), a.getLastKillTimestamp());
                 });
+                log.debug("Sorted by recent - top boss: {} with last kill at {}",
+                        stats.get(0).getNpcName(), stats.get(0).getLastKillTimestamp());
                 break;
         }
     }
@@ -577,7 +681,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     {
         boolean isHighlighted = stats.getNpcName().equals(highlightedBoss);
 
-        // Main panel
+        // Main panel - NO SIZE CONSTRAINTS
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -597,7 +701,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 isHighlighted ? new Color(30, 35, 30) : ColorScheme.DARKER_GRAY_COLOR
         );
         headerPanel.setBorder(new EmptyBorder(4, 6, 4, 6));
-        headerPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
+        // Header can have fixed height
+        headerPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
         headerPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         String bossName = truncateText(stats.getNpcName(), 18);
@@ -630,7 +735,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         boolean expanded = bossExpandedState.getOrDefault(stats.getNpcName(), true);
         final boolean[] isExpanded = new boolean[] { expanded };
 
-        // Loot container
+        // Loot container - NO SIZE CONSTRAINTS
         JPanel lootContainer = new JPanel(new BorderLayout());
         lootContainer.setOpaque(false);
         lootContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -654,20 +759,15 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 isExpanded[0] = !isExpanded[0];
                 bossExpandedState.put(stats.getNpcName(), isExpanded[0]);
 
+                // Toggle visibility ONLY
                 lootGridHolder[0].setVisible(isExpanded[0]);
 
-                if (isExpanded[0])
-                {
-                    panel.setMaximumSize(
-                            new Dimension(Integer.MAX_VALUE, panel.getPreferredSize().height)
-                    );
-                }
-                else
-                {
-                    panel.setMaximumSize(
-                            new Dimension(Integer.MAX_VALUE, headerPanel.getPreferredSize().height + 2)
-                    );
-                }
+                // Force complete re-layout WITHOUT size constraints
+                lootContainer.invalidate();
+                panel.invalidate();
+                bossListPanel.invalidate();
+
+                SwingUtilities.getRoot(panel).validate();
 
                 panel.revalidate();
                 panel.repaint();
@@ -680,14 +780,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         panel.add(headerPanel);
         panel.add(lootContainer);
 
-        // Respect collapsed state on creation
-        if (!isExpanded[0])
-        {
-            panel.setMaximumSize(
-                    new Dimension(Integer.MAX_VALUE, headerPanel.getPreferredSize().height + 2)
-            );
-        }
-
         return panel;
     }
 
@@ -697,6 +789,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         grid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         grid.setBorder(new EmptyBorder(5, 5, 5, 5));
         grid.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // Don't constrain size - let it flow naturally
+        grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
         for (BossKillStats.AggregatedDrop drop : drops)
         {
@@ -814,17 +908,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             JPanel itemPanel = createAggregatedItemPanel(drop, npcName);
             grid.add(itemPanel);
         }
-
-        // 🔒 HARD WIDTH CAP (this is the magic)
-        int maxColumns = ITEMS_PER_ROW;
-        int maxWidth =
-                (maxColumns * ITEM_SIZE)
-                        + ((maxColumns - 1) * ITEM_SPACING)
-                        + 10; // border padding
-
-        Dimension preferred = grid.getPreferredSize();
-        grid.setPreferredSize(new Dimension(maxWidth, preferred.height));
-        grid.setMaximumSize(new Dimension(maxWidth, preferred.height));
 
         return grid;
     }
