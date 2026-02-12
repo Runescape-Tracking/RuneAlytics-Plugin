@@ -22,6 +22,7 @@ public final class RuneAlyticsUi
     private static final Color CARD_BORDER    = new Color(60, 60, 60, 180);
 
     private static final int CARD_CORNER_RADIUS = 6;
+    private static final int CARD_PADDING = 12;
 
     // ---------- ROOT / PANELS ----------
 
@@ -31,6 +32,7 @@ public final class RuneAlyticsUi
         panel.setLayout(new BorderLayout());
         panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
         panel.setOpaque(true);
+        expandToFillWidth(panel);
     }
 
     /** Root vertical content panel with padding */
@@ -39,7 +41,8 @@ public final class RuneAlyticsUi
         JPanel panel = verticalPanel();
         panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
         panel.setOpaque(true);
-        panel.setBorder(new EmptyBorder(10, 10, 10, 10));
+        panel.setBorder(new EmptyBorder(12, 12, 12, 12));
+        expandToFillWidth(panel);
         return panel;
     }
 
@@ -49,7 +52,7 @@ public final class RuneAlyticsUi
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setOpaque(false);
-        panel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        expandToFillWidth(panel);
         return panel;
     }
 
@@ -59,7 +62,7 @@ public final class RuneAlyticsUi
         JPanel row = new JPanel();
         row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
         row.setOpaque(false);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        expandToFillWidth(row);
 
         for (int i = 0; i < components.length; i++)
         {
@@ -80,8 +83,9 @@ public final class RuneAlyticsUi
         panel.setOpaque(true);
 
         Border outer = new LineBorder(CARD_BORDER, 1, true);
-        Border inner = new EmptyBorder(10, 10, 10, 10);
+        Border inner = new EmptyBorder(CARD_PADDING, CARD_PADDING, CARD_PADDING, CARD_PADDING);
         panel.setBorder(new CompoundBorder(outer, inner));
+        expandToFillWidth(panel);
 
         return panel;
     }
@@ -109,43 +113,45 @@ public final class RuneAlyticsUi
         JLabel label = new JLabel(text);
         label.setFont(label.getFont().deriveFont(Font.BOLD, 16f));
         label.setForeground(ColorScheme.TEXT_COLOR);
-        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        expandToFillWidth(label);
         return label;
     }
 
     public static JLabel subtitleLabel(String text)
     {
-        JLabel label = new JLabel(text);
+        JLabel label = new WrapLabel(text);
         label.setFont(label.getFont().deriveFont(Font.PLAIN, 11f));
         label.setForeground(MUTED_TEXT);
-        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        expandToFillWidth(label);
         return label;
     }
 
     public static JLabel bodyLabel(String text)
     {
-        JLabel label = new JLabel(text);
+        JLabel label = new WrapLabel(text);
         label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
         label.setForeground(ColorScheme.TEXT_COLOR);
-        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        expandToFillWidth(label);
         return label;
     }
 
     /** For grey “value” labels like Username, Last Sync, etc. */
     public static JLabel valueLabel(String text)
     {
-        JLabel label = bodyLabel(text);
+        JLabel label = new WrapLabel(text);
+        label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
         label.setForeground(MUTED_TEXT);
+        expandToFillWidth(label);
         return label;
     }
 
     public static JLabel statusLabel()
     {
-        JLabel label = new JLabel(" ");
+        JLabel label = new WrapLabel(" ");
         label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
         label.setForeground(ColorScheme.TEXT_COLOR);
-        label.setAlignmentX(Component.LEFT_ALIGNMENT);
         label.setHorizontalAlignment(SwingConstants.LEFT);
+        expandToFillWidth(label);
         return label;
     }
 
@@ -179,7 +185,7 @@ public final class RuneAlyticsUi
                 new Dimension(Integer.MAX_VALUE, field.getPreferredSize().height)
         );
 
-        field.setAlignmentX(Component.LEFT_ALIGNMENT);
+        expandToFillWidth(field);
         return field;
     }
 
@@ -195,6 +201,7 @@ public final class RuneAlyticsUi
 
         button.setBackground(ColorScheme.BRAND_ORANGE);
         button.setForeground(Color.BLACK);
+        button.setFont(button.getFont().deriveFont(Font.BOLD, 12f));
 
         button.setBorder(new CompoundBorder(
                 new LineBorder(ColorScheme.BRAND_ORANGE.darker(), 1, true),
@@ -237,8 +244,8 @@ public final class RuneAlyticsUi
         infoText.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         infoText.setForeground(MUTED_TEXT);
         infoText.setBorder(new EmptyBorder(10, 10, 10, 10));
-        infoText.setAlignmentX(Component.LEFT_ALIGNMENT);
         infoText.setFont(infoText.getFont().deriveFont(Font.PLAIN, 11f));
+        expandToFillWidth(infoText);
         return infoText;
     }
 
@@ -255,7 +262,7 @@ public final class RuneAlyticsUi
         area.setForeground(ColorScheme.TEXT_COLOR);
         area.setBorder(new EmptyBorder(4, 4, 4, 4));
 
-        area.setAlignmentX(Component.LEFT_ALIGNMENT);
+        expandToFillWidth(area);
         return area;
     }
 
@@ -267,11 +274,11 @@ public final class RuneAlyticsUi
         header.setFont(header.getFont().deriveFont(Font.BOLD, 12f));
 
         JScrollPane scroll = new JScrollPane(area);
-        scroll.setAlignmentX(Component.LEFT_ALIGNMENT);
         scroll.setBorder(new EmptyBorder(0, 0, 0, 0));
         scroll.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
         scroll.setOpaque(false);
         scroll.setPreferredSize(new Dimension(100, 200));
+        expandToFillWidth(scroll);
 
         card.add(header);
         card.add(vSpace(6));
@@ -290,5 +297,71 @@ public final class RuneAlyticsUi
     public static Component hSpace(int px)
     {
         return Box.createRigidArea(new Dimension(px, 0));
+    }
+
+    private static void expandToFillWidth(JComponent component)
+    {
+        component.setAlignmentX(Component.LEFT_ALIGNMENT);
+        component.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+    }
+
+    private static String escapeHtml(String text)
+    {
+        return text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br>");
+    }
+
+    private static class WrapLabel extends JLabel
+    {
+        private String rawText = "";
+
+        WrapLabel(String text)
+        {
+            setText(text);
+            setOpaque(false);
+            setVerticalAlignment(SwingConstants.TOP);
+        }
+
+        @Override
+        public void setText(String text)
+        {
+            rawText = text == null ? "" : text;
+            updateText();
+        }
+
+        @Override
+        public void setBounds(int x, int y, int width, int height)
+        {
+            super.setBounds(x, y, width, height);
+            updateText();
+        }
+
+        private void updateText()
+        {
+            if (rawText.isEmpty())
+            {
+                super.setText("<html>&nbsp;</html>");
+                return;
+            }
+
+            if (rawText.trim().startsWith("<html>"))
+            {
+                super.setText(rawText);
+                return;
+            }
+
+            int width = getWidth();
+            String escaped = escapeHtml(rawText);
+            if (width > 0)
+            {
+                super.setText("<html><div style='width:" + width + "px;'>" + escaped + "</div></html>");
+            }
+            else
+            {
+                super.setText("<html>" + escaped + "</html>");
+            }
+        }
     }
 }
