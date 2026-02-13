@@ -3,6 +3,8 @@ package com.runealytics;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.gson.stream.JsonReader;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -13,6 +15,8 @@ import org.slf4j.LoggerFactory;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.io.IOException;
+import java.io.StringReader;
+import java.util.Locale;
 
 @Singleton
 public class MatchmakingApiClient
@@ -25,6 +29,7 @@ public class MatchmakingApiClient
     private static final String BEGIN_MATCH_PATH = MATCHMAKING_BASE + "/begin-match";
     private static final String REPORT_MATCH_PATH = MATCHMAKING_BASE + "/report-match";
     private static final String REPORT_ITEMS_PATH = MATCHMAKING_BASE + "/report-items";
+    private static final int RAW_RESPONSE_LIMIT = 256;
 
     private final OkHttpClient httpClient;
     private final RunealyticsConfig config;
@@ -122,14 +127,22 @@ public class MatchmakingApiClient
         try (Response response = httpClient.newCall(request).execute())
         {
             String responseBody = response.body() != null ? response.body().string() : "";
-            JsonObject json = parseJson(responseBody);
-            String message = json != null ? getString(json, "message") : null;
+            ParsedResponse parsedResponse = parseResponseBody(responseBody);
+            JsonObject json = parsedResponse.getJsonObject();
+            String displayBody = json != null ? responseBody.trim() : sanitizeRawResponse(responseBody);
+            String message = json != null ? getString(json, "message") : parsedResponse.getPrimitiveMessage();
             boolean tokenRefresh = json != null && (hasTrue(json, "token_refresh") || hasTrue(json, "refresh_token"));
+            boolean success = response.isSuccessful() && (json != null || parsedResponse.isPrimitiveSuccess());
 
-            if (response.isSuccessful() && json != null)
+            if (success && json != null)
             {
                 MatchmakingSession session = parseMatchSession(json, matchCode, osrsRsn);
-                return new MatchmakingApiResult(session, message, responseBody, true, tokenRefresh);
+                return new MatchmakingApiResult(session, message, displayBody, true, tokenRefresh);
+            }
+
+            if (success)
+            {
+                return new MatchmakingApiResult(null, message, displayBody, true, tokenRefresh);
             }
 
             if (!response.isSuccessful())
@@ -137,25 +150,229 @@ public class MatchmakingApiClient
                 log.debug("Matchmaking request failed: {} {}", response.code(), responseBody);
             }
 
-            return new MatchmakingApiResult(null, message, responseBody, false, tokenRefresh);
+            return new MatchmakingApiResult(null, message, displayBody, false, tokenRefresh);
         }
     }
 
-    private JsonObject parseJson(String responseBody)
+    private ParsedResponse parseResponseBody(String responseBody)
     {
-        if (responseBody == null || responseBody.isEmpty())
+        if (responseBody == null)
         {
-            return null;
+            return ParsedResponse.empty();
+        }
+
+        String trimmedBody = responseBody.trim();
+        if (trimmedBody.isEmpty())
+        {
+            return ParsedResponse.empty();
+        }
+
+        if (isLikelyHtmlResponse(trimmedBody))
+        {
+            return ParsedResponse.fromRaw(trimmedBody);
+        }
+
+        if (isLikelyPrimitiveResponse(trimmedBody))
+        {
+            return ParsedResponse.fromRaw(trimmedBody);
         }
 
         try
         {
-            return gson.fromJson(responseBody, JsonObject.class);
+            JsonReader reader = new JsonReader(new StringReader(trimmedBody));
+            reader.setLenient(true);
+            JsonElement element = new JsonParser().parse(reader);
+            if (element == null || element.isJsonNull())
+            {
+                return ParsedResponse.empty();
+            }
+
+            if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isString())
+            {
+                String primitiveString = element.getAsString().trim();
+                if (isLikelyHtmlResponse(primitiveString))
+                {
+                    return ParsedResponse.fromRaw(primitiveString);
+                }
+            }
+
+            if (element.isJsonObject())
+            {
+                return ParsedResponse.fromObject(element.getAsJsonObject());
+            }
+
+            log.debug("Matchmaking response was not a JSON object: {}", element);
+            return ParsedResponse.fromPrimitive(element);
         }
         catch (Exception ex)
         {
             log.debug("Failed to parse matchmaking response", ex);
-            return null;
+            return ParsedResponse.fromRaw(trimmedBody);
+        }
+    }
+
+    private static String sanitizeRawResponse(String responseBody)
+    {
+        if (responseBody == null)
+        {
+            return "";
+        }
+
+        String trimmed = responseBody.trim();
+        if (trimmed.length() <= RAW_RESPONSE_LIMIT)
+        {
+            return trimmed;
+        }
+
+        return trimmed.substring(0, RAW_RESPONSE_LIMIT) + "…(truncated)";
+    }
+
+    private boolean isLikelyHtmlResponse(String responseBody)
+    {
+        if (responseBody.isEmpty() || responseBody.charAt(0) != '<')
+        {
+            return false;
+        }
+
+        String lower = responseBody.toLowerCase(Locale.ROOT);
+        return lower.startsWith("<!doctype") || lower.startsWith("<html");
+    }
+
+    private boolean isLikelyPrimitiveResponse(String responseBody)
+    {
+        if (responseBody.isEmpty())
+        {
+            return false;
+        }
+
+        char firstChar = responseBody.charAt(0);
+        if (firstChar == '{' || firstChar == '[' || firstChar == '"')
+        {
+            return false;
+        }
+
+        String lower = responseBody.toLowerCase(Locale.ROOT);
+        return lower.startsWith("true")
+                || lower.startsWith("false")
+                || lower.startsWith("1")
+                || lower.startsWith("0");
+    }
+
+    private static class ParsedResponse
+    {
+        private final JsonObject jsonObject;
+        private final boolean primitiveSuccess;
+        private final String primitiveMessage;
+
+        private ParsedResponse(JsonObject jsonObject, boolean primitiveSuccess, String primitiveMessage)
+        {
+            this.jsonObject = jsonObject;
+            this.primitiveSuccess = primitiveSuccess;
+            this.primitiveMessage = primitiveMessage;
+        }
+
+        private static ParsedResponse empty()
+        {
+            return new ParsedResponse(null, false, "");
+        }
+
+        private static ParsedResponse fromObject(JsonObject jsonObject)
+        {
+            return new ParsedResponse(jsonObject, false, "");
+        }
+
+        private static ParsedResponse fromPrimitive(JsonElement element)
+        {
+            if (!element.isJsonPrimitive())
+            {
+                return new ParsedResponse(null, false, element.toString());
+            }
+
+            boolean success = false;
+            String message = "";
+
+            try
+            {
+                success = element.getAsBoolean();
+            }
+            catch (Exception ignored)
+            {
+                success = false;
+            }
+
+            try
+            {
+                if (element.getAsJsonPrimitive().isNumber())
+                {
+                    success = element.getAsInt() != 0;
+                }
+                else if (element.getAsJsonPrimitive().isString())
+                {
+                    message = element.getAsString();
+                    if (message != null)
+                    {
+                        message = message.trim();
+                        if (message.startsWith("<"))
+                        {
+                            return new ParsedResponse(null, false, "Matchmaking API returned HTML instead of JSON.");
+                        }
+                        message = sanitizeRawResponse(message);
+                    }
+                }
+            }
+            catch (Exception ignored)
+            {
+                // Keep best-effort success/message values.
+            }
+
+            return new ParsedResponse(null, success, message);
+        }
+
+        private static ParsedResponse fromRaw(String rawBody)
+        {
+            String lower = rawBody.toLowerCase(Locale.ROOT);
+
+            if (lower.startsWith("true"))
+            {
+                return new ParsedResponse(null, true, "");
+            }
+
+            if (lower.startsWith("false"))
+            {
+                return new ParsedResponse(null, false, "");
+            }
+
+            if (lower.startsWith("1"))
+            {
+                return new ParsedResponse(null, true, "");
+            }
+
+            if (lower.startsWith("0"))
+            {
+                return new ParsedResponse(null, false, "");
+            }
+
+            if (rawBody.startsWith("<"))
+            {
+                return new ParsedResponse(null, false, "Matchmaking API returned HTML instead of JSON.");
+            }
+
+            return new ParsedResponse(null, false, sanitizeRawResponse(rawBody));
+        }
+
+        private JsonObject getJsonObject()
+        {
+            return jsonObject;
+        }
+
+        private boolean isPrimitiveSuccess()
+        {
+            return primitiveSuccess;
+        }
+
+        private String getPrimitiveMessage()
+        {
+            return primitiveMessage;
         }
     }
 
