@@ -533,6 +533,15 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         refreshDisplayPreservingLayout();
     }
 
+    public void updatePanel() {
+        SwingUtilities.invokeLater(() -> {
+            bossListPanel.removeAll(); // Clear old loot
+            // Logic to add new loot components goes here
+            bossListPanel.revalidate();
+            bossListPanel.repaint();
+        });
+    }
+
     /**
      * Refresh display while preserving scroll position and expanded states
      */
