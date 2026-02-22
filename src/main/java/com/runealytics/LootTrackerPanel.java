@@ -530,7 +530,14 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     public void refreshDisplay()
     {
-        // Prevent concurrent refreshes
+        refreshDisplayPreservingLayout();
+    }
+
+    /**
+     * Refresh display while preserving scroll position and expanded states
+     */
+    public void refreshDisplayPreservingLayout()
+    {
         if (isRefreshing)
         {
             log.debug("Refresh already in progress - skipping");
@@ -541,6 +548,18 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
         try
         {
+            // Store current scroll position
+            JScrollPane scrollPane = findScrollPane(this);
+            int scrollPosition = 0;
+            if (scrollPane != null)
+            {
+                scrollPosition = scrollPane.getVerticalScrollBar().getValue();
+            }
+
+            // Get existing boss panels to preserve expanded states
+            Map<String, Boolean> currentExpandedStates = new HashMap<>(bossExpandedState);
+
+            // Perform the refresh
             bossListPanel.removeAll();
 
             List<BossKillStats> allStats = lootManager.getAllBossStats();
@@ -551,7 +570,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             }
             else
             {
-                // Deduplicate by boss name (safety check)
+                // Deduplicate by boss name
                 Map<String, BossKillStats> uniqueBosses = new HashMap<>();
                 for (BossKillStats stats : allStats)
                 {
@@ -575,9 +594,15 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     totalValue += stats.getTotalLootValue();
                     totalKills += stats.getKillCount();
 
+                    // Restore expanded state from previous render
+                    String bossName = stats.getNpcName();
+                    if (currentExpandedStates.containsKey(bossName))
+                    {
+                        bossExpandedState.put(bossName, currentExpandedStates.get(bossName));
+                    }
+
                     JPanel bossPanel = createBossPanel(stats);
                     bossPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-                    // No size constraints - panel manages its own size
                     bossListPanel.add(bossPanel);
                     bossListPanel.add(RuneAlyticsUi.vSpace(8));
                 }
@@ -586,14 +611,42 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 totalValueLabel.setText(formatGp(totalValue));
             }
 
+            // Single revalidate/repaint instead of multiple
             bossListPanel.revalidate();
             bossListPanel.repaint();
+
+            // Restore scroll position
+            if (scrollPane != null)
+            {
+                final int finalScrollPosition = scrollPosition;
+                SwingUtilities.invokeLater(() -> {
+                    scrollPane.getVerticalScrollBar().setValue(finalScrollPosition);
+                });
+            }
         }
         finally
         {
             isRefreshing = false;
         }
     }
+
+    /**
+     * Find the parent scroll pane of a component
+     */
+    private JScrollPane findScrollPane(Component component)
+    {
+        Component parent = component.getParent();
+        while (parent != null)
+        {
+            if (parent instanceof JScrollPane)
+            {
+                return (JScrollPane) parent;
+            }
+            parent = parent.getParent();
+        }
+        return null;
+    }
+
 
     private JPanel createEmptyStatePanel()
     {

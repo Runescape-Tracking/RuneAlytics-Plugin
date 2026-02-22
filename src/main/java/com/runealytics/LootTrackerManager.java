@@ -205,6 +205,28 @@ public class LootTrackerManager
      */
     public void processPlayerLoot(String sourceName, List<ItemStack> items)
     {
+        log.info("=== PROCESSING LOOT ===");
+        log.info("Source: {}", sourceName);
+        log.info("Items: {}", items.size());
+
+        if (sourceName == null || sourceName.trim().isEmpty())
+        {
+            log.warn("Invalid source name - skipping loot");
+            return;
+        }
+
+        if (items == null || items.isEmpty())
+        {
+            log.warn("No items to process - skipping loot");
+            return;
+        }
+
+        // Log each item
+        for (ItemStack item : items)
+        {
+            log.debug("  - Item {}: x{}", item.getId(), item.getQuantity());
+        }
+
         if (!config.enableLootTracking() || !state.isVerified())
         {
             return;
@@ -678,7 +700,6 @@ public class LootTrackerManager
 
         log.info("Boss kills count: {}", data.getBossKills().size());
 
-        // Convert storage data to BossKillStats with kill history
         // CLEAR FIRST to prevent duplicates
         bossKillStats.clear();
 
@@ -699,9 +720,13 @@ public class LootTrackerManager
             log.info("Processing boss: {}, KC: {}", bossName, bossData.getKillCount());
 
             BossKillStats stats = new BossKillStats(bossData.getNpcName(), bossData.getNpcId());
-            stats.setKillCount(bossData.getKillCount());
+
+            // ⚠️ DO NOT set killCount here - addKill() will increment it
+            // stats.setKillCount(bossData.getKillCount()); // ← REMOVED
+
             stats.setPrestige(bossData.getPrestige());
             stats.setTotalLootValue(bossData.getTotalLootValue());
+            stats.setHighestDrop(bossData.getTotalLootValue()); // Set initial highest
 
             // Convert kill records to populate killHistory
             List<LootStorageData.KillRecord> killRecords = bossData.getKills();
@@ -734,16 +759,28 @@ public class LootTrackerManager
                         npcKill.addDrop(lootDrop);
                     }
 
+                    // ✅ addKill() will increment killCount properly
                     stats.addKill(npcKill);
+                }
+
+                // ✅ After adding all kills, verify the count matches
+                if (stats.getKillCount() != bossData.getKillCount())
+                {
+                    log.warn("⚠️ Kill count mismatch for {}: stats={}, disk={}",
+                            bossName, stats.getKillCount(), bossData.getKillCount());
+                    // Force correct count from disk if mismatch
+                    stats.setKillCount(bossData.getKillCount());
                 }
             }
             else
             {
                 log.warn("No kill records for {}, using aggregated data only", bossName);
+                // If no kill records, set kill count from disk
+                stats.setKillCount(bossData.getKillCount());
             }
 
-            log.info("Added stats for {} with {} aggregated drops",
-                    bossName, stats.getAggregatedDrops().size());
+            log.info("Added stats for {} with {} kills, {} aggregated drops",
+                    bossName, stats.getKillCount(), stats.getAggregatedDrops().size());
 
             bossKillStats.put(stats.getNpcName(), stats);
         }
@@ -752,15 +789,16 @@ public class LootTrackerManager
         log.info("Boss names: {}", bossKillStats.keySet());
         log.info("=== END REFRESH DISPLAY DEBUG ===");
 
-        // Update panel
+        // Update panel WITHOUT causing layout changes
         if (panel != null)
         {
             clientThread.invokeLater(() -> {
                 log.info("Triggering panel refresh");
-                panel.refreshDisplay();
+                panel.refreshDisplayPreservingLayout();
             });
         }
     }
+
 
     public void onAccountChanged(String newUsername)
     {
