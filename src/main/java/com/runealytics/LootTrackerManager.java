@@ -2,6 +2,7 @@ package com.runealytics;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.eventbus.Subscribe;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.client.callback.ClientThread;
@@ -30,6 +31,8 @@ public class LootTrackerManager
 
     /** Pattern to extract kill count from game chat (e.g. "Your Zulrah kill count is: 42") */
     private static final Pattern KC_PATTERN = Pattern.compile("Your (.+) kill count is: (\\d+)");
+    private final Map<Integer, Item[]> lastContainerState = new HashMap<>();
+    private final Set<Integer> recentlyKilledNpcIndexes = new HashSet<>();
 
     /**
      * Dedup window for CHEST / PlayerLootReceived events only.
@@ -261,6 +264,147 @@ public class LootTrackerManager
         log.info("LootTrackerManager: shutting down — saving for '{}'",
                 state.getVerifiedUsername());
         storageManager.saveData();
+    }
+
+    public void onNpcDespawned(NpcDespawned event){
+        NPC npc = event.getNpc();
+        if(npc.isDead()){
+            recentlyKilledNpcIndexes.add(npc.getIndex());
+        }
+    }
+
+    public void onGroundItemSpawned(ItemSpawned event){
+        TileItem item = event.getItem();
+
+        if(item.getOwnership() != TileItemOwnership.SELF)
+            return;
+
+        int itemId = item.getId();
+        int qty = item.getQuantity();
+
+        handleDrop(itemId, qty, "GROUND");
+    }
+
+    @Subscribe
+    public void onItemContainerChanged(ItemContainerChanged event)
+    {
+        if (!config.enableLootTracking() || !waitingForTemporossLoot)
+        {
+            return;
+        }
+
+        if (event.getContainerId() != InventoryID.INVENTORY.getId())
+        {
+            return;
+        }
+
+        // Let the inventory settle one more tick before diffing
+        clientThread.invokeLater(() -> {
+            if (inventoryBeforeTempoross == null)
+            {
+                log.warn("Tempoross: no inventory snapshot found — resetting");
+                waitingForTemporossLoot = false;
+                return;
+            }
+
+            List<ItemStack> current = getCurrentInventory();
+            List<ItemStack> newItems = findNewItems(inventoryBeforeTempoross, current);
+
+            if (newItems.isEmpty())
+            {
+                log.debug("Tempoross: no new items yet, still waiting");
+                return; // keep waiting — items may arrive on the next tick
+            }
+
+            log.info("Tempoross: found {} new items from inventory diff", newItems.size());
+            lootManager.processPlayerLoot("Tempoross", newItems);
+
+            // Reset state so we don't double-count
+            waitingForTemporossLoot = false;
+            inventoryBeforeTempoross = null;
+        });
+    }
+
+    private boolean isLootContainer(int id){
+        return id == InventoryID.Inventory.getId()
+                || id == InventoryID.BARROWS_REWARD.getId()
+                || id == InventoryID.CHAMBERS_of_XERIX_REWARD.getId()
+                || id == InventoryID.THEATRE_OF_BLOOD_REWARD.getId()
+                || id == InventoryID.TOA_REWARD.getId()
+                || id == InventoryID.WINTERTODT_REWARD.getId()
+                || id == InventoryID.TEMPORASS_REWARD.getId()
+                || id == InventoryID.DEATH_STORAGE.getId()
+                || id == InventoryID.BANK.getId();
+    }
+
+    private String getContainerName(int id)
+    {
+        if (id == InventoryID.BARROWS_REWARD.getId()) return "BARROWS";
+        if (id == InventoryID.CHAMBERS_OF_XERIC_REWARD.getId()) return "COX";
+        if (id == InventoryID.THEATRE_OF_BLOOD_REWARD.getId()) return "TOB";
+        if (id == InventoryID.TOA_REWARD.getId()) return "TOA";
+        if (id == InventoryID.WINTERTODT_REWARD.getId()) return "WINTERTODT";
+        if (id == InventoryID.TEMPOROSS_REWARD.getId()) return "TEMPOROSS";
+        if (id == InventoryID.DEATH_STORAGE.getId()) return "DEATH_STORAGE";
+        if (id == InventoryID.BANK.getId()) return "BANK";
+        if (id == InventoryID.INVENTORY.getId()) return "INVENTORY";
+        return "UNKNOWN";
+    }
+
+    @Subscribe
+    public void onChatMessage(ChatMessage event)
+    {
+        if (!config.enableLootTracking())
+        {
+            return;
+        }
+
+        ChatMessageType type = event.getType();
+        if (type != ChatMessageType.GAMEMESSAGE && type != ChatMessageType.SPAM)
+        {
+            return;
+        }
+
+        String msg = event.getMessage();
+        String lower = msg.toLowerCase();
+
+        // Tempoross completion — snapshot inventory before reward items arrive
+        if (lower.contains("subdued the spirit") || lower.contains("you have helped to subdue"))
+        {
+            log.info("Tempoross completion message detected — snapshotting inventory");
+            clientThread.invokeLater(() -> {
+                inventoryBeforeTempoross = getCurrentInventory();
+                waitingForTemporossLoot = true;
+                log.info("Tempoross inventory snapshot: {} items", inventoryBeforeTempoross.size());
+            });
+            return;
+        }
+
+        // Kill count messages (e.g. "Your Zulrah kill count is: 42")
+        if (msg.contains("kill count is:") || msg.contains("killcount is:"))
+        {
+            lootManager.parseKillCountMessage(msg);
+        }
+
+        // Detect which chest/activity completed so PlayerLootReceived is attributed
+        detectChestSource(lower);
+    }
+
+    public void onScripPostFired(ScriptPostFired event){
+
+    }
+
+    private void handleDrop(int itemId, int quantity, String source)
+    {
+        if (itemId <= 0 || quantity <= 0)
+            return;
+
+        // Your existing logic here
+        log.debug("Drop detected: {} x{} via {}", itemId, quantity, source);
+
+        // Send to backend
+        // Add to local stats
+        // Update UI
     }
 
     // ==================== LOOT PROCESSING ====================

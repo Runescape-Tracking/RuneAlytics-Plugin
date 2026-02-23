@@ -1,5 +1,6 @@
 package com.runealytics;
 
+import com.google.common.eventbus.Subscribe;
 import com.google.gson.Gson;
 import com.google.inject.Provides;
 import lombok.Getter;
@@ -45,6 +46,9 @@ public class RuneAlyticsPlugin extends Plugin
     // These are the RuneLite widget group IDs for reward/loot interfaces.
     // When onWidgetLoaded fires with one of these IDs, we know loot is incoming
     // via PlayerLootReceived and set lastChestSource accordingly.
+
+
+
 
     /** Barrows reward chest interface */
     private static final int WIDGET_BARROWS_REWARD = 155;
@@ -276,6 +280,11 @@ public class RuneAlyticsPlugin extends Plugin
         // Route through processNpcLoot so NPC ID + combat level are preserved
         // and boss-specific dedup logic applies correctly
         lootManager.processNpcLoot(npc, items);
+    }
+
+    @Subscribe
+    public void onNpcDespawned(NpcDespawned event){
+        LootTrackerManager.onNpcDespawned(event);
     }
 
     // ==================== PLAYER / CHEST LOOT ====================
@@ -738,6 +747,11 @@ public class RuneAlyticsPlugin extends Plugin
                 log.warn("Not verified — skipping data load");
             }
         }, 2, TimeUnit.SECONDS);
+    }
+
+    @Subscribe
+    public void onScriptPostFired(ScriptPostFired event){
+        LootTrackerManager.onScriptPostFired(event);
     }
 
     // ==================== XP TRACKING ====================
