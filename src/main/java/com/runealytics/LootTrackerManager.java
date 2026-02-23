@@ -342,25 +342,50 @@ public class LootTrackerManager
 
     public void processPlayerLoot(String source, List<ItemStack> items)
     {
-        if (items == null || items.isEmpty()) return;
+        if (items == null || items.isEmpty())
+        {
+            log.debug("processPlayerLoot: empty item list for '{}', skipping", source);
+            return;
+        }
 
-        // The manager receives the 'source' string from the plugin
+        if (!state.isVerified())
+        {
+            log.debug("processPlayerLoot: not verified, skipping '{}'", source);
+            return;
+        }
+
+        // Dedup: prevent double-recording if both widget-read AND PlayerLootReceived
+        // fire for the same chest (e.g. Tempoross, Barrows can arrive via two paths)
         String normalizedName = normalizeBossName(source);
+        long now = System.currentTimeMillis();
+        Long lastTime = lastPlayerLootTimestamp.get(normalizedName);
 
-        log.info("RuneAlytics: Recording loot for {}", normalizedName);
-
-        LootRecord record = new LootRecord();
-
-        synchronized (this)
+        if (lastTime != null && (now - lastTime) < PLAYER_LOOT_DEDUPE_WINDOW_MS)
         {
-            state.addLootRecord(record);
-            state.incrementKillCount(normalizedName);
+            log.debug("processPlayerLoot: dedup suppressed '{}' ({}ms ago)",
+                    normalizedName, now - lastTime);
+            return;
+        }
+        lastPlayerLootTimestamp.put(normalizedName, now);
+
+        // Look up NPC ID from name map; 0 for unknown chest sources
+        int npcId = BOSS_NAME_TO_ID.getOrDefault(normalizedName, 0);
+        int world = client.getWorld();
+
+        log.info("Player loot (chest source): '{}' id={} items={}",
+                normalizedName, npcId, items.size());
+
+        List<LootStorageData.DropRecord> drops = convertItemStacksToDropRecords(items);
+
+        if (drops.isEmpty())
+        {
+            log.debug("processPlayerLoot: all items below min value for '{}'", normalizedName);
+            return;
         }
 
-        if (panel != null)
-        {
-            panel.updatePanel();
-        }
+        // Route through the same recordKill path that NPC loot uses —
+        // this saves to disk, syncs to server, and updates the UI
+        recordKill(normalizedName, npcId, 0, world, drops);
     }
 
     /**

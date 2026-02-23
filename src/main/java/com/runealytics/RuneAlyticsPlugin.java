@@ -104,6 +104,13 @@ public class RuneAlyticsPlugin extends Plugin
     /** Seconds before we clear lastKilledBoss to prevent stale attributions */
     private static final long BOSS_CLEAR_TIMEOUT_SECONDS = 30;
 
+    /** Buffer for ground items spawned near a recently killed boss */
+    private final List<ItemStack> groundItemBuffer = new ArrayList<>();
+
+    /** Guards against scheduling multiple flush tasks simultaneously */
+    private final java.util.concurrent.atomic.AtomicBoolean groundItemFlushScheduled
+            = new java.util.concurrent.atomic.AtomicBoolean(false);
+
     // ==================== INJECTED DEPENDENCIES ====================
 
     @Inject private Client client;
@@ -492,24 +499,17 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onItemSpawned(ItemSpawned event)
     {
-        if (!config.enableLootTracking())
+        if (!config.enableLootTracking() || lastKilledBoss == null || lastKillTime == null)
         {
             return;
         }
 
-        if (lastKilledBoss == null || lastKillTime == null)
-        {
-            return;
-        }
-
-        // Expire the attribution window
         long elapsedMs = Instant.now().toEpochMilli() - lastKillTime.toEpochMilli();
         if (elapsedMs > GROUND_ITEM_WINDOW_MS)
         {
             return;
         }
 
-        // Only attribute items that spawn near the boss's last known tile
         TileItem tileItem = event.getItem();
         WorldPoint itemLoc = event.getTile().getWorldLocation();
         WorldPoint bossLoc = lastKilledBoss.getWorldLocation();
@@ -519,14 +519,31 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
-        // Log for debugging — actual processing happens via NpcLootReceived.
-        // Only upgrade this to actual processing if you find a boss that
-        // drops items via ItemSpawned but NOT via NpcLootReceived.
-        log.debug("Ground item near {}: id={} qty={} ({}ms after kill)",
-                lastKilledBoss.getName(),
-                tileItem.getId(),
-                tileItem.getQuantity(),
-                elapsedMs);
+        // Collect all ground items in a small window then batch-process them
+        // to avoid one API call per item. We piggyback on the NPC source.
+        groundItemBuffer.add(new ItemStack(tileItem.getId(), tileItem.getQuantity()));
+
+        // Schedule a flush after 500ms to catch all items from the same kill
+        if (groundItemFlushScheduled.compareAndSet(false, true))
+        {
+            final NPC boss = lastKilledBoss;
+            executorService.schedule(() -> clientThread.invokeLater(() -> {
+                if (!groundItemBuffer.isEmpty())
+                {
+                    List<ItemStack> batch = new ArrayList<>(groundItemBuffer);
+                    groundItemBuffer.clear();
+                    groundItemFlushScheduled.set(false);
+
+                    log.info("Ground items from {} ({}): {} items",
+                            boss.getName(), boss.getId(), batch.size());
+                    lootManager.processNpcLoot(boss, batch);
+                }
+                else
+                {
+                    groundItemFlushScheduled.set(false);
+                }
+            }), 500, TimeUnit.MILLISECONDS);
+        }
     }
 
     // ==================== CHAT MESSAGE DETECTION ====================
@@ -679,6 +696,8 @@ public class RuneAlyticsPlugin extends Plugin
             lastChestSource = null;
             waitingForTemporossLoot = false;
             inventoryBeforeTempoross = null;
+            groundItemBuffer.clear();
+            groundItemFlushScheduled.set(false);
         }
     }
 
