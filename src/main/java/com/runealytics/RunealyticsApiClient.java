@@ -8,11 +8,17 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.io.IOException;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import com.google.gson.reflect.TypeToken;
+import okhttp3.HttpUrl;
+import java.lang.reflect.Type;
+import java.util.HashMap;
+import java.util.Map;
+
 
 @Singleton
 public class RunealyticsApiClient
@@ -33,6 +39,70 @@ public class RunealyticsApiClient
                 .readTimeout(config.syncTimeout(), TimeUnit.SECONDS)
                 .writeTimeout(config.syncTimeout(), TimeUnit.SECONDS)
                 .build();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Feature flags
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Fetches the feature-flag map for {@code username} from the server.
+     *
+     * <p>Called on {@code GameStateChanged → LOGGED_IN} from a background
+     * thread.  The returned map is keyed by feature name (e.g.
+     * {@code "loot_tracker"}, {@code "match_finder"}) and values are
+     * {@code true} (tab visible) or {@code false} (tab hidden).
+     *
+     * <p>On any network or parse error an empty map is returned, which
+     * causes {@link RuneAlyticsPanel#applyFeatureFlags} to leave all tabs
+     * in their current state (safe default).
+     *
+     * @param username the verified RSN (lower-case)
+     * @return mutable map of {@code featureKey → enabled}; never {@code null}
+     */
+    public Map<String, Boolean> fetchFeatureFlags(String username)
+    {
+        HttpUrl url = Objects.requireNonNull(HttpUrl.parse(config.apiUrl() + "/plugin/features"))
+                .newBuilder()
+                .addQueryParameter("username", username.toLowerCase())
+                .build();
+
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("Accept",       "application/json")
+                .addHeader("X-RuneAlytics-Client", "RuneLite")
+                .get()
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute())
+        {
+            if (!response.isSuccessful())
+            {
+                log.warn("Feature-flag request failed: HTTP {}", response.code());
+                return new HashMap<>();
+            }
+
+            String body = response.body() != null ? response.body().string() : "";
+            JsonObject json = gson.fromJson(body, JsonObject.class);
+
+            if (json == null || !json.has("flags"))
+            {
+                log.warn("Feature-flag response missing 'flags' field");
+                return new HashMap<>();
+            }
+
+            // Deserialise the inner "flags" object as Map<String, Boolean>
+            Type mapType = new TypeToken<Map<String, Boolean>>(){}.getType();
+            Map<String, Boolean> flags = gson.fromJson(json.get("flags"), mapType);
+
+            log.info("Feature flags received for {}: {}", username, flags);
+            return flags != null ? flags : new HashMap<>();
+        }
+        catch (IOException e)
+        {
+            log.error("Failed to fetch feature flags for {}: {}", username, e.getMessage());
+            return new HashMap<>();
+        }
     }
 
     public boolean verifyToken(String token, String osrsRsn) throws IOException

@@ -2,14 +2,11 @@ package com.runealytics;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.eventbus.Subscribe;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
+import net.runelite.api.events.*;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.game.ItemManager;
-import net.runelite.api.widgets.Widget;
-import net.runelite.http.api.loottracker.LootRecord;
-import net.runelite.http.api.loottracker.LootRecordType;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -17,609 +14,639 @@ import javax.swing.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static com.runealytics.RuneAlyticsPlugin.WIDGET_VARLAMORE_LAIR_REWARD;
-
+/**
+ * Central coordinator for all loot tracking.
+ *
+ * <h2>Loot paths supported</h2>
+ * <ol>
+ *   <li><b>NpcLootReceived</b> – ground-drop NPCs (monsters, bosses, wilderness)</li>
+ *   <li><b>PlayerLootReceived</b> – chest/raid sources after widget detection</li>
+ *   <li><b>WidgetLoaded</b> → container read – CoX, ToB, ToA, Barrows, Gauntlet,
+ *       Nightmare, Zalcano, Colosseum, Yama, Royal Titans, Wintertodt, Tempoross,
+ *       Clue caskets</li>
+ *   <li><b>ItemContainerChanged</b> (inventory diff) – Tempoross / Wintertodt fallback</li>
+ *   <li><b>ItemSpawned</b> (ground item window) – supplemental fallback for new content</li>
+ *   <li><b>Chat messages</b> – completion / KC detection</li>
+ * </ol>
+ *
+ * <h2>Deduplication</h2>
+ * <ul>
+ *   <li>NPC loot: no dedup (RuneLite fires once per kill; rapid kills of the same
+ *       NPC type must all be counted separately).</li>
+ *   <li>Player / chest loot: 2-second window per source name to prevent double-counting
+ *       when both the widget-read path <em>and</em> PlayerLootReceived fire.</li>
+ * </ul>
+ */
 @Slf4j
 @Singleton
 public class LootTrackerManager
 {
-    // ==================== CONSTANTS ====================
+    // ── KC chat message pattern ───────────────────────────────────────────────
+    private static final Pattern KC_PATTERN =
+            Pattern.compile("Your (.+?) kill count is: (\\d+)", Pattern.CASE_INSENSITIVE);
 
-    /** Pattern to extract kill count from game chat (e.g. "Your Zulrah kill count is: 42") */
-    private static final Pattern KC_PATTERN = Pattern.compile("Your (.+) kill count is: (\\d+)");
-    private final Map<Integer, Item[]> lastContainerState = new HashMap<>();
-    private final Set<Integer> recentlyKilledNpcIndexes = new HashSet<>();
+    // ── Deduplication window (player / chest loot only) ───────────────────────
+    private static final long PLAYER_LOOT_DEDUP_MS = 2_000;
 
-    /**
-     * Dedup window for CHEST / PlayerLootReceived events only.
-     * This prevents double-firing when both the widget method AND the
-     * PlayerLootReceived event capture the same loot.
-     *
-     * <p>NOT applied to NpcLootReceived — RuneLite already guarantees that
-     * event fires exactly once per kill, so rapid kills of the same NPC
-     * (e.g. Ice Giants) must all be recorded independently.</p>
-     */
-    private static final long PLAYER_LOOT_DEDUPE_WINDOW_MS = 2_000;
+    // ── Ground-item attribution window after a kill ───────────────────────────
+    private static final long GROUND_ITEM_WINDOW_MS = 3_000;
 
-    // ==================== BOSS ID WHITELIST ====================
-
-    /**
-     * NPC IDs that are always tracked regardless of the "Track All NPCs" setting.
-     * Extend this list when new bosses are added to OSRS.
-     */
+    // ═════════════════════════════════════════════════════════════════════════
+    //  BOSS NPC-ID WHITELIST
+    //  Add new bosses here when they are released.
+    // ═════════════════════════════════════════════════════════════════════════
     private static final Set<Integer> TRACKED_BOSS_IDS = ImmutableSet.of(
-            // --- VARLAMORE & RECENT (2024-2026) ---
-            13751, 13752, 13753, 13754, 13755, 13756, 13757, 13758, // Royal Titans (Eldric/Branda)
-            14000, 14001, 14002, 14003, 14013, 14014,               // The Hueycoatl
+            // ── Varlamore / 2024-2026 ────────────────────────────────────────
+            13751, 13752, 13753, 13754, 13755, 13756, 13757, 13758, // Royal Titans
+            14000, 14001, 14002, 14003, 14013, 14014,               // Hueycoatl
             13010, 13011, 13012, 13013, 13014, 13015,               // Moons of Peril
-            12821, 12822, 12823, 13668, 13669, 13670,               // Yama (Sol Heredit) & Araxxor
-            12922, 12923, 12924, 12925, 13579, 13580,               // Scurrius & Amoxliatl
+            12821, 12822, 12823, 13668, 13669, 13670,               // Yama / Araxxor
+            12922, 12923, 12924, 12925, 13579, 13580,               // Scurrius / Amoxliatl
             13147, 13148, 13149,                                    // Tormented Demons
 
-            // --- RAIDS ---
-            11750, 11751, 11752, 11753, 11754, 11770, 11771,        // ToA (Tombs of Amascut)
-            10674, 10698, 10702, 10704, 10707, 10847,               // ToB (Theatre of Blood)
+            // ── Raids ─────────────────────────────────────────────────────────
             7554, 7555, 7556,                                       // CoX (Great Olm)
+            10674, 10698, 10702, 10704, 10707, 10847,               // ToB
+            11750, 11751, 11752, 11753, 11754, 11770, 11771,        // ToA
 
-            // --- GOD WARS DUNGEON ---
-            2215, 2216, 2217, 2218, 2205, 2206, 2207,               // Zilyana, Graardor, Kree, K'ril
-            6260, 6261, 6262, 6263, 6203, 6204, 6205, 6206,         // GWD Minions
+            // ── God Wars Dungeon ─────────────────────────────────────────────
+            2215, 2216, 2217, 2218, 2205, 2206, 2207,               // Zilyana / Graardor
+            6260, 6261, 6262, 6263, 6203, 6204, 6205, 6206,         // Kree / K'ril
             11278, 11279, 11280, 11281, 11282,                      // Nex
 
-            // --- WILDERNESS & REVAMPED ---
-            11872, 11867, 11868, 11962, 11963, 11946, 11947,        // Artio, Callisto, Calvar'ion, Vet'ion
-            11993, 11994, 11973, 11974,                             // Spindel, Venenatis
-            2054, 6611, 6612, 6618, 6619, 6615, 319,                // Chaos Fanatic, Scorpia, Crazy Arch, Corp
+            // ── Wilderness ───────────────────────────────────────────────────
+            11872, 11867, 11868, 11962, 11963, 11946, 11947,        // Callisto / Artio / Vet'ion
+            11993, 11994, 11973, 11974,                             // Spindel / Venenatis
+            2054, 6611, 6612, 6618, 6619, 6615, 319,                // Corp / Fanatic / Scorpia
 
-            // --- SLAYER & WORLD BOSSES ---
-            2042, 2043, 2044, 8059, 8060, 50,                       // Zulrah, Vorkath, KBD
-            5862, 5886, 1999, 7855, 494, 496, 7605, 8609,           // Sire, Cerb, Kraken, Smoke Devil, Hydra
-            7544, 7796, 9415, 9416, 9425, 9426,                     // Grotesque Guardians, Nightmare
+            // ── Slayer & World Bosses ────────────────────────────────────────
+            2042, 2043, 2044, 8059, 8060, 50,                       // Zulrah / Vorkath / KBD
+            5862, 5886, 1999, 7855, 494, 496, 7605, 8609,           // Cerb / Sire / Hydra
+            7544, 7796, 9415, 9416, 9425, 9426,                     // Grotesque / Nightmare
+            6230, 6231, 6232, 6233, 6234,                           // Skotizo
+            2265, 2266, 2267, 963, 965, 4303,                       // Dagannoth Kings / KQ
 
-            // --- DESERT TREASURE 2 ---
-            12166, 12167, 12193, 12214, 12205, 12223, 12225, 12227, // Duke, Leviathan, Vardorvis, Whisperer
+            // ── Desert Treasure 2 ────────────────────────────────────────────
+            12166, 12167, 12193, 12214, 12205, 12223, 12225, 12227, // Duke/Leviathan/Vardorvis/Whisperer
 
-            // --- MINIGAME & SKILLING ---
-            2025, 2026, 2027, 2028, 2029, 2030,                     // Barrows
-            10565, 7559, 9050, 10814                                // Tempoross, Wintertodt, Zalcano, Nightmare
+            // ── Minigames / Skilling ─────────────────────────────────────────
+            2025, 2026, 2027, 2028, 2029, 2030,                     // Barrows brothers
+            10565, 7559, 9050, 10814                                 // Tempoross / Wintertodt / Zalcano
     );
 
-    /**
-     * Map of display-friendly boss name → primary NPC ID.
-     * Used when we only have a name string (e.g. from PlayerLootReceived sources).
-     */
-    private static final Map<String, Integer> BOSS_NAME_TO_ID = ImmutableMap.<String, Integer>builder()
-            // --- GOD WARS DUNGEON ---
-            .put("Commander Zilyana",   2215)
-            .put("General Graardor",    2260)
-            .put("Kree'arra",           6260)
-            .put("K'ril Tsutsaroth",    6203)
-            .put("Nex",                 11278)
-            .put("Royal Titans", 13751)
-            .put("The Royal Titans", 13751)
-            .put("Eldric", 13751)
-            .put("Branda", 13751)
+    // ═════════════════════════════════════════════════════════════════════════
+    //  BOSS NAME → PRIMARY NPC-ID MAP
+    //  Used when only a display name is available (e.g. PlayerLootReceived).
+    // ═════════════════════════════════════════════════════════════════════════
+    private static final Map<String, Integer> BOSS_NAME_TO_ID =
+            ImmutableMap.<String, Integer>builder()
+                    // GWD
+                    .put("Commander Zilyana",   2215)
+                    .put("General Graardor",    2260)
+                    .put("Kree'arra",           6260)
+                    .put("K'ril Tsutsaroth",    6203)
+                    .put("Nex",                 11278)
+                    // Varlamore
+                    .put("Royal Titans",        13751)
+                    .put("The Hueycoatl",       14000)
+                    .put("Moons of Peril",      13010)
+                    .put("Yama",                12821)
+                    .put("Araxxor",             13668)
+                    .put("Scurrius",            12922)
+                    .put("Amoxliatl",           13579)
+                    .put("Tormented Demon",     13147)
+                    // Desert Treasure 2
+                    .put("Duke Sucellus",       12166)
+                    .put("The Leviathan",       12193)
+                    .put("Vardorvis",           12205)
+                    .put("The Whisperer",       12225)
+                    // Wilderness
+                    .put("Artio",               11962)
+                    .put("Callisto",            11963)
+                    .put("Calvar'ion",          11946)
+                    .put("Vet'ion",             11947)
+                    .put("Spindel",             11993)
+                    .put("Venenatis",           11973)
+                    .put("Corporeal Beast",     319)
+                    // Raids
+                    .put("Chambers of Xeric",   7554)
+                    .put("Theatre of Blood",    10674)
+                    .put("Tombs of Amascut",    11750)
+                    // Classic bosses
+                    .put("Kalphite Queen",      963)
+                    .put("Dagannoth Prime",     2265)
+                    .put("Dagannoth Rex",       2266)
+                    .put("Dagannoth Supreme",   2267)
+                    .put("Vorkath",             8059)
+                    .put("Zulrah",              2042)
+                    .put("Alchemical Hydra",    8609)
+                    .put("Cerberus",            5862)
+                    .put("Abyssal Sire",        5886)
+                    .put("Kraken",              494)
+                    .put("Skotizo",             6230)
+                    .put("The Nightmare",       9415)
+                    .put("Phosani's Nightmare", 9416)
+                    // Activities
+                    .put("Barrows",             2025)
+                    .put("Corrupted Gauntlet",  9036)
+                    .put("The Gauntlet",        9035)
+                    .put("Zalcano",             9050)
+                    .put("Wintertodt",          7559)
+                    .put("Tempoross",           10565)
+                    .put("Fortis Colosseum",    0)
+                    // Clue scrolls (no NPC ID needed)
+                    .put("Beginner Clue",       0)
+                    .put("Easy Clue",           0)
+                    .put("Medium Clue",         0)
+                    .put("Hard Clue",           0)
+                    .put("Elite Clue",          0)
+                    .put("Master Clue",         0)
+                    .build();
 
-            // --- VARLAMORE & NEW (2024-2026) ---
-            .put("The Hueycoatl",       14000)
-            .put("Moons of Peril",      13010) // Blue Moon
-            .put("Yama",                12821) // Sol Heredit
-            .put("Araxxor",             13668)
-            .put("Scurrius",            12922)
-            .put("Amoxliatl",           13579)
-            .put("Tormented Demon",     13147)
+    // ═════════════════════════════════════════════════════════════════════════
+    //  WIDGET GROUP-IDs FOR CHEST / REWARD INTERFACES
+    //  When onWidgetLoaded fires with one of these IDs we set lastChestSource
+    //  so that the subsequent PlayerLootReceived or container-read is attributed.
+    // ═════════════════════════════════════════════════════════════════════════
 
-            // --- DESERT TREASURE 2 ---
-            .put("Duke Sucellus",       12166)
-            .put("The Leviathan",       12193)
-            .put("Vardorvis",           12205)
-            .put("The Whisperer",       12225)
+    /** Barrows reward chest                                  */
+    static final int WIDGET_BARROWS          = 155;
+    /** Chambers of Xeric reward chest                        */
+    static final int WIDGET_COX              = 234;
+    /** Theatre of Blood reward chest                         */
+    static final int WIDGET_TOB              = 513;
+    /** Tombs of Amascut reward chest                         */
+    static final int WIDGET_TOA              = 773;
+    /** The Corrupted Gauntlet reward chest                   */
+    static final int WIDGET_CORRUPTED_GAUNTLET = 700;
+    /** The Gauntlet (normal) reward chest                    */
+    static final int WIDGET_GAUNTLET         = 595;
+    /** Nightmare / Phosani reward chest                      */
+    static final int WIDGET_NIGHTMARE        = 600;
+    /** Zalcano reward chest                                  */
+    static final int WIDGET_ZALCANO          = 620;
+    /** Tempoross reward pool                                 */
+    static final int WIDGET_TEMPOROSS        = 229;
+    /** Wintertodt reward crate                               */
+    static final int WIDGET_WINTERTODT       = 634;
+    /** Clue scroll reward casket                             */
+    static final int WIDGET_CLUE             = 73;
+    /** Royal Titans (Varlamore lair) reward chest            */
+    static final int WIDGET_ROYAL_TITANS     = 174;
+    /** Yama reward interface                                 */
+    static final int WIDGET_YAMA             = 810;
+    /** Fortis Colosseum reward chest                         */
+    static final int WIDGET_COLOSSEUM        = 867;
+    /** Hespori flower chest (Farming Guild boss)             */
+    static final int WIDGET_HESPORI          = 897;
+    /** Giant's Foundry / Mahogany Homes minigame rewards     */
+    static final int WIDGET_MINIGAME_REWARD  = 300;
 
-            // --- WILDERNESS REVAMPED ---
-            .put("Artio",               11962)
-            .put("Callisto",            11963)
-            .put("Calvar'ion",          11946)
-            .put("Vet'ion",             11947)
-            .put("Spindel",             11993)
-            .put("Venenatis",           11973)
+    // ── InventoryID constants for container reads ────────────────────────────
+    // These are the integer container IDs used in client.getItemContainer(id)
+    private static final int CONTAINER_BARROWS   = 141;
+    private static final int CONTAINER_COX       = 122;
+    private static final int CONTAINER_TOB       = 612;
+    private static final int CONTAINER_TOA       = 141; // same slot reused
+    private static final int CONTAINER_GAUNTLET  = 179;
+    private static final int CONTAINER_NIGHTMARE = 646;
+    private static final int CONTAINER_ZALCANO   = 631;
 
-            // --- RAIDS ---
-            .put("Chambers of Xeric",    7554)
-            .put("Theatre of Blood",    10674)
-            .put("Tombs of Amascut",    11750)
+    // ═════════════════════════════════════════════════════════════════════════
+    //  INJECTED DEPENDENCIES
+    // ═════════════════════════════════════════════════════════════════════════
 
-            // --- CLASSIC BOSSES ---
-            .put("Corporeal Beast",     319)
-            .put("Kalphite Queen",      963)
-            .put("Dagannoth Prime",     2265)
-            .put("Dagannoth Rex",       2266)
-            .put("Dagannoth Supreme",   2267)
-            .put("Vorkath",             8059)
-            .put("Zulrah",              2042)
-            .put("Alchemical Hydra",    8609)
-            .put("Cerberus",            5862)
-            .put("Abyssal Sire",        5886)
-            .put("Kraken",              494)
-            .put("The Nightmare",       9415)
-            .put("Phosani's Nightmare", 9416)
-            .put("Barrows",             2025)
-            .put("Corrupted Gauntlet",  9036)
-            .put("The Gauntlet",        9035)
-            .put("Zalcano",             9050)
-            .put("Wintertodt",          7559)
-            .put("Tempoross",           10565)
-            .build();
-
-    // ==================== DEPENDENCIES ====================
-
-    private final Client client;
-    private final ClientThread clientThread;
-    private final ItemManager itemManager;
-    private final RunealyticsConfig config;
-    private final RuneAlyticsState state;
-    private final LootStorageManager storageManager;
-    private final LootTrackerApiClient apiClient;
+    private final Client                  client;
+    private final ClientThread            clientThread;
+    private final ItemManager             itemManager;
+    private final RunealyticsConfig       config;
+    private final RuneAlyticsState        state;
+    private final LootStorageManager      storageManager;
+    private final LootTrackerApiClient    apiClient;
     private final ScheduledExecutorService executorService;
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  MUTABLE STATE
+    // ═════════════════════════════════════════════════════════════════════════
 
-    // ==================== STATE ====================
-
-    /** Reference to the loot tracker UI panel; may be null before first login */
+    /** Reference to the UI panel; may be null before first login. */
     private LootTrackerPanel panel;
 
-    /**
-     * Whether we have already loaded local loot data this session.
-     * Prevents redundant disk reads on world-hops.
-     */
-    private boolean hasAttemptedSync = false;
+    /** True after local data has been loaded this session (prevents re-load on hop). */
+    private boolean hasLoadedData = false;
 
     /**
-     * Gate flag: server sync is ONLY permitted when a manual sync is in progress.
-     * Prevents automatic background syncing on startup/login.
+     * Gate: server sync is only permitted during a manual sync operation.
+     * Prevents background auto-sync on login/startup.
      */
     private boolean allowSync = false;
 
-    /**
-     * In-memory boss stats map, keyed by normalised NPC name.
-     * This is the primary data structure driving the UI.
-     */
+    /** In-memory boss stats, keyed by normalised NPC name. */
     private final Map<String, BossKillStats> bossKillStats = new ConcurrentHashMap<>();
 
-    /** Listeners notified on every kill or data refresh */
+    /** Listeners notified on every kill or data refresh. */
     private final List<LootTrackerUpdateListener> listeners = new ArrayList<>();
 
     /**
-     * Per-boss hidden item sets. itemId entries in this map are excluded
-     * from the loot display for the associated NPC name.
+     * Per-boss hidden item sets.
+     * Key = normalised NPC name; value = set of hidden itemIds.
      */
     private final Map<String, Set<Integer>> hiddenDrops = new HashMap<>();
 
     /**
-     * Dedup map for PLAYER LOOT ONLY (chest / PlayerLootReceived path).
-     * Key = normalised NPC/source name. Value = last time we processed loot
-     * from this source. Kills within PLAYER_LOOT_DEDUPE_WINDOW_MS are ignored.
-     *
-     * <p>NOT used for NpcLootReceived — that event is already deduplicated by
-     * RuneLite and we must NOT block rapid kills of the same NPC name.</p>
+     * Dedup map for player / chest loot sources only.
+     * Key = normalised source name; value = last time (ms) we processed loot from it.
+     * NOT used for NpcLootReceived – see class javadoc.
      */
-    private final Map<String, Long> lastPlayerLootTimestamp = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastPlayerLootTime = new ConcurrentHashMap<>();
 
-    // ==================== CONSTRUCTOR ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  CONSTRUCTOR
+    // ═════════════════════════════════════════════════════════════════════════
 
     @Inject
     public LootTrackerManager(
-            Client client,
-            ClientThread clientThread,
-            ItemManager itemManager,
-            RunealyticsConfig config,
-            RuneAlyticsState state,
-            LootStorageManager storageManager,
-            LootTrackerApiClient apiClient,
-            ScheduledExecutorService executorService)
+            Client                   client,
+            ClientThread             clientThread,
+            ItemManager              itemManager,
+            RunealyticsConfig        config,
+            RuneAlyticsState         state,
+            LootStorageManager       storageManager,
+            LootTrackerApiClient     apiClient,
+            ScheduledExecutorService executorService
+    )
     {
-        this.client = client;
-        this.clientThread = clientThread;
-        this.itemManager = itemManager;
-        this.config = config;
-        this.state = state;
-        this.storageManager = storageManager;
-        this.apiClient = apiClient;
+        this.client          = client;
+        this.clientThread    = clientThread;
+        this.itemManager     = itemManager;
+        this.config          = config;
+        this.state           = state;
+        this.storageManager  = storageManager;
+        this.apiClient       = apiClient;
         this.executorService = executorService;
     }
 
-    // ==================== LIFECYCLE ====================
-
-    /**
-     * Attaches the UI panel that this manager drives.
-     * Must be called before any loot is processed so highlights/refreshes work.
-     *
-     * @param panel the LootTrackerPanel instance
-     */
-    public void setPanel(LootTrackerPanel panel)
-    {
-        this.panel = panel;
-        log.info("LootTrackerManager: panel reference set");
-    }
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LIFECYCLE
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
      * Called once during plugin startUp().
-     * Resets the sync-attempted flag so data loads fresh on the next login.
+     * Resets the "data loaded" flag so the next login fetches fresh data.
      */
     public void initialize()
     {
         log.info("LootTrackerManager: initialising");
-        hasAttemptedSync = false;
+        hasLoadedData = false;
     }
 
-    /**
-     * Called during plugin shutDown().
-     * Flushes in-memory loot data to disk so nothing is lost.
-     */
+    /** Called during plugin shutDown(). Persists in-memory data to disk. */
     public void shutdown()
     {
-        log.info("LootTrackerManager: shutting down — saving for '{}'",
-                state.getVerifiedUsername());
+        log.info("LootTrackerManager: saving on shutdown");
         storageManager.saveData();
     }
 
-    public void onNpcDespawned(NpcDespawned event){
-        NPC npc = event.getNpc();
-        if(npc.isDead()){
-            recentlyKilledNpcIndexes.add(npc.getIndex());
-        }
-    }
-
-    public void onGroundItemSpawned(ItemSpawned event){
-        TileItem item = event.getItem();
-
-        if(item.getOwnership() != TileItemOwnership.SELF)
-            return;
-
-        int itemId = item.getId();
-        int qty = item.getQuantity();
-
-        handleDrop(itemId, qty, "GROUND");
-    }
-
-    @Subscribe
-    public void onItemContainerChanged(ItemContainerChanged event)
+    /** Attaches the UI panel that this manager drives. */
+    public void setPanel(LootTrackerPanel panel)
     {
-        if (!config.enableLootTracking() || !waitingForTemporossLoot)
-        {
-            return;
-        }
-
-        if (event.getContainerId() != InventoryID.INVENTORY.getId())
-        {
-            return;
-        }
-
-        // Let the inventory settle one more tick before diffing
-        clientThread.invokeLater(() -> {
-            if (inventoryBeforeTempoross == null)
-            {
-                log.warn("Tempoross: no inventory snapshot found — resetting");
-                waitingForTemporossLoot = false;
-                return;
-            }
-
-            List<ItemStack> current = getCurrentInventory();
-            List<ItemStack> newItems = findNewItems(inventoryBeforeTempoross, current);
-
-            if (newItems.isEmpty())
-            {
-                log.debug("Tempoross: no new items yet, still waiting");
-                return; // keep waiting — items may arrive on the next tick
-            }
-
-            log.info("Tempoross: found {} new items from inventory diff", newItems.size());
-            lootManager.processPlayerLoot("Tempoross", newItems);
-
-            // Reset state so we don't double-count
-            waitingForTemporossLoot = false;
-            inventoryBeforeTempoross = null;
-        });
+        this.panel = panel;
     }
 
-    private boolean isLootContainer(int id){
-        return id == InventoryID.Inventory.getId()
-                || id == InventoryID.BARROWS_REWARD.getId()
-                || id == InventoryID.CHAMBERS_of_XERIX_REWARD.getId()
-                || id == InventoryID.THEATRE_OF_BLOOD_REWARD.getId()
-                || id == InventoryID.TOA_REWARD.getId()
-                || id == InventoryID.WINTERTODT_REWARD.getId()
-                || id == InventoryID.TEMPORASS_REWARD.getId()
-                || id == InventoryID.DEATH_STORAGE.getId()
-                || id == InventoryID.BANK.getId();
-    }
-
-    private String getContainerName(int id)
-    {
-        if (id == InventoryID.BARROWS_REWARD.getId()) return "BARROWS";
-        if (id == InventoryID.CHAMBERS_OF_XERIC_REWARD.getId()) return "COX";
-        if (id == InventoryID.THEATRE_OF_BLOOD_REWARD.getId()) return "TOB";
-        if (id == InventoryID.TOA_REWARD.getId()) return "TOA";
-        if (id == InventoryID.WINTERTODT_REWARD.getId()) return "WINTERTODT";
-        if (id == InventoryID.TEMPOROSS_REWARD.getId()) return "TEMPOROSS";
-        if (id == InventoryID.DEATH_STORAGE.getId()) return "DEATH_STORAGE";
-        if (id == InventoryID.BANK.getId()) return "BANK";
-        if (id == InventoryID.INVENTORY.getId()) return "INVENTORY";
-        return "UNKNOWN";
-    }
-
-    @Subscribe
-    public void onChatMessage(ChatMessage event)
-    {
-        if (!config.enableLootTracking())
-        {
-            return;
-        }
-
-        ChatMessageType type = event.getType();
-        if (type != ChatMessageType.GAMEMESSAGE && type != ChatMessageType.SPAM)
-        {
-            return;
-        }
-
-        String msg = event.getMessage();
-        String lower = msg.toLowerCase();
-
-        // Tempoross completion — snapshot inventory before reward items arrive
-        if (lower.contains("subdued the spirit") || lower.contains("you have helped to subdue"))
-        {
-            log.info("Tempoross completion message detected — snapshotting inventory");
-            clientThread.invokeLater(() -> {
-                inventoryBeforeTempoross = getCurrentInventory();
-                waitingForTemporossLoot = true;
-                log.info("Tempoross inventory snapshot: {} items", inventoryBeforeTempoross.size());
-            });
-            return;
-        }
-
-        // Kill count messages (e.g. "Your Zulrah kill count is: 42")
-        if (msg.contains("kill count is:") || msg.contains("killcount is:"))
-        {
-            lootManager.parseKillCountMessage(msg);
-        }
-
-        // Detect which chest/activity completed so PlayerLootReceived is attributed
-        detectChestSource(lower);
-    }
-
-    public void onScripPostFired(ScriptPostFired event){
-
-    }
-
-    private void handleDrop(int itemId, int quantity, String source)
-    {
-        if (itemId <= 0 || quantity <= 0)
-            return;
-
-        // Your existing logic here
-        log.debug("Drop detected: {} x{} via {}", itemId, quantity, source);
-
-        // Send to backend
-        // Add to local stats
-        // Update UI
-    }
-
-    // ==================== LOOT PROCESSING ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 1 – NPC GROUND DROPS  (NpcLootReceived)
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Processes loot from an NPC kill (NpcLootReceived event).
+     * Processes loot from a standard NPC ground-drop kill.
      *
-     * <p>This is the correct path for ALL standard ground-drop NPCs: giants,
-     * dragons, GWD bosses, Vorkath, Zulrah, Cerberus, Hydra, wilderness bosses, etc.</p>
-     *
-     * <p>NO deduplication is applied here because RuneLite's NpcLootReceived
-     * fires exactly once per kill. Applying a time-window dedup here would
-     * incorrectly block rapid kills of the same NPC type (e.g. killing two
-     * Ice Giants within 2 seconds would only record the first one).</p>
-     *
-     * @param npc   the NPC that was killed (provides ID, name, combat level)
-     * @param items the items dropped (already in our internal ItemStack format)
-     */
-    /**
-     * Processes loot from an NPC kill (NpcLootReceived event).
-     *
-     * <p>Logs the NPC name and ID at INFO level unconditionally — this means
-     * even if the NPC is filtered out, you can check logs to find its ID
-     * and add it to TRACKED_BOSS_IDS.</p>
+     * <p>Called from RuneAlyticsPlugin.onNpcLootReceived(). No deduplication is
+     * applied because RuneLite guarantees this event fires exactly once per kill,
+     * and rapid kills of the same NPC type (e.g. two Ice Giants) must both be
+     * counted independently.</p>
      *
      * @param npc   the NPC that was killed
-     * @param items items dropped (our internal ItemStack format)
+     * @param items the dropped items in our internal ItemStack format
      */
     public void processNpcLoot(NPC npc, List<ItemStack> items)
     {
-        if (!config.enableLootTracking())
-        {
+        if (!config.enableLootTracking() || npc == null || npc.getName() == null)
             return;
-        }
 
-        if (npc == null || npc.getName() == null)
-        {
-            log.warn("processNpcLoot: null NPC, skipping");
-            return;
-        }
-
-        // *** Log BEFORE any filtering so we can always find new NPC IDs in logs ***
-        log.info("NPC loot event: name='{}' id={} cb={} items={}",
+        // Always log at INFO so new NPC IDs can be found in logs
+        log.info("NPC loot: '{}' id={} cb={} items={}",
                 npc.getName(), npc.getId(), npc.getCombatLevel(), items.size());
 
         if (!state.isVerified())
         {
-            log.debug("processNpcLoot: not verified, skipping");
+            log.debug("processNpcLoot: not verified – skipping");
             return;
         }
 
-        String npcName = normalizeBossName(npc.getName());
-        int npcId = npc.getId();
-        int combatLevel = npc.getCombatLevel();
-        int world = client.getWorld();
-
-        boolean isBoss = isBoss(npcId, npcName);
+        String name = normalizeBossName(npc.getName());
+        boolean isBoss = isBoss(npc.getId(), name);
 
         if (!isBoss && !config.trackAllNpcs())
         {
-            // Log at WARN (not debug) so the user can see filtered NPCs in standard logs
-            // and add their IDs to TRACKED_BOSS_IDS
-            log.warn("NPC filtered (not a tracked boss, trackAllNpcs=false): '{}' id={}  " +
-                            "→ Enable 'Track All NPCs' in config or add id={} to TRACKED_BOSS_IDS",
-                    npcName, npcId, npcId);
+            log.warn("Filtered NPC (not a tracked boss): '{}' id={} "
+                            + "→ enable 'Track All NPCs' or add id to TRACKED_BOSS_IDS",
+                    name, npc.getId());
             return;
         }
 
-        List<LootStorageData.DropRecord> drops = convertItemStacksToDropRecords(items);
+        List<LootStorageData.DropRecord> drops =
+                convertToDropRecords(items);
 
-        if (drops.isEmpty())
-        {
-            log.debug("processNpcLoot: all items filtered by min value for '{}'", npcName);
-            return;
-        }
+        if (drops.isEmpty()) return;
 
-        recordKill(npcName, npcId, combatLevel, world, drops);
+        recordKill(name, npc.getId(), npc.getCombatLevel(), client.getWorld(), drops);
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 2 – PLAYER / CHEST LOOT  (PlayerLootReceived + Widget reads)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Processes loot from a non-NPC source (chests, raids, activities, clues).
+     *
+     * <p>A 2-second deduplication window is applied per source name to prevent
+     * double-counting when both the widget container-read path
+     * <em>and</em> the PlayerLootReceived event fire for the same chest.</p>
+     *
+     * @param source display name of the loot source (e.g. "Barrows", "Chambers of Xeric")
+     * @param items  item list in our internal ItemStack format
+     */
     public void processPlayerLoot(String source, List<ItemStack> items)
     {
-        if (items == null || items.isEmpty())
+        if (items == null || items.isEmpty() || !state.isVerified())
         {
-            log.debug("processPlayerLoot: empty item list for '{}', skipping", source);
+            log.debug("processPlayerLoot: empty/unverified – source='{}'", source);
             return;
         }
 
-        if (!state.isVerified())
-        {
-            log.debug("processPlayerLoot: not verified, skipping '{}'", source);
-            return;
-        }
+        String name = normalizeBossName(source);
+        long   now  = System.currentTimeMillis();
+        Long   last = lastPlayerLootTime.get(name);
 
-        // Dedup: prevent double-recording if both widget-read AND PlayerLootReceived
-        // fire for the same chest (e.g. Tempoross, Barrows can arrive via two paths)
-        String normalizedName = normalizeBossName(source);
-        long now = System.currentTimeMillis();
-        Long lastTime = lastPlayerLootTimestamp.get(normalizedName);
-
-        if (lastTime != null && (now - lastTime) < PLAYER_LOOT_DEDUPE_WINDOW_MS)
+        if (last != null && (now - last) < PLAYER_LOOT_DEDUP_MS)
         {
             log.debug("processPlayerLoot: dedup suppressed '{}' ({}ms ago)",
-                    normalizedName, now - lastTime);
-            return;
-        }
-        lastPlayerLootTimestamp.put(normalizedName, now);
-
-        // Look up NPC ID from name map; 0 for unknown chest sources
-        int npcId = BOSS_NAME_TO_ID.getOrDefault(normalizedName, 0);
-        int world = client.getWorld();
-
-        log.info("Player loot (chest source): '{}' id={} items={}",
-                normalizedName, npcId, items.size());
-
-        List<LootStorageData.DropRecord> drops = convertItemStacksToDropRecords(items);
-
-        if (drops.isEmpty())
-        {
-            log.debug("processPlayerLoot: all items below min value for '{}'", normalizedName);
+                    name, now - last);
             return;
         }
 
-        // Route through the same recordKill path that NPC loot uses —
-        // this saves to disk, syncs to server, and updates the UI
-        recordKill(normalizedName, npcId, 0, world, drops);
+        lastPlayerLootTime.put(name, now);
+
+        int npcId = BOSS_NAME_TO_ID.getOrDefault(name, 0);
+        log.info("Player loot: '{}' (id={}) items={}", name, npcId, items.size());
+
+        List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
+        if (drops.isEmpty()) return;
+
+        recordKill(name, npcId, 0, client.getWorld(), drops);
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 3 – WIDGET CONTAINER READS
+    //  These are called from RuneAlyticsPlugin.onWidgetLoaded().
+    //  Each method reads items directly from the game's reward container widget.
+    // ═════════════════════════════════════════════════════════════════════════
+
     /**
-     * Converts a list of raw ItemStacks into DropRecords by looking up
-     * GE price and item name via RuneLite's ItemManager.
+     * Reads loot from a numeric InventoryID container (Barrows, CoX, ToB, ToA,
+     * Gauntlet, Nightmare, Zalcano, Wintertodt).
      *
-     * <p>Items below the configured minimumLootValue are silently discarded.</p>
+     * <p>Schedule a short delay before reading so the container has time to
+     * populate after the widget loads.</p>
      *
-     * @param items raw ItemStacks to convert
-     * @return filtered, enriched DropRecord list (may be empty)
+     * @param sourceName  display name for the loot source
+     * @param containerId integer container ID (from the InventoryID enum's getId() value)
      */
-    private List<LootStorageData.DropRecord> convertItemStacksToDropRecords(List<ItemStack> items)
+    public void readRewardContainer(String sourceName, int containerId)
     {
-        List<LootStorageData.DropRecord> drops = new ArrayList<>();
-
-        for (ItemStack item : items)
+        // Delay 300ms to allow the container to populate
+        executorService.schedule(() -> clientThread.invokeLater(() ->
         {
-            ItemComposition comp = itemManager.getItemComposition(item.getId());
-            int gePrice = itemManager.getItemPrice(item.getId());
-            int totalValue = gePrice * item.getQuantity();
-
-            // Apply minimum value filter
-            if (totalValue < config.minimumLootValue())
+            ItemContainer container = client.getItemContainer(containerId);
+            if (container == null)
             {
-                continue;
+                log.warn("readRewardContainer: container {} not found for '{}'",
+                        containerId, sourceName);
+                return;
             }
 
-            LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
-            drop.setItemId(item.getId());
-            drop.setItemName(comp.getName());
-            drop.setQuantity(item.getQuantity());
-            drop.setGePrice(gePrice);
-            drop.setHighAlch(comp.getHaPrice());
-            drop.setTotalValue(totalValue);
-            drop.setHidden(false);
+            List<ItemStack> items = new ArrayList<>();
+            for (Item item : container.getItems())
+            {
+                if (item.getId() > 0 && item.getQuantity() > 0)
+                    items.add(new ItemStack(item.getId(), item.getQuantity()));
+            }
 
-            drops.add(drop);
-        }
+            if (items.isEmpty())
+            {
+                log.debug("readRewardContainer: no items in container {} for '{}'",
+                        containerId, sourceName);
+                return;
+            }
 
-        return drops;
+            log.info("Container read '{}': {} items from container {}",
+                    sourceName, items.size(), containerId);
+            processPlayerLoot(sourceName, items);
+
+        }), 300, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
-    private String lastChestSource = null;
+
     /**
-     * Core kill-recording method.  Increments in-memory stats, persists to disk,
-     * optionally syncs to server, and refreshes the UI panel.
+     * Reads loot from a widget tree by walking all children of the given
+     * widget group ID (used for Royal Titans, Yama, Colosseum, Hespori, and
+     * any other reward interface that doesn't map to a standard InventoryID).
      *
-     * @param npcName     normalised NPC/source name
+     * @param sourceName  display name for the loot source
+     * @param groupId     widget group ID (from onWidgetLoaded event)
+     * @param maxChildren how many child indices to search (usually 100 is safe)
+     */
+    public void readWidgetLoot(String sourceName, int groupId, int maxChildren)
+    {
+        executorService.schedule(() -> clientThread.invokeLater(() ->
+        {
+            List<ItemStack> items = new ArrayList<>();
+
+            for (int i = 0; i < maxChildren; i++)
+            {
+                net.runelite.api.widgets.Widget w = client.getWidget(groupId, i);
+                if (w == null) continue;
+
+                collectWidgetItems(w, items);
+
+                // Recurse one level into children
+                net.runelite.api.widgets.Widget[] children = w.getChildren();
+                if (children != null)
+                {
+                    for (net.runelite.api.widgets.Widget child : children)
+                    {
+                        if (child != null) collectWidgetItems(child, items);
+                    }
+                }
+            }
+
+            if (items.isEmpty())
+            {
+                log.debug("readWidgetLoot: no items found for '{}' (group {})",
+                        sourceName, groupId);
+                return;
+            }
+
+            log.info("Widget loot '{}' (group {}): {} items", sourceName, groupId, items.size());
+            processPlayerLoot(sourceName, items);
+
+        }), 300, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Reads loot from the Clue scroll reward casket widget (group 73, child 10).
+     * The source label must be set by the caller (from detectChestSource).
+     *
+     * @param sourceName clue tier label e.g. "Elite Clue"
+     */
+    public void readClueReward(String sourceName)
+    {
+        executorService.schedule(() -> clientThread.invokeLater(() ->
+        {
+            net.runelite.api.widgets.Widget parent = client.getWidget(WIDGET_CLUE, 10);
+            if (parent == null)
+            {
+                log.warn("Clue reward widget (73,10) not found for '{}'", sourceName);
+                return;
+            }
+
+            List<ItemStack> items = new ArrayList<>();
+            collectWidgetItems(parent, items);
+
+            net.runelite.api.widgets.Widget[] children = parent.getChildren();
+            if (children != null)
+            {
+                for (net.runelite.api.widgets.Widget c : children)
+                    if (c != null) collectWidgetItems(c, items);
+            }
+
+            if (items.isEmpty())
+            {
+                log.debug("readClueReward: no items for '{}'", sourceName);
+                return;
+            }
+
+            log.info("Clue reward '{}': {} items", sourceName, items.size());
+            processPlayerLoot(sourceName, items);
+
+        }), 300, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Extracts item ID and quantity from a widget if it holds an item.
+     *
+     * @param w     widget to inspect
+     * @param items list to add the item to if valid
+     */
+    private void collectWidgetItems(net.runelite.api.widgets.Widget w, List<ItemStack> items)
+    {
+        if (w.getItemId() > 0 && w.getItemQuantity() > 0)
+            items.add(new ItemStack(w.getItemId(), w.getItemQuantity()));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 4 – INVENTORY DIFF  (Tempoross / Wintertodt fallback)
+    //  Called from RuneAlyticsPlugin when an inventory snapshot is available.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Processes a list of new items derived from an inventory diff.
+     * Routes through {@link #processPlayerLoot} with the given source name.
+     *
+     * @param sourceName  activity name e.g. "Tempoross", "Wintertodt"
+     * @param newItems    items that appeared in the inventory since the snapshot
+     */
+    public void processInventoryDiff(String sourceName, List<ItemStack> newItems)
+    {
+        if (newItems == null || newItems.isEmpty()) return;
+        log.info("Inventory diff '{}': {} new items", sourceName, newItems.size());
+        processPlayerLoot(sourceName, newItems);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 5 – GROUND ITEM SPAWN  (ItemSpawned fallback)
+    //  Called from RuneAlyticsPlugin when a ground item spawns near a recent kill.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Processes a batch of ground items attributed to a recently killed NPC.
+     * This is only a fallback for new content not yet supported by RuneLite's
+     * NpcLootReceived event.
+     *
+     * @param npc   the NPC whose kill caused the drops
+     * @param items ground items within the attribution window
+     */
+    public void processGroundItemBatch(NPC npc, List<ItemStack> items)
+    {
+        if (npc == null || items.isEmpty()) return;
+        log.info("Ground items from '{}' (id={}): {} items",
+                npc.getName(), npc.getId(), items.size());
+        processNpcLoot(npc, items);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  CORE KILL RECORDING
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * The single write path for all loot sources.
+     * <ol>
+     *   <li>Updates in-memory {@link BossKillStats}</li>
+     *   <li>Persists to disk via {@link LootStorageManager#addKill}</li>
+     *   <li>Optionally queues an async server sync</li>
+     *   <li>Refreshes the UI panel</li>
+     * </ol>
+     *
+     * @param npcName     normalised NPC / source name
      * @param npcId       NPC ID (0 for chest sources)
      * @param combatLevel NPC combat level (0 for chest sources)
      * @param world       current world number
-     * @param drops       processed, filtered DropRecord list
+     * @param drops       processed, value-filtered DropRecord list
      */
-    private void recordKill(String npcName, int npcId, int combatLevel, int world,
-                            List<LootStorageData.DropRecord> drops)
+    private void recordKill(
+            String npcName, int npcId, int combatLevel, int world,
+            List<LootStorageData.DropRecord> drops)
     {
-        // Get or create in-memory stats for this boss
-        BossKillStats stats = bossKillStats.computeIfAbsent(npcName,
-                k -> new BossKillStats(npcName, npcId));
+        BossKillStats stats = bossKillStats.computeIfAbsent(
+                npcName, k -> new BossKillStats(npcName, npcId));
 
         int killNumber = stats.getKillCount() + 1;
 
-        // Build the NpcKillRecord for in-memory history
+        // Build in-memory kill record
         NpcKillRecord killRecord = new NpcKillRecord(npcName, npcId, combatLevel, world);
         killRecord.setKillNumber(killNumber);
-
-        for (LootStorageData.DropRecord drop : drops)
+        for (LootStorageData.DropRecord d : drops)
         {
             killRecord.addDrop(new LootDrop(
-                    drop.getItemId(),
-                    drop.getItemName(),
-                    drop.getQuantity(),
-                    drop.getGePrice(),
-                    drop.getHighAlch()
-            ));
+                    d.getItemId(), d.getItemName(), d.getQuantity(),
+                    d.getGePrice(), d.getHighAlch()));
         }
 
-        // Update in-memory stats (increments killCount)
         stats.addKill(killRecord);
 
-        // Persist to disk immediately
+        // Persist to disk
         storageManager.addKill(npcName, npcId, combatLevel, killNumber,
                 world, state.getPrestige(), drops);
 
-        // Async server sync (if enabled)
+        // Async server sync (if enabled and not already syncing)
         if (config.syncLootToServer())
         {
-            syncKillToServer(npcName, npcId, combatLevel, killNumber, world, drops);
+            asyncServerSync(npcName, npcId, combatLevel, killNumber, world, drops);
         }
 
-        // Refresh UI on the client thread
+        // Update UI
         if (panel != null)
         {
             clientThread.invokeLater(() -> {
@@ -628,112 +655,72 @@ public class LootTrackerManager
             });
         }
 
-        notifyKillRecorded(stats);
+        notifyListeners(stats, killRecord);
 
-        log.info("Kill recorded: {} #{} — {} drops, {} gp",
+        log.info("Kill recorded: '{}' #{} – {} drops, {} gp",
                 npcName, killNumber, drops.size(),
                 drops.stream().mapToLong(LootStorageData.DropRecord::getTotalValue).sum());
     }
 
-    // ==================== SERVER SYNC ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  SERVER SYNC
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Asynchronously syncs a single kill to the RuneAlytics server.
-     * Called immediately after recordKill if syncLootToServer is enabled.
-     *
-     * @param npcName     normalised NPC name
-     * @param npcId       NPC ID
-     * @param combatLevel NPC combat level
-     * @param killNumber  sequential kill number for this boss
-     * @param world       world the kill occurred on
-     * @param drops       the drop records to send
+     * Submits a single kill sync to the server in the background.
+     * Silently skips if a sync is already in progress or the state is not ready.
      */
-    private void syncKillToServer(String npcName, int npcId, int combatLevel,
-                                  int killNumber, int world,
-                                  List<LootStorageData.DropRecord> drops)
+    private void asyncServerSync(
+            String npcName, int npcId, int combatLevel,
+            int killNumber, int world,
+            List<LootStorageData.DropRecord> drops)
     {
-        if (!state.canSync())
-        {
-            log.debug("Sync skipped — sync in progress or not verified");
-            return;
-        }
+        if (!state.canSync()) return;
 
         executorService.submit(() -> {
             try
             {
                 apiClient.syncSingleKill(
-                        state.getVerifiedUsername(),
-                        npcName, npcId, combatLevel,
-                        killNumber, world,
-                        System.currentTimeMillis(),
-                        state.getPrestige(),
-                        drops
-                );
-                storageManager.markKillsSynced(npcName,
-                        System.currentTimeMillis(), System.currentTimeMillis());
-                log.debug("Synced to server: {} #{}", npcName, killNumber);
+                        state.getVerifiedUsername(), npcName, npcId, combatLevel,
+                        killNumber, world, System.currentTimeMillis(),
+                        state.getPrestige(), drops);
+                storageManager.markKillsSynced(
+                        npcName, System.currentTimeMillis(), System.currentTimeMillis());
             }
             catch (Exception e)
             {
-                log.error("Failed to sync kill to server: {} #{}", npcName, killNumber, e);
+                log.error("Async sync failed for '{}' #{}", npcName, killNumber, e);
             }
         });
     }
 
     /**
-     * Called on login when player is verified.
-     * Loads local data ONLY — does not contact the server.
-     */
-    public void onPlayerLoggedInAndVerified()
-    {
-        if (hasAttemptedSync)
-        {
-            log.info("Local data already loaded this session");
-            return;
-        }
-
-        log.info("Player verified — loading LOCAL data (no auto-sync)");
-        loadFromStorage();
-        hasAttemptedSync = true;
-    }
-
-    /**
      * Downloads kill history from the server and merges it into local storage.
-     * ONLY callable when {@link #allowSync} is true (i.e. during manual sync).
+     * Only callable when {@link #allowSync} is true (set by {@link #performManualSync}).
      */
     public void downloadKillHistoryFromServer()
     {
         if (!allowSync)
         {
-            log.warn("downloadKillHistoryFromServer: blocked — use manual sync button");
+            log.warn("downloadKillHistoryFromServer: blocked – use manual sync");
             return;
         }
 
         String username = state.getVerifiedUsername();
-        if (username == null || username.isEmpty() || !state.canSync())
-        {
-            log.warn("downloadKillHistoryFromServer: cannot sync");
-            return;
-        }
+        if (username == null || !state.canSync()) return;
 
         try
         {
             state.startSync();
-            log.info("Downloading kill history for '{}'", username);
-
             Map<String, LootStorageData.BossKillData> serverData =
                     apiClient.fetchKillHistoryFromServer(username);
 
-            if (serverData == null || serverData.isEmpty())
+            if (serverData != null && !serverData.isEmpty())
             {
-                log.info("No server kill history for '{}'", username);
-                return;
+                storageManager.mergeServerData(serverData);
+                refreshLootDisplay();
+                log.info("Merged {} bosses from server", serverData.size());
             }
-
-            storageManager.mergeServerData(serverData);
-            refreshLootDisplay();
-
-            log.info("Downloaded and merged {} bosses from server", serverData.size());
         }
         catch (Exception e)
         {
@@ -746,95 +733,72 @@ public class LootTrackerManager
     }
 
     /**
-     * Uploads all locally unsynced kills to the server in batches of 50.
-     * Marks uploaded kills as synced in local storage on success.
+     * Uploads all locally unsynced kills in batches of 50.
+     * Marks each batch as synced on success.
      */
     public void uploadUnsyncedKills()
     {
         String username = state.getVerifiedUsername();
-        if (username == null || username.isEmpty() || !state.canSync())
-        {
-            return;
-        }
+        if (username == null || !state.canSync()) return;
 
         try
         {
             state.startSync();
-
-            Map<String, List<LootStorageData.KillRecord>> unsyncedKills =
+            Map<String, List<LootStorageData.KillRecord>> unsynced =
                     storageManager.getAllUnsyncedKills();
 
-            if (unsyncedKills.isEmpty())
+            if (unsynced.isEmpty()) { log.debug("No unsynced kills"); return; }
+
+            int total = unsynced.values().stream().mapToInt(List::size).sum();
+            log.info("Uploading {} unsynced kills across {} bosses", total, unsynced.size());
+
+            final int BATCH = 50;
+            List<LootStorageData.KillRecord> all = new ArrayList<>();
+            Map<String, String> tsToName = new HashMap<>();
+
+            for (Map.Entry<String, List<LootStorageData.KillRecord>> e : unsynced.entrySet())
             {
-                log.debug("No unsynced kills to upload");
-                return;
-            }
-
-            int total = unsyncedKills.values().stream().mapToInt(List::size).sum();
-            log.info("Uploading {} unsynced kills across {} bosses", total, unsyncedKills.size());
-
-            final int BATCH_SIZE = 50;
-            List<LootStorageData.KillRecord> allKills = new ArrayList<>();
-            Map<String, String> killTimeToBossName = new HashMap<>();
-
-            for (Map.Entry<String, List<LootStorageData.KillRecord>> entry : unsyncedKills.entrySet())
-            {
-                for (LootStorageData.KillRecord kill : entry.getValue())
+                for (LootStorageData.KillRecord k : e.getValue())
                 {
-                    allKills.add(kill);
-                    killTimeToBossName.put(String.valueOf(kill.getTimestamp()), entry.getKey());
+                    all.add(k);
+                    tsToName.put(String.valueOf(k.getTimestamp()), e.getKey());
                 }
             }
 
-            for (int i = 0; i < allKills.size(); i += BATCH_SIZE)
+            for (int i = 0; i < all.size(); i += BATCH)
             {
-                int end = Math.min(i + BATCH_SIZE, allKills.size());
-                List<LootStorageData.KillRecord> batch = allKills.subList(i, end);
+                List<LootStorageData.KillRecord> batch =
+                        all.subList(i, Math.min(i + BATCH, all.size()));
 
-                Map<String, List<LootStorageData.KillRecord>> batchByBoss = new HashMap<>();
-                for (LootStorageData.KillRecord kill : batch)
+                Map<String, List<LootStorageData.KillRecord>> byBoss = new HashMap<>();
+                for (LootStorageData.KillRecord k : batch)
                 {
-                    String boss = killTimeToBossName.get(String.valueOf(kill.getTimestamp()));
-                    batchByBoss.computeIfAbsent(boss, k -> new ArrayList<>()).add(kill);
+                    String boss = tsToName.get(String.valueOf(k.getTimestamp()));
+                    byBoss.computeIfAbsent(boss, x -> new ArrayList<>()).add(k);
                 }
 
-                log.info("Uploading batch {}/{} ({} kills)",
-                        (i / BATCH_SIZE) + 1,
-                        (allKills.size() + BATCH_SIZE - 1) / BATCH_SIZE,
-                        batch.size());
-
-                boolean success = apiClient.bulkSyncKills(username, batchByBoss);
-
-                if (success)
+                boolean ok = apiClient.bulkSyncKills(username, byBoss);
+                if (ok)
                 {
-                    for (Map.Entry<String, List<LootStorageData.KillRecord>> entry : batchByBoss.entrySet())
+                    for (Map.Entry<String, List<LootStorageData.KillRecord>> e : byBoss.entrySet())
                     {
-                        List<LootStorageData.KillRecord> kills = entry.getValue();
-                        if (!kills.isEmpty())
-                        {
-                            long minTs = kills.stream().mapToLong(LootStorageData.KillRecord::getTimestamp).min().orElse(0);
-                            long maxTs = kills.stream().mapToLong(LootStorageData.KillRecord::getTimestamp).max().orElse(Long.MAX_VALUE);
-                            storageManager.markKillsSynced(entry.getKey(), minTs, maxTs);
-                        }
+                        long min = e.getValue().stream().mapToLong(LootStorageData.KillRecord::getTimestamp).min().orElse(0);
+                        long max = e.getValue().stream().mapToLong(LootStorageData.KillRecord::getTimestamp).max().orElse(Long.MAX_VALUE);
+                        storageManager.markKillsSynced(e.getKey(), min, max);
                     }
                 }
                 else
                 {
-                    log.error("Batch upload failed — stopping");
+                    log.error("Batch upload failed – aborting");
                     break;
                 }
 
-                if (i + BATCH_SIZE < allKills.size())
-                {
-                    Thread.sleep(500);
-                }
+                if (i + BATCH < all.size()) Thread.sleep(500);
             }
-
-            log.info("Batch upload complete");
         }
         catch (Exception e)
         {
-            log.error("Failed to upload unsynced kills", e);
+            log.error("Upload unsynced kills failed", e);
         }
         finally
         {
@@ -843,64 +807,22 @@ public class LootTrackerManager
     }
 
     /**
-     * Loads local loot data for a specific username without performing any server sync.
-     * Safe to call on login; does not modify server state.
+     * Performs a full bidirectional sync: download from server, upload local,
+     * refresh UI. This is the ONLY way server sync is triggered.
      *
-     * @param username the OSRS username to load data for
-     */
-    public void loadLocalDataForUser(String username)
-    {
-        log.info("Loading local loot data for '{}'", username);
-
-        LootStorageData storageData = storageManager.loadLootData(username);
-
-        if (storageData == null || storageData.getBossKills().isEmpty())
-        {
-            log.info("No local data for '{}'", username);
-            clientThread.invokeLater(() -> {
-                bossKillStats.clear();
-                if (panel != null) panel.refreshDisplay();
-            });
-            return;
-        }
-
-        clientThread.invokeLater(this::refreshLootDisplay);
-    }
-
-    /**
-     * Performs a bidirectional manual sync: download from server, upload local,
-     * then refresh the UI.  This is the ONLY way to sync with the server.
-     *
-     * <p>The {@link #allowSync} gate is set to true only for the duration of
-     * this call and reset in the finally block.</p>
-     *
-     * @param username the verified OSRS username to sync for
+     * @param username verified OSRS username
      */
     public void performManualSync(String username)
     {
-        if (username == null || username.isEmpty())
-        {
-            log.warn("performManualSync: no username");
-            return;
-        }
-
-        log.info("=== MANUAL SYNC STARTED for '{}' ===", username);
+        if (username == null || username.isEmpty()) return;
 
         executorService.submit(() -> {
             try
             {
                 allowSync = true;
-
-                log.info("Step 1: Downloading server kill history");
                 downloadKillHistoryFromServer();
-
-                log.info("Step 2: Uploading unsynced local kills");
                 uploadUnsyncedKills();
-
-                log.info("Step 3: Refreshing UI");
                 clientThread.invokeLater(this::refreshLootDisplay);
-
-                log.info("=== MANUAL SYNC COMPLETE ===");
 
                 clientThread.invokeLater(() -> {
                     if (panel != null) panel.showSyncCompleted();
@@ -920,41 +842,37 @@ public class LootTrackerManager
         });
     }
 
-    /**
-     * @deprecated Automatic sync on startup is disabled. Use {@link #performManualSync} instead.
-     */
-    @Deprecated
-    public void syncWithServerOnStartup()
-    {
-        log.warn("syncWithServerOnStartup() called but automatic sync is disabled — use manual sync");
-    }
-
-    // ==================== DATA MANAGEMENT ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  DATA MANAGEMENT
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Loads loot data from local disk and rebuilds the in-memory stats map.
+     * Loads loot data from disk and rebuilds in-memory stats.
      * Called after login when the player is verified.
      */
     public void loadFromStorage()
     {
-        LootStorageData data = storageManager.loadData();
-        if (data == null || data.getBossKills().isEmpty())
-        {
-            log.info("No stored loot data found");
-            return;
-        }
-
-        log.info("Loading stored data: {} bosses", data.getBossKills().size());
+        if (hasLoadedData) { log.debug("Data already loaded this session"); return; }
+        log.info("Loading local loot data");
         refreshLootDisplay();
+        hasLoadedData = true;
     }
 
     /**
-     * Rebuilds {@link #bossKillStats} from the current on-disk LootStorageData
-     * and triggers a UI refresh.  Called after any operation that changes
-     * the underlying data (load, merge, prestige, clear).
+     * Loads loot data for a specific username (used on account switch).
      *
-     * <p>Clears the map first to avoid duplicates, then re-adds every boss
-     * by replaying kill records through BossKillStats.addKill().</p>
+     * @param username OSRS username to load for
+     */
+    public void loadLocalDataForUser(String username)
+    {
+        log.info("Loading local data for '{}'", username);
+        storageManager.loadLootData(username);
+        clientThread.invokeLater(this::refreshLootDisplay);
+    }
+
+    /**
+     * Rebuilds {@link #bossKillStats} from the current on-disk data and
+     * triggers a UI refresh. Call after any operation that modifies stored data.
      */
     private void refreshLootDisplay()
     {
@@ -962,159 +880,121 @@ public class LootTrackerManager
 
         if (data == null || data.getBossKills().isEmpty())
         {
-            log.info("refreshLootDisplay: no data");
             bossKillStats.clear();
-            if (panel != null) clientThread.invokeLater(() -> panel.refreshDisplay());
+            if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
             return;
         }
 
-        log.debug("refreshLootDisplay: {} bosses", data.getBossKills().size());
-
-        // Clear first to prevent stale/duplicate entries
         bossKillStats.clear();
 
         for (Map.Entry<String, LootStorageData.BossKillData> entry : data.getBossKills().entrySet())
         {
-            String bossName = entry.getKey();
-            LootStorageData.BossKillData bossData = entry.getValue();
+            LootStorageData.BossKillData bd = entry.getValue();
+            BossKillStats stats = new BossKillStats(bd.getNpcName(), bd.getNpcId());
+            stats.setPrestige(bd.getPrestige());
 
-            BossKillStats stats = new BossKillStats(bossData.getNpcName(), bossData.getNpcId());
-            stats.setPrestige(bossData.getPrestige());
-            stats.setTotalLootValue(bossData.getTotalLootValue());
-            stats.setHighestDrop(bossData.getTotalLootValue());
-
-            List<LootStorageData.KillRecord> killRecords = bossData.getKills();
-
-            if (killRecords != null && !killRecords.isEmpty())
+            if (bd.getKills() != null)
             {
-                for (LootStorageData.KillRecord killRecord : killRecords)
+                for (LootStorageData.KillRecord kr : bd.getKills())
                 {
-                    NpcKillRecord npcKill = new NpcKillRecord(
-                            bossData.getNpcName(),
-                            bossData.getNpcId(),
-                            killRecord.getCombatLevel(),
-                            killRecord.getWorld()
-                    );
-                    npcKill.setTimestamp(killRecord.getTimestamp());
-                    npcKill.setKillNumber(killRecord.getKillNumber());
+                    NpcKillRecord nkr = new NpcKillRecord(
+                            bd.getNpcName(), bd.getNpcId(),
+                            kr.getCombatLevel(), kr.getWorld());
+                    nkr.setTimestamp(kr.getTimestamp());
+                    nkr.setKillNumber(kr.getKillNumber());
 
-                    for (LootStorageData.DropRecord drop : killRecord.getDrops())
+                    for (LootStorageData.DropRecord dr : kr.getDrops())
                     {
-                        npcKill.addDrop(new LootDrop(
-                                drop.getItemId(), drop.getItemName(),
-                                drop.getQuantity(), drop.getGePrice(), drop.getHighAlch()
-                        ));
+                        nkr.addDrop(new LootDrop(
+                                dr.getItemId(), dr.getItemName(),
+                                dr.getQuantity(), dr.getGePrice(), dr.getHighAlch()));
                     }
 
-                    stats.addKill(npcKill); // increments killCount
+                    stats.addKill(nkr);
                 }
 
-                // Sanity-check: if kill count diverges from disk, trust disk
-                if (stats.getKillCount() != bossData.getKillCount())
+                // Trust disk KC if in-memory replay diverges
+                if (stats.getKillCount() != bd.getKillCount())
                 {
-                    log.warn("Kill count mismatch for '{}': memory={} disk={}",
-                            bossName, stats.getKillCount(), bossData.getKillCount());
-                    stats.setKillCount(bossData.getKillCount());
+                    log.warn("KC mismatch '{}': memory={} disk={}",
+                            entry.getKey(), stats.getKillCount(), bd.getKillCount());
+                    stats.setKillCount(bd.getKillCount());
                 }
             }
             else
             {
-                // No individual kill records — fall back to aggregated count
-                stats.setKillCount(bossData.getKillCount());
+                stats.setKillCount(bd.getKillCount());
             }
 
             bossKillStats.put(stats.getNpcName(), stats);
         }
 
-        log.debug("refreshLootDisplay: rebuilt {} bosses", bossKillStats.size());
+        log.debug("refreshLootDisplay: {} bosses loaded", bossKillStats.size());
 
         if (panel != null)
-        {
-            clientThread.invokeLater(() -> panel.refreshDisplayPreservingLayout());
-        }
+            SwingUtilities.invokeLater(() -> panel.refreshDisplay());
     }
 
-    /**
-     * Called when the player switches accounts (different RSN detected).
-     * Clears in-memory state and reloads from local storage for the new account.
-     *
-     * @param newUsername the new account's OSRS username
-     */
+    /** Called when the player switches OSRS accounts. */
     public void onAccountChanged(String newUsername)
     {
-        log.info("Account changed to '{}'", newUsername);
         bossKillStats.clear();
-        hasAttemptedSync = false;
+        hasLoadedData = false;
         loadFromStorage();
-
-        if (panel != null)
-        {
-            SwingUtilities.invokeLater(() -> panel.refreshDisplay());
-        }
+        if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
     }
 
-    /**
-     * Returns an unmodifiable view of all in-memory boss stats.
-     *
-     * @return map of normalised boss name → BossKillStats
-     */
+    /** Called on login once the player is verified. */
+    public void onPlayerLoggedInAndVerified()
+    {
+        loadFromStorage();
+    }
+
+    // ── Public read accessors ─────────────────────────────────────────────────
+
+    /** Returns an unmodifiable view of all in-memory boss stats. */
     public Map<String, BossKillStats> getBossKillStats()
     {
         return Collections.unmodifiableMap(bossKillStats);
     }
 
-    /**
-     * Returns all boss stats as a list (order is not guaranteed).
-     *
-     * @return list of all in-memory BossKillStats
-     */
+    /** Returns all boss stats as a flat list (order not guaranteed). */
     public List<BossKillStats> getAllBossStats()
     {
         return new ArrayList<>(bossKillStats.values());
     }
 
-    /**
-     * Clears all loot data from memory, disk, and hidden-drop settings.
-     * Also clears the player loot dedup map.
-     */
+    // ── Data mutation ─────────────────────────────────────────────────────────
+
+    /** Wipes all in-memory and on-disk loot data for the current user. */
     public void clearAllData()
     {
         bossKillStats.clear();
         hiddenDrops.clear();
-        lastPlayerLootTimestamp.clear();
+        lastPlayerLootTime.clear();
         storageManager.clearData();
-
-        if (panel != null)
-        {
-            clientThread.invokeLater(() -> panel.refreshDisplay());
-        }
-
+        if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
         notifyDataRefresh();
     }
 
     /**
      * Removes all tracked data for a single boss.
      *
-     * @param npcName the normalised boss name to clear
+     * @param npcName normalised boss name
      */
     public void clearBossData(String npcName)
     {
         bossKillStats.remove(npcName);
         hiddenDrops.remove(npcName);
-        lastPlayerLootTimestamp.remove(npcName);
+        lastPlayerLootTime.remove(npcName);
         storageManager.saveData();
-
-        if (panel != null)
-        {
-            clientThread.invokeLater(() -> panel.refreshDisplay());
-        }
+        if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
     }
 
     /**
      * Resets kill stats for a boss and increments its prestige counter.
-     * Kill history and drops are cleared but prestige level is preserved.
      *
-     * @param npcName the normalised boss name to prestige
+     * @param npcName normalised boss name
      */
     public void prestigeBoss(String npcName)
     {
@@ -1123,195 +1003,330 @@ public class LootTrackerManager
         {
             stats.prestige();
             storageManager.saveData();
-
-            if (panel != null)
-            {
-                clientThread.invokeLater(() -> panel.refreshDisplay());
-            }
+            if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
         }
     }
 
-    // ==================== HIDDEN DROPS ====================
+    // ── Hidden drops ──────────────────────────────────────────────────────────
 
-    /**
-     * Returns true if the given item has been hidden for the given NPC.
-     *
-     * @param npcName normalised NPC name
-     * @param itemId  the item ID to check
-     */
+    /** Returns true if itemId is hidden for the given NPC. */
     public boolean isDropHidden(String npcName, int itemId)
     {
-        Set<Integer> hidden = hiddenDrops.get(npcName);
-        return hidden != null && hidden.contains(itemId);
+        Set<Integer> h = hiddenDrops.get(npcName);
+        return h != null && h.contains(itemId);
     }
 
-    /**
-     * Hides a specific item drop for an NPC so it is excluded from the UI.
-     *
-     * @param npcName normalised NPC name
-     * @param itemId  the item ID to hide
-     */
+    /** Hides a specific item for an NPC (excludes it from the UI grid). */
     public void hideDropForNpc(String npcName, int itemId)
     {
         hiddenDrops.computeIfAbsent(npcName, k -> new HashSet<>()).add(itemId);
         storageManager.saveData();
     }
 
-    /**
-     * Un-hides a previously hidden item drop for an NPC.
-     *
-     * @param npcName normalised NPC name
-     * @param itemId  the item ID to un-hide
-     */
+    /** Removes a previously hidden item for an NPC. */
     public void unhideDropForNpc(String npcName, int itemId)
     {
-        Set<Integer> hidden = hiddenDrops.get(npcName);
-        if (hidden != null)
+        Set<Integer> h = hiddenDrops.get(npcName);
+        if (h != null)
         {
-            hidden.remove(itemId);
-            if (hidden.isEmpty()) hiddenDrops.remove(npcName);
+            h.remove(itemId);
+            if (h.isEmpty()) hiddenDrops.remove(npcName);
             storageManager.saveData();
         }
     }
 
-    // ==================== UTILITY ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  UTILITY – BOSS DETECTION
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Returns true if the NPC should be tracked as a boss, either because
-     * its ID is in the whitelist or its name matches known boss name patterns.
+     * Returns true if this NPC should be treated as a tracked boss.
+     * Checks the ID whitelist first, then falls back to name-based matching.
      *
-     * @param npcId   the NPC's ID
-     * @param npcName the NPC's name
+     * @param npcId  NPC ID from the game
+     * @param name   normalised NPC name
+     * @return true if the NPC should be tracked
      */
-    public boolean isBoss(int npcId, String npcName)
+    public boolean isBoss(int npcId, String name)
     {
-        return TRACKED_BOSS_IDS.contains(npcId)
-                || (npcName != null && isBossName(npcName));
+        return TRACKED_BOSS_IDS.contains(npcId) || matchesBossName(name);
     }
 
     /**
-     * Returns true if the name string matches any known boss name pattern.
-     * Used as a fallback when the NPC ID is not in TRACKED_BOSS_IDS.
+     * Name-based boss matching for NPCs not yet in the ID whitelist.
+     * Add new keywords here when new content is released.
      *
-     * @param name the NPC name to test (should be lowercase or normalised)
+     * @param name normalised NPC name (may be lower-case or mixed)
+     * @return true if the name suggests a boss
      */
-    private boolean isBossName(String name)
+    private boolean matchesBossName(String name)
     {
         if (name == null) return false;
-        String lower = name.toLowerCase();
-
-        return lower.contains("duke")        || lower.contains("leviathan")
-                || lower.contains("vardorvis")   || lower.contains("whisperer")
-                || lower.contains("zulrah")      || lower.contains("vorkath")
-                || lower.contains("cerberus")    || lower.contains("nightmare")
-                || lower.contains("gauntlet")    || lower.contains("barrows")
-                || lower.contains("yama")        || lower.contains("tempoross")
-                || lower.contains("wintertodt")  || lower.contains("zalcano")
-                // Varlamore / new content — Ice King, Fire Queen, etc.
-                || lower.contains("ice king")    || lower.contains("fire queen")
-                || lower.contains("eldric")      || lower.contains("branda")
-                // Generic patterns OSRS uses for named mini-bosses
-                || lower.contains(" king")       || lower.contains(" queen")
-                || lower.contains(" lord")       || lower.contains(" guardian")
-                || lower.contains("abyssal")     || lower.contains("thermonuclear")
-                || lower.contains("grotesque");
+        String l = name.toLowerCase();
+        return l.contains("duke")        || l.contains("leviathan")
+                || l.contains("vardorvis")   || l.contains("whisperer")
+                || l.contains("zulrah")      || l.contains("vorkath")
+                || l.contains("cerberus")    || l.contains("nightmare")
+                || l.contains("gauntlet")    || l.contains("barrows")
+                || l.contains("yama")        || l.contains("tempoross")
+                || l.contains("wintertodt")  || l.contains("zalcano")
+                || l.contains("eldric")      || l.contains("branda")
+                || l.contains("hueycoatl")   || l.contains("araxxor")
+                || l.contains("scurrius")    || l.contains("amoxliatl")
+                || l.contains("colosseum")   || l.contains("skotizo")
+                || l.contains("hespori")     || l.contains("abyssal")
+                || l.contains("thermonuclear")
+                || l.contains("grotesque")   || l.contains("kalphite")
+                || l.contains("dagannoth")   || l.contains("corporeal")
+                || l.contains("tormented demon");
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  UTILITY – NAME NORMALISATION
+    // ═════════════════════════════════════════════════════════════════════════
+
     /**
-     * Maps variant NPC names to a canonical display name used as the map key.
-     * Call this on every name before using it as a key in bossKillStats.
+     * Maps variant NPC / source names to a single canonical display name.
+     * Call this on every name before using it as a map key.
      *
-     * @param name raw NPC/source name
-     * @return canonical display name, never null
+     * @param raw raw name from NPC, widget, or chat
+     * @return canonical name, never null
      */
-    public String normalizeBossName(String name)
+    public String normalizeBossName(String raw)
     {
-        if (name == null || name.isEmpty()) return "Unknown";
-        String lower = name.toLowerCase();
+        if (raw == null || raw.isEmpty()) return "Unknown";
+        String l = raw.toLowerCase();
 
-        if (lower.contains("corrupted gauntlet"))                    return "Corrupted Gauntlet";
-        if (lower.contains("gauntlet"))                              return "The Gauntlet";
-        if (lower.contains("barrows"))                               return "Barrows";
-        if (lower.contains("chambers of xeric"))                     return "Chambers of Xeric";
-        if (lower.contains("theatre of blood"))                      return "Theatre of Blood";
-        if (lower.contains("tombs of amascut"))                      return "Tombs of Amascut";
-        if (lower.contains("fortis colosseum") || lower.contains("colosseum")) return "Fortis Colosseum";
-        if (lower.contains("duke") || lower.contains("sucellus"))    return "Duke Sucellus";
-        if (lower.contains("leviathan"))                             return "The Leviathan";
-        if (lower.contains("vardorvis"))                             return "Vardorvis";
-        if (lower.contains("whisperer"))                             return "The Whisperer";
-        if (lower.contains("zulrah"))                                return "Zulrah";
-        if (lower.contains("vorkath"))                               return "Vorkath";
-        if (lower.contains("cerberus"))                              return "Cerberus";
-        if (lower.contains("hydra"))                                 return "Alchemical Hydra";
-        if (lower.contains("graardor"))                              return "General Graardor";
-        if (lower.contains("zilyana"))                               return "Commander Zilyana";
-        if (lower.contains("kree"))                                  return "Kree'arra";
-        if (lower.contains("kril"))                                  return "K'ril Tsutsaroth";
-        if (lower.contains("yama"))                                  return "Yama";
-        if (lower.contains("tempoross"))                             return "Tempoross";
-        if (lower.contains("wintertodt"))                            return "Wintertodt";
-        if (lower.contains("royal titans") || lower.contains("branda") || lower.contains("eldric"))                            return "Royal Titans";
+        // ── Raids ──────────────────────────────────────────────────────────────
+        if (l.contains("corrupted gauntlet"))             return "Corrupted Gauntlet";
+        if (l.contains("gauntlet"))                       return "The Gauntlet";
+        if (l.contains("chambers") || l.contains("cox"))  return "Chambers of Xeric";
+        if (l.contains("theatre") || l.contains("tob"))   return "Theatre of Blood";
+        if (l.contains("tombs") || l.contains("toa"))     return "Tombs of Amascut";
 
+        // ── GWD ───────────────────────────────────────────────────────────────
+        if (l.contains("zilyana"))                        return "Commander Zilyana";
+        if (l.contains("graardor"))                       return "General Graardor";
+        if (l.contains("kree"))                           return "Kree'arra";
+        if (l.contains("kril"))                           return "K'ril Tsutsaroth";
+        if (l.equals("nex"))                              return "Nex";
 
-        return name.trim();
+        // ── Wilderness ────────────────────────────────────────────────────────
+        if (l.contains("artio"))                          return "Artio";
+        if (l.contains("callisto"))                       return "Callisto";
+        if (l.contains("calvar"))                         return "Calvar'ion";
+        if (l.contains("vet'ion") || l.contains("vetion"))return "Vet'ion";
+        if (l.contains("spindel"))                        return "Spindel";
+        if (l.contains("venenatis"))                      return "Venenatis";
+        if (l.contains("corporeal"))                      return "Corporeal Beast";
+        if (l.contains("chaos fanatic"))                  return "Chaos Fanatic";
+        if (l.contains("scorpia"))                        return "Scorpia";
+        if (l.contains("crazy archaeologist"))            return "Crazy Archaeologist";
+
+        // ── Desert Treasure 2 ─────────────────────────────────────────────────
+        if (l.contains("duke") || l.contains("sucellus")) return "Duke Sucellus";
+        if (l.contains("leviathan"))                      return "The Leviathan";
+        if (l.contains("vardorvis"))                      return "Vardorvis";
+        if (l.contains("whisperer"))                      return "The Whisperer";
+
+        // ── Varlamore / new content ───────────────────────────────────────────
+        if (l.contains("royal titans") || l.contains("eldric") || l.contains("branda"))
+            return "Royal Titans";
+        if (l.contains("hueycoatl"))                      return "The Hueycoatl";
+        if (l.contains("moons of peril") || l.contains("blue moon")
+                || l.contains("blood moon") || l.contains("eclipse moon"))
+            return "Moons of Peril";
+        if (l.contains("yama"))                           return "Yama";
+        if (l.contains("araxxor"))                        return "Araxxor";
+        if (l.contains("scurrius"))                       return "Scurrius";
+        if (l.contains("amoxliatl"))                      return "Amoxliatl";
+        if (l.contains("tormented demon"))                return "Tormented Demon";
+        if (l.contains("colosseum") || l.contains("fortis"))
+            return "Fortis Colosseum";
+
+        // ── Classic bosses ────────────────────────────────────────────────────
+        if (l.contains("zulrah"))                         return "Zulrah";
+        if (l.contains("vorkath"))                        return "Vorkath";
+        if (l.contains("hydra"))                          return "Alchemical Hydra";
+        if (l.contains("cerberus"))                       return "Cerberus";
+        if (l.contains("abyssal sire"))                   return "Abyssal Sire";
+        if (l.contains("kraken"))                         return "Kraken";
+        if (l.contains("smoke devil") || l.contains("thermonuclear")) return "Smoke Devil";
+        if (l.contains("phosani"))                        return "Phosani's Nightmare";
+        if (l.contains("nightmare"))                      return "The Nightmare";
+        if (l.contains("grotesque"))                      return "Grotesque Guardians";
+        if (l.contains("kalphite queen"))                 return "Kalphite Queen";
+        if (l.contains("kbd") || l.contains("king black dragon")) return "King Black Dragon";
+        if (l.contains("dagannoth prime"))                return "Dagannoth Prime";
+        if (l.contains("dagannoth rex"))                  return "Dagannoth Rex";
+        if (l.contains("dagannoth supreme"))              return "Dagannoth Supreme";
+        if (l.contains("skotizo"))                        return "Skotizo";
+        if (l.contains("hespori"))                        return "Hespori";
+
+        // ── Activities ────────────────────────────────────────────────────────
+        if (l.contains("barrows"))                        return "Barrows";
+        if (l.contains("tempoross"))                      return "Tempoross";
+        if (l.contains("wintertodt"))                     return "Wintertodt";
+        if (l.contains("zalcano"))                        return "Zalcano";
+
+        // ── Clue tiers ────────────────────────────────────────────────────────
+        if (l.contains("beginner clue") || (l.contains("beginner") && l.contains("clue")))
+            return "Beginner Clue";
+        if (l.contains("easy clue") || (l.contains("easy") && l.contains("clue")))
+            return "Easy Clue";
+        if (l.contains("medium clue") || (l.contains("medium") && l.contains("clue")))
+            return "Medium Clue";
+        if (l.contains("hard clue") || (l.contains("hard") && l.contains("clue")))
+            return "Hard Clue";
+        if (l.contains("elite clue") || (l.contains("elite") && l.contains("clue")))
+            return "Elite Clue";
+        if (l.contains("master clue") || (l.contains("master") && l.contains("clue")))
+            return "Master Clue";
+
+        return raw.trim();
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  UTILITY – CHAT MESSAGE PARSING
+    // ═════════════════════════════════════════════════════════════════════════
+
     /**
-     * Parses a kill-count chat message and logs the extracted boss name + KC.
-     * Does not modify any stored data — KC is authoritative from the in-game counter.
+     * Parses a kill-count chat message and logs the result.
+     * Does not modify stored data (KC is tracked via in-game kill events).
      *
-     * @param message the raw chat message string
+     * @param message raw chat message string
      */
     public void parseKillCountMessage(String message)
     {
-        Matcher matcher = KC_PATTERN.matcher(message);
-        if (matcher.find())
+        Matcher m = KC_PATTERN.matcher(message);
+        if (m.find())
         {
-            String bossName = normalizeBossName(matcher.group(1));
-            int kc = Integer.parseInt(matcher.group(2));
-            log.debug("KC from chat: {} = {}", bossName, kc);
+            String boss = normalizeBossName(m.group(1));
+            int    kc   = Integer.parseInt(m.group(2));
+            log.debug("KC from chat: '{}' = {}", boss, kc);
         }
     }
 
     /**
-     * Looks up the primary NPC ID for a given boss name using the BOSS_NAME_TO_ID map.
+     * Inspects a lower-cased chat message and returns the recognised chest /
+     * activity source name, or null if no match is found.
      *
-     * @param bossName display name of the boss
-     * @return NPC ID, or null if the name is not in the map
+     * <p>Called from RuneAlyticsPlugin.onChatMessage() to prime lastChestSource
+     * before PlayerLootReceived fires.</p>
+     *
+     * @param lower lower-cased message text
+     * @return canonical source name, or null if not recognised
      */
-    public Integer getBossIdFromName(String bossName)
+    public String detectChestSource(String lower)
     {
-        return BOSS_NAME_TO_ID.get(normalizeBossName(bossName));
+        // ── Activities ────────────────────────────────────────────────────────
+        if (lower.contains("wintertodt") || lower.contains("cold of the wintertodt"))
+            return "Wintertodt";
+
+        if (lower.contains("subdued the spirit") || lower.contains("you have helped to subdue"))
+            return "Tempoross";   // caller should snapshot inventory here
+
+        if (lower.contains("zalcano") && (lower.contains("loot") || lower.contains("defeated")))
+            return "Zalcano";
+
+        // ── Raids ─────────────────────────────────────────────────────────────
+        if (lower.contains("congratulations - your raid is complete")
+                || lower.contains("congratulations! your raid is complete"))
+            return "Chambers of Xeric";
+
+        if (lower.contains("theatre of blood") && lower.contains("complete"))
+            return "Theatre of Blood";
+
+        if (lower.contains("tombs of amascut") && lower.contains("complete"))
+            return "Tombs of Amascut";
+
+        if (lower.contains("gauntlet") && lower.contains("complete"))
+            return lower.contains("corrupted") ? "Corrupted Gauntlet" : "The Gauntlet";
+
+        // ── Nightmare / Phosani ───────────────────────────────────────────────
+        if (lower.contains("phosani") && lower.contains("defeated"))
+            return "Phosani's Nightmare";
+        if (lower.contains("nightmare") && lower.contains("defeated"))
+            return "The Nightmare";
+
+        // ── Varlamore / new bosses ────────────────────────────────────────────
+        if (lower.contains("royal titans") || lower.contains("eldric the ice king")
+                || lower.contains("branda the fire queen"))
+            return "Royal Titans";
+
+        if (lower.contains("colosseum") || lower.contains("fortis"))
+            return "Fortis Colosseum";
+
+        // ── Clue scrolls ──────────────────────────────────────────────────────
+        if (lower.contains("treasure trail"))
+        {
+            if (lower.contains("beginner")) return "Beginner Clue";
+            if (lower.contains("easy"))     return "Easy Clue";
+            if (lower.contains("medium"))   return "Medium Clue";
+            if (lower.contains("hard"))     return "Hard Clue";
+            if (lower.contains("elite"))    return "Elite Clue";
+            if (lower.contains("master"))   return "Master Clue";
+            return "Clue Scroll";
+        }
+
+        return null;  // not recognised
     }
 
-    // ==================== LISTENERS ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  UTILITY – DROP RECORD CONVERSION
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Registers a listener that will be notified on kill events and data refreshes.
+     * Converts raw ItemStacks to enriched DropRecords by looking up GE price
+     * and item name via RuneLite's ItemManager.  Applies the minimum value filter.
      *
-     * @param listener the listener to add
+     * @param items raw ItemStack list
+     * @return filtered, enriched DropRecord list (may be empty)
      */
+    private List<LootStorageData.DropRecord> convertToDropRecords(List<ItemStack> items)
+    {
+        List<LootStorageData.DropRecord> drops = new ArrayList<>();
+
+        for (ItemStack item : items)
+        {
+            ItemComposition comp = itemManager.getItemComposition(item.getId());
+            int gePrice    = itemManager.getItemPrice(item.getId());
+            int totalValue = gePrice * item.getQuantity();
+
+            if (totalValue < config.minimumLootValue()) continue;
+
+            LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
+            drop.setItemId   (item.getId());
+            drop.setItemName (comp.getName());
+            drop.setQuantity (item.getQuantity());
+            drop.setGePrice  (gePrice);
+            drop.setHighAlch (comp.getHaPrice());
+            drop.setTotalValue(totalValue);
+            drop.setHidden   (false);
+
+            drops.add(drop);
+        }
+
+        return drops;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LISTENERS
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** Registers a listener for kill and refresh events. */
     public void addListener(LootTrackerUpdateListener listener)
     {
         listeners.add(listener);
     }
 
-    /** Notifies all listeners that a kill was recorded */
-    private void notifyKillRecorded(BossKillStats stats)
+    private void notifyListeners(BossKillStats stats, NpcKillRecord kill)
     {
-        for (LootTrackerUpdateListener listener : listeners)
-        {
-            listener.onDataRefresh();
-        }
+        for (LootTrackerUpdateListener l : listeners) l.onKillRecorded(kill, stats);
     }
 
-    /** Notifies all listeners that data was refreshed (e.g. after clear/prestige) */
     private void notifyDataRefresh()
     {
-        for (LootTrackerUpdateListener listener : listeners)
-        {
-            listener.onDataRefresh();
-        }
+        for (LootTrackerUpdateListener l : listeners) l.onDataRefresh();
     }
 }

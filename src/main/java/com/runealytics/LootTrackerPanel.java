@@ -14,69 +14,94 @@ import javax.inject.Singleton;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.util.ArrayList;
-import java.util.HashMap;
+import java.awt.event.*;
+import java.util.*;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Loot tracker panel with filters, ignore functionality, and collapse/expand per boss
+ * Main loot tracker panel.
+ *
+ * <p>Layout:
+ * <pre>
+ *   ┌─────────────────────────────┐
+ *   │  FIXED HEADER               │  ← stats + filter buttons, NEVER scrolls
+ *   ├─────────────────────────────┤
+ *   │  SCROLLABLE BOSS LIST       │  ← one card per boss, scrolls independently
+ *   └─────────────────────────────┘
+ * </pre>
+ *
+ * <h2>Mouse-wheel scrolling fix</h2>
+ * Child components (item slots, labels, cards) consume {@link MouseWheelEvent}s
+ * before the parent {@link JScrollPane} sees them. {@link #propagateWheelEvents}
+ * recursively attaches a forwarding listener after each rebuild so scrolling
+ * works anywhere inside the panel, not just over the scrollbar track.
+ *
+ * <h2>Scrollbar-coverage fix</h2>
+ * A {@link ComponentListener} on the vertical scrollbar widens the right inset
+ * of the boss-list panel by the scrollbar's pixel width whenever it becomes
+ * visible, preventing item slots from sliding underneath it.
  */
 @Slf4j
 @Singleton
 public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateListener
 {
+    // ── Item grid constants ──────────────────────────────────────────────────
     private static final int ITEMS_PER_ROW = 5;
-    private static final int ITEM_SIZE = 40;
-    private static final int ITEM_SPACING = 2;
+    private static final int ITEM_SIZE     = 42;
+    private static final int ITEM_GAP      = 3;
 
+    /** Base padding applied to all four sides when no scrollbar is visible */
+    private static final int PAD = 6;
+
+    // ── Timing ───────────────────────────────────────────────────────────────
+    private static final int  HIGHLIGHT_TIMEOUT_MS = 10_000;
+    private static final long SYNC_COOLDOWN_MS     = 5 * 60 * 1_000L;
+
+    // ── Dependencies ─────────────────────────────────────────────────────────
     private final LootTrackerManager lootManager;
-    private final RuneAlyticsState runeAlyticsState;
-    private final ItemManager itemManager;
-    private final RuneAlyticsPlugin plugin;
+    private final RuneAlyticsState   runeAlyticsState;
+    private final ItemManager        itemManager;
+    private final RuneAlyticsPlugin  plugin;
 
-    private final JPanel bossListPanel;
-    private final JLabel totalCountLabel;
-    private final JLabel totalValueLabel;
-    private String highlightedBoss = null;
-    private Timer highlightTimeoutTimer;
+    // ── Header widgets ───────────────────────────────────────────────────────
+    private final JLabel totalKillsLabel = new JLabel("0 kills");
+    private final JLabel totalValueLabel = new JLabel("0 gp");
 
-    // Refresh guard
-    private volatile boolean isRefreshing = false;
-
-    // Filter buttons
     private JButton eyeButton;
     private JButton sortButton;
     private JButton clearButton;
     private JButton syncButton;
 
-    private Timer highlightTimer;
-    private Timer fadeTimer;
-    private static final int HIGHLIGHT_TIMEOUT_MS = 10_000;
-    private static final int SYNC_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-    private long lastSyncTime = 0;
+    // ── Boss-list panel (scrollable) ──────────────────────────────────────────
+    private final JPanel bossListPanel = new JPanel();
 
-    private boolean showIgnoredItems = false;
-    private String lastKilledBoss = null;
-    private SortMode currentSort = SortMode.RECENT; // Default to most recent kills
-    // Track expanded/collapsed state per boss
+    /**
+     * Stored as a field so mouse-wheel propagation and padding adjustments can
+     * reference it directly without traversing the component tree every call.
+     */
+    private JScrollPane scrollPane;
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    private String highlightedBoss = null;
+    private javax.swing.Timer highlightTimer;
+
+    private boolean  showIgnoredItems = false;
+    private SortMode currentSort      = SortMode.RECENT;
+
     private final Map<String, Boolean> bossExpandedState = new HashMap<>();
+    private volatile boolean isRefreshing = false;
+    private long lastSyncTime = 0L;
 
+    // ── Sort modes ────────────────────────────────────────────────────────────
     @Getter
     private enum SortMode
     {
-        VALUE("Sort: By Value"),
-        KILLS("Sort: By Kills"),
-        RECENT("Sort: By Recent");
+        RECENT("Sort: Most Recent"),
+        VALUE ("Sort: Highest Value"),
+        KILLS ("Sort: Most Kills");
 
-        private final String tooltip;
-
-        SortMode(String tooltip)
-        {
-            this.tooltip = tooltip;
-        }
+        private final String label;
+        SortMode(String label) { this.label = label; }
 
         public SortMode next()
         {
@@ -84,233 +109,261 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         }
     }
 
+    // ── Constructor ───────────────────────────────────────────────────────────
     @Inject
     public LootTrackerPanel(
             LootTrackerManager lootManager,
-            RuneAlyticsState runeAlyticsState,
-            ItemManager itemManager,
-            RuneAlyticsPlugin plugin
+            RuneAlyticsState   runeAlyticsState,
+            ItemManager        itemManager,
+            RuneAlyticsPlugin  plugin
     )
     {
-        super(false);
-
-        this.lootManager = lootManager;
+        super(false); // false = do NOT let PluginPanel add its own outer scroll pane
+        this.lootManager      = lootManager;
         this.runeAlyticsState = runeAlyticsState;
-        this.itemManager = itemManager;
-        this.plugin = plugin;
-
-        log.info("LootTrackerPanel: Initializing");
+        this.itemManager      = itemManager;
+        this.plugin           = plugin;
 
         lootManager.addListener(this);
-
-        totalCountLabel = new JLabel("0");
-        totalCountLabel.setForeground(Color.WHITE);
-        totalCountLabel.setFont(FontManager.getRunescapeSmallFont());
-
-        totalValueLabel = new JLabel("0 gp");
-        totalValueLabel.setForeground(ColorScheme.GRAND_EXCHANGE_PRICE);
-        totalValueLabel.setFont(FontManager.getRunescapeSmallFont());
-
-        bossListPanel = new JPanel();
-        bossListPanel.setLayout(new BoxLayout(bossListPanel, BoxLayout.Y_AXIS));
-        bossListPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
-
         buildUi();
-
         SwingUtilities.invokeLater(this::refreshDisplay);
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  UI Construction
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Builds the two-section layout.
+     *
+     * <p>The header goes into {@link BorderLayout#NORTH}: it is completely
+     * outside the scroll pane and never scrolls.
+     *
+     * <p>The {@link JScrollPane} fills {@link BorderLayout#CENTER}: it expands
+     * to use all remaining vertical space and scrolls only the boss card list.
+     */
     private void buildUi()
     {
         setLayout(new BorderLayout());
         setBackground(ColorScheme.DARK_GRAY_COLOR);
 
-        JPanel topPanel = new JPanel();
-        topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
-        topPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        topPanel.setBorder(new EmptyBorder(10, 10, 10, 10));
+        // NORTH: fixed header (never scrolls)
+        add(buildHeader(), BorderLayout.NORTH);
 
-        JPanel headerPanel = createBackpackHeader();
-        headerPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        topPanel.add(headerPanel);
-        topPanel.add(Box.createVerticalStrut(10));
+        // CENTER: scrollable boss list
+        bossListPanel.setLayout(new BoxLayout(bossListPanel, BoxLayout.Y_AXIS));
+        bossListPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        bossListPanel.setBorder(new EmptyBorder(PAD, PAD, PAD, PAD));
 
-        JPanel filterPanel = createFilterPanel();
-        filterPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        topPanel.add(filterPanel);
-        topPanel.add(Box.createVerticalStrut(10));
-
-        JScrollPane scrollPane = new JScrollPane(bossListPanel);
-        scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        scrollPane = new JScrollPane(bossListPanel);
         scrollPane.setBorder(null);
+        scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        scrollPane.getViewport().setBackground(ColorScheme.DARK_GRAY_COLOR);
         scrollPane.getVerticalScrollBar().setUnitIncrement(16);
         scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
 
-        add(topPanel, BorderLayout.NORTH);
+        // Scrollbar-coverage fix: widen right inset when scrollbar appears
+        scrollPane.getVerticalScrollBar().addComponentListener(new ComponentAdapter()
+        {
+            @Override public void componentShown (ComponentEvent e) { setScrollPadding(true);  }
+            @Override public void componentHidden(ComponentEvent e) { setScrollPadding(false); }
+        });
+
         add(scrollPane, BorderLayout.CENTER);
     }
 
-    private JPanel createBackpackHeader()
+    /**
+     * Adjusts the right inset of {@link #bossListPanel} to prevent item slots
+     * from being hidden under the vertical scrollbar.
+     *
+     * @param scrollbarVisible {@code true} when the scrollbar just became visible
+     */
+    private void setScrollPadding(boolean scrollbarVisible)
     {
-        JPanel panel = new JPanel(new BorderLayout(10, 0));
-        panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        panel.setOpaque(false);
-
-        JLabel backpackIcon = new JLabel("💰");
-        backpackIcon.setFont(new Font("Dialog", Font.PLAIN, 24));
-        backpackIcon.setPreferredSize(new Dimension(32, 32));
-        backpackIcon.setHorizontalAlignment(SwingConstants.CENTER);
-
-        JPanel statsPanel = new JPanel(new GridLayout(2, 2, 5, 2));
-        statsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        statsPanel.setOpaque(false);
-
-        JLabel countLabel = new JLabel("Total kills:");
-        countLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        countLabel.setFont(FontManager.getRunescapeSmallFont());
-
-        JLabel valueLabel = new JLabel("Total value:");
-        valueLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-        valueLabel.setFont(FontManager.getRunescapeSmallFont());
-
-        statsPanel.add(countLabel);
-        statsPanel.add(totalCountLabel);
-        statsPanel.add(valueLabel);
-        statsPanel.add(totalValueLabel);
-
-        panel.add(backpackIcon, BorderLayout.WEST);
-        panel.add(statsPanel, BorderLayout.CENTER);
-
-        return panel;
+        int rightPad = PAD;
+        if (scrollbarVisible)
+        {
+            int sbWidth = scrollPane.getVerticalScrollBar().getWidth();
+            if (sbWidth <= 0)
+            {
+                sbWidth = UIManager.getInt("ScrollBar.width");
+                if (sbWidth <= 0) sbWidth = 13; // safe default
+            }
+            rightPad = PAD + sbWidth;
+        }
+        bossListPanel.setBorder(new EmptyBorder(PAD, PAD, PAD, rightPad));
+        bossListPanel.revalidate();
+        bossListPanel.repaint();
     }
 
-    private JPanel createFilterPanel()
+    /**
+     * Builds the fixed header (stats + button row).
+     * {@code setMinimumSize} prevents parent containers from squashing it.
+     */
+    private JPanel buildHeader()
     {
-        JPanel panel = new JPanel(new BorderLayout(4, 0));
-        panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        panel.setOpaque(false);
-        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        JPanel header = new JPanel();
+        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+        header.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        header.setBorder(new EmptyBorder(8, 8, 8, 8));
+        header.setMinimumSize(new Dimension(0, 72)); // never compress below this
 
-        // Left side - filter buttons
-        JPanel leftButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        leftButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        leftButtons.setOpaque(false);
+        // Stats row
+        JPanel statsRow = new JPanel(new BorderLayout(8, 0));
+        statsRow.setOpaque(false);
+        statsRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        statsRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
 
-        eyeButton = createFilterButton("👁");
-        eyeButton.setToolTipText(showIgnoredItems ? "Hide ignored items" : "Show ignored items");
-        eyeButton.addActionListener(e -> toggleIgnoredItems());
+        JLabel iconLabel = new JLabel("💰");
+        iconLabel.setFont(new Font("Dialog", Font.PLAIN, 22));
 
-        sortButton = createFilterButton("⇅");
-        sortButton.setToolTipText(currentSort.getTooltip());
-        // Set initial color for RECENT mode (default)
-        sortButton.setBackground(new Color(70, 100, 70));
-        sortButton.addActionListener(e -> cycleSortMode());
+        JPanel statsText = new JPanel(new GridLayout(2, 1, 0, 1));
+        statsText.setOpaque(false);
 
-        clearButton = createFilterButton("🗑");
-        clearButton.setToolTipText("Clear all data");
+        totalKillsLabel.setForeground(Color.WHITE);
+        totalKillsLabel.setFont(FontManager.getRunescapeSmallFont());
+
+        totalValueLabel.setForeground(ColorScheme.GRAND_EXCHANGE_PRICE);
+        totalValueLabel.setFont(FontManager.getRunescapeSmallFont());
+
+        statsText.add(totalKillsLabel);
+        statsText.add(totalValueLabel);
+
+        statsRow.add(iconLabel,  BorderLayout.WEST);
+        statsRow.add(statsText,  BorderLayout.CENTER);
+
+        header.add(statsRow);
+        header.add(Box.createVerticalStrut(6));
+
+        JSeparator sep = new JSeparator();
+        sep.setForeground(new Color(60, 60, 60));
+        sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        sep.setAlignmentX(Component.LEFT_ALIGNMENT);
+        header.add(sep);
+        header.add(Box.createVerticalStrut(6));
+
+        // Button row
+        JPanel btnRow = new JPanel(new BorderLayout(4, 0));
+        btnRow.setOpaque(false);
+        btnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        btnRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+
+        JPanel leftBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
+        leftBtns.setOpaque(false);
+
+        eyeButton   = makeIconButton("👁",  "Toggle hidden drops");
+        sortButton  = makeIconButton("⇅",  currentSort.getLabel());
+        clearButton = makeIconButton("🗑", "Clear all loot data");
+
+        sortButton.setBackground(new Color(55, 90, 55)); // RECENT = green
+
+        eyeButton  .addActionListener(e -> toggleHiddenItems());
+        sortButton .addActionListener(e -> cycleSortMode());
         clearButton.addActionListener(e -> confirmClearAll());
 
-        leftButtons.add(eyeButton);
-        leftButtons.add(sortButton);
-        leftButtons.add(clearButton);
-
-        // Right side - sync button
-        JPanel rightButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-        rightButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        rightButtons.setOpaque(false);
+        leftBtns.add(eyeButton);
+        leftBtns.add(sortButton);
+        leftBtns.add(clearButton);
 
         syncButton = new JButton("Sync");
-        syncButton.setPreferredSize(new Dimension(60, 24));
+        syncButton.setPreferredSize(new Dimension(58, 24));
         syncButton.setBackground(ColorScheme.DARK_GRAY_COLOR);
         syncButton.setForeground(Color.WHITE);
         syncButton.setFocusPainted(false);
-        syncButton.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60), 1));
+        syncButton.setBorder(BorderFactory.createLineBorder(new Color(70, 70, 70), 1));
         syncButton.setFont(FontManager.getRunescapeSmallFont());
         syncButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        syncButton.setToolTipText("Sync loot data with server");
-        syncButton.addActionListener(e -> onSyncButtonClicked());
+        syncButton.setToolTipText("Sync with RuneAlytics server");
+        syncButton.addActionListener(e -> onSyncClicked());
 
-        syncButton.addMouseListener(new MouseAdapter()
-        {
-            @Override
-            public void mouseEntered(MouseEvent e)
-            {
-                if (syncButton.isEnabled())
-                {
-                    syncButton.setBackground(ColorScheme.DARKER_GRAY_HOVER_COLOR);
-                }
-            }
+        btnRow.add(leftBtns,   BorderLayout.WEST);
+        btnRow.add(syncButton, BorderLayout.EAST);
 
-            @Override
-            public void mouseExited(MouseEvent e)
-            {
-                syncButton.setBackground(ColorScheme.DARK_GRAY_COLOR);
-            }
-        });
-
-        rightButtons.add(syncButton);
-
-        panel.add(leftButtons, BorderLayout.WEST);
-        panel.add(rightButtons, BorderLayout.EAST);
-
-        return panel;
+        header.add(btnRow);
+        return header;
     }
 
-    private void onSyncButtonClicked()
+    private JButton makeIconButton(String icon, String tooltip)
     {
-        // Check cooldown
-        long now = System.currentTimeMillis();
-        long timeSinceLastSync = now - lastSyncTime;
-
-        if (timeSinceLastSync < SYNC_COOLDOWN_MS)
+        JButton btn = new JButton(icon);
+        btn.setPreferredSize(new Dimension(30, 24));
+        btn.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        btn.setForeground(Color.WHITE);
+        btn.setFocusPainted(false);
+        btn.setBorder(BorderFactory.createLineBorder(new Color(70, 70, 70), 1));
+        btn.setFont(new Font("Dialog", Font.PLAIN, 13));
+        btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        btn.setToolTipText(tooltip);
+        btn.addMouseListener(new MouseAdapter()
         {
-            long remainingSeconds = (SYNC_COOLDOWN_MS - timeSinceLastSync) / 1000;
-            long minutes = remainingSeconds / 60;
-            long seconds = remainingSeconds % 60;
+            @Override public void mouseEntered(MouseEvent e)
+            {
+                if (btn.isEnabled()) btn.setBackground(ColorScheme.DARKER_GRAY_HOVER_COLOR);
+            }
+            @Override public void mouseExited(MouseEvent e) { restoreButtonColor(btn); }
+        });
+        return btn;
+    }
 
-            JOptionPane.showMessageDialog(
-                    this,
-                    String.format("Please wait %d:%02d before syncing again", minutes, seconds),
-                    "Sync Cooldown",
-                    JOptionPane.INFORMATION_MESSAGE
-            );
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Button actions
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void toggleHiddenItems()
+    {
+        showIgnoredItems = !showIgnoredItems;
+        eyeButton.setBackground(showIgnoredItems ? ColorScheme.BRAND_ORANGE : ColorScheme.DARK_GRAY_COLOR);
+        eyeButton.setToolTipText(showIgnoredItems ? "Hide ignored drops" : "Show ignored drops");
+        refreshDisplay();
+    }
+
+    private void cycleSortMode()
+    {
+        currentSort = currentSort.next();
+        sortButton.setToolTipText(currentSort.getLabel());
+        switch (currentSort)
+        {
+            case RECENT: sortButton.setBackground(new Color(55, 90, 55));       break;
+            case VALUE:  sortButton.setBackground(ColorScheme.DARK_GRAY_COLOR); break;
+            case KILLS:  sortButton.setBackground(new Color(55, 55, 90));       break;
+        }
+        refreshDisplay();
+    }
+
+    private void confirmClearAll()
+    {
+        int choice = JOptionPane.showConfirmDialog(this,
+                "Delete ALL loot tracking data?\nThis cannot be undone.",
+                "Confirm Clear All", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (choice == JOptionPane.YES_OPTION) lootManager.clearAllData();
+    }
+
+    private void onSyncClicked()
+    {
+        long remaining = SYNC_COOLDOWN_MS - (System.currentTimeMillis() - lastSyncTime);
+        if (remaining > 0)
+        {
+            long mins = remaining / 60_000;
+            long secs = (remaining % 60_000) / 1_000;
+            JOptionPane.showMessageDialog(this,
+                    String.format("Wait %d:%02d before syncing again.", mins, secs),
+                    "Sync Cooldown", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
 
-        // Get current username from plugin
         String username = runeAlyticsState.getVerifiedUsername();
-
-        if (username == null || username.isEmpty())
+        if (username == null || username.isEmpty() || !runeAlyticsState.isVerified())
         {
-            JOptionPane.showMessageDialog(
-                    this,
-                    "Please log in to sync data",
-                    "Sync Failed",
-                    JOptionPane.WARNING_MESSAGE
-            );
+            JOptionPane.showMessageDialog(this,
+                    "Log in and verify your account before syncing.",
+                    "Not Verified", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
-        // Check if verified
-        if (!runeAlyticsState.isVerified())
-        {
-            JOptionPane.showMessageDialog(
-                    this,
-                    "Account not verified. Please verify your account first.",
-                    "Sync Failed",
-                    JOptionPane.WARNING_MESSAGE
-            );
-            return;
-        }
-
-        // Update last sync time
-        lastSyncTime = now;
-
-        // Disable button and show syncing state
+        lastSyncTime = System.currentTimeMillis();
         syncButton.setEnabled(false);
-        syncButton.setText("...");
-
-        // Trigger sync
+        syncButton.setText("…");
         lootManager.performManualSync(username);
     }
 
@@ -318,320 +371,112 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     {
         syncButton.setEnabled(true);
         syncButton.setText("Sync");
-
-        JOptionPane.showMessageDialog(
-                this,
-                "Loot data synced successfully!",
-                "Sync Complete",
-                JOptionPane.INFORMATION_MESSAGE
-        );
+        JOptionPane.showMessageDialog(this, "Loot data synced successfully!",
+                "Sync Complete", JOptionPane.INFORMATION_MESSAGE);
     }
 
     public void showSyncFailed(String error)
     {
         syncButton.setEnabled(true);
         syncButton.setText("Sync");
-
-        JOptionPane.showMessageDialog(
-                this,
-                "Sync failed: " + error,
-                "Sync Failed",
-                JOptionPane.ERROR_MESSAGE
-        );
+        JOptionPane.showMessageDialog(this, "Sync failed: " + error,
+                "Sync Failed", JOptionPane.ERROR_MESSAGE);
     }
 
-    private JButton createFilterButton(String text)
-    {
-        JButton button = new JButton(text);
-        button.setPreferredSize(new Dimension(32, 24));
-        button.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        button.setForeground(Color.WHITE);
-        button.setFocusPainted(false);
-        button.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60), 1));
-        button.setFont(new Font("Dialog", Font.PLAIN, 14));
-        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-
-        button.addMouseListener(new MouseAdapter()
-        {
-            @Override
-            public void mouseEntered(MouseEvent e)
-            {
-                if (button.isEnabled())
-                {
-                    button.setBackground(ColorScheme.DARKER_GRAY_HOVER_COLOR);
-                }
-            }
-
-            @Override
-            public void mouseExited(MouseEvent e)
-            {
-                Color bg = ColorScheme.DARK_GRAY_COLOR;
-                if (button == eyeButton && showIgnoredItems)
-                {
-                    bg = ColorScheme.BRAND_ORANGE;
-                }
-                else if (button == sortButton)
-                {
-                    // Restore sort mode color
-                    if (currentSort == SortMode.VALUE)
-                    {
-                        bg = ColorScheme.DARK_GRAY_COLOR;
-                    }
-                    else if (currentSort == SortMode.KILLS)
-                    {
-                        bg = new Color(70, 70, 100);
-                    }
-                    else // RECENT
-                    {
-                        bg = new Color(70, 100, 70);
-                    }
-                }
-                button.setBackground(bg);
-            }
-        });
-
-        return button;
-    }
-
-    private void toggleIgnoredItems()
-    {
-        showIgnoredItems = !showIgnoredItems;
-        eyeButton.setToolTipText(showIgnoredItems ? "Hide ignored items" : "Show ignored items");
-        eyeButton.setBackground(showIgnoredItems ? ColorScheme.BRAND_ORANGE : ColorScheme.DARK_GRAY_COLOR);
-        refreshDisplay();
-    }
-
-    private void cycleSortMode()
-    {
-        currentSort = currentSort.next();
-        sortButton.setToolTipText(currentSort.getTooltip());
-
-        // Update button color based on mode
-        Color buttonColor;
-        if (currentSort == SortMode.VALUE)
-        {
-            buttonColor = ColorScheme.DARK_GRAY_COLOR;
-        }
-        else if (currentSort == SortMode.KILLS)
-        {
-            buttonColor = new Color(70, 70, 100);
-        }
-        else // RECENT
-        {
-            buttonColor = new Color(70, 100, 70);
-        }
-        sortButton.setBackground(buttonColor);
-
-        log.info("Sort mode changed to: {}", currentSort);
-        refreshDisplay();
-    }
-
-    private void confirmClearAll()
-    {
-        int result = JOptionPane.showConfirmDialog(
-                this,
-                "Clear ALL loot tracking data?\n\n" +
-                        "This will delete all boss kills and drops.\n" +
-                        "This action cannot be undone!",
-                "Confirm Clear All",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.ERROR_MESSAGE
-        );
-
-        if (result == JOptionPane.YES_OPTION)
-        {
-            lootManager.clearAllData();
-            refreshDisplay();
-        }
-    }
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LootTrackerUpdateListener
+    // ═════════════════════════════════════════════════════════════════════════
 
     @Override
     public void onKillRecorded(NpcKillRecord kill, BossKillStats stats)
     {
-        lastKilledBoss = kill.getNpcName();
-        SwingUtilities.invokeLater(this::refreshDisplay);
-    }
-
-    public void onKillAdded(BossKillStats stats)
-    {
         SwingUtilities.invokeLater(() -> {
+            highlightBoss(kill.getNpcName());
             refreshDisplay();
-            highlightBoss(stats.getNpcName());
         });
     }
 
-    /**
-     * PUBLIC: Highlight a boss panel (called from LootTrackerManager)
-     */
+    @Override public void onLootUpdated() { SwingUtilities.invokeLater(this::refreshDisplay); }
+    @Override public void onDataRefresh()  { SwingUtilities.invokeLater(this::refreshDisplay); }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Public API
+    // ═════════════════════════════════════════════════════════════════════════
+
     public void highlightBoss(String npcName)
     {
-        // Track highlighted boss by name (NOT panel)
         highlightedBoss = npcName;
-
-        // Cancel previous timer
-        if (highlightTimer != null)
-        {
-            highlightTimer.stop();
-        }
-
-        // After timeout, clear highlight and refresh UI
-        highlightTimer = new Timer(HIGHLIGHT_TIMEOUT_MS, e -> {
+        if (highlightTimer != null) highlightTimer.stop();
+        highlightTimer = new javax.swing.Timer(HIGHLIGHT_TIMEOUT_MS, e -> {
             highlightedBoss = null;
-            refreshDisplay();
+            SwingUtilities.invokeLater(this::refreshDisplay);
         });
         highlightTimer.setRepeats(false);
         highlightTimer.start();
-
-        // Move highlighted boss to top + redraw
-        refreshDisplay();
-    }
-
-    private void startFadeOut(JPanel panel)
-    {
-        final int steps = 10;
-        final int delay = 40;
-
-        fadeTimer = new Timer(delay, null);
-
-        fadeTimer.addActionListener(e -> {
-            int alpha = ((Timer) e.getSource()).getDelay() * steps;
-            float progress = (float) fadeTimer.getInitialDelay() / (steps * delay);
-
-            int green = Math.max(60, (int) (200 * (1 - progress)));
-            panel.setBorder(BorderFactory.createLineBorder(
-                    new Color(0, green, 0),
-                    1
-            ));
-
-            panel.repaint();
-
-            if (progress >= 1f)
-            {
-                fadeTimer.stop();
-                panel.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60), 1));
-            }
-        });
-
-        fadeTimer.setRepeats(true);
-        fadeTimer.start();
-    }
-
-    @Override
-    public void onLootUpdated()
-    {
         SwingUtilities.invokeLater(this::refreshDisplay);
     }
 
-    @Override
-    public void onDataRefresh()
-    {
-        SwingUtilities.invokeLater(this::refreshDisplay);
-    }
+    public void refresh() { SwingUtilities.invokeLater(this::refreshDisplay); }
 
-    public void refreshDisplay()
-    {
-        refreshDisplayPreservingLayout();
-    }
-
-    public void updatePanel() {
-        SwingUtilities.invokeLater(() -> {
-            bossListPanel.removeAll(); // Clear old loot
-            // Logic to add new loot components goes here
-            bossListPanel.revalidate();
-            bossListPanel.repaint();
-        });
-    }
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Display rebuild
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Refresh display while preserving scroll position and expanded states
+     * Clears and rebuilds the boss-card list, then calls
+     * {@link #propagateWheelEvents} on the whole subtree.
      */
-    public void refreshDisplayPreservingLayout()
+    public void refreshDisplay()
     {
-        if (isRefreshing)
-        {
-            log.debug("Refresh already in progress - skipping");
-            return;
-        }
-
+        if (isRefreshing) return;
         isRefreshing = true;
-
         try
         {
-            // Store current scroll position
-            JScrollPane scrollPane = findScrollPane(this);
-            int scrollPosition = 0;
-            if (scrollPane != null)
-            {
-                scrollPosition = scrollPane.getVerticalScrollBar().getValue();
-            }
+            int savedScroll = scrollPane.getVerticalScrollBar().getValue();
 
-            // Get existing boss panels to preserve expanded states
-            Map<String, Boolean> currentExpandedStates = new HashMap<>(bossExpandedState);
-
-            // Perform the refresh
             bossListPanel.removeAll();
 
             List<BossKillStats> allStats = lootManager.getAllBossStats();
 
             if (allStats.isEmpty())
             {
-                bossListPanel.add(createEmptyStatePanel());
+                bossListPanel.add(buildEmptyState());
             }
             else
             {
-                // Deduplicate by boss name
-                Map<String, BossKillStats> uniqueBosses = new HashMap<>();
-                for (BossKillStats stats : allStats)
-                {
-                    String bossName = stats.getNpcName();
-                    if (uniqueBosses.containsKey(bossName))
-                    {
-                        log.warn("Duplicate boss detected in display: {} - using first occurrence", bossName);
-                        continue;
-                    }
-                    uniqueBosses.put(bossName, stats);
-                }
+                Map<String, BossKillStats> unique = new LinkedHashMap<>();
+                for (BossKillStats s : allStats) unique.putIfAbsent(s.getNpcName(), s);
 
-                List<BossKillStats> dedupedStats = new ArrayList<>(uniqueBosses.values());
-                sortBossStats(dedupedStats);
+                List<BossKillStats> sorted = new ArrayList<>(unique.values());
+                sortStats(sorted);
 
                 long totalValue = 0;
-                int totalKills = 0;
+                int  totalKills = 0;
 
-                for (BossKillStats stats : dedupedStats)
+                for (BossKillStats stats : sorted)
                 {
                     totalValue += stats.getTotalLootValue();
                     totalKills += stats.getKillCount();
 
-                    // Restore expanded state from previous render
-                    String bossName = stats.getNpcName();
-                    if (currentExpandedStates.containsKey(bossName))
-                    {
-                        bossExpandedState.put(bossName, currentExpandedStates.get(bossName));
-                    }
-
-                    JPanel bossPanel = createBossPanel(stats);
-                    bossPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-                    bossListPanel.add(bossPanel);
-                    bossListPanel.add(RuneAlyticsUi.vSpace(8));
+                    JPanel card = buildBossCard(stats);
+                    card.setAlignmentX(Component.LEFT_ALIGNMENT);
+                    bossListPanel.add(card);
+                    bossListPanel.add(Box.createVerticalStrut(6));
                 }
 
-                totalCountLabel.setText(String.valueOf(totalKills));
-                totalValueLabel.setText(formatGp(totalValue));
+                totalKillsLabel.setText(formatNumber(totalKills) + " kills");
+                totalValueLabel.setText(formatGp(totalValue)     + " total");
             }
 
-            // Single revalidate/repaint instead of multiple
+            // Instrument every new component so wheel events reach scrollPane
+            propagateWheelEvents(bossListPanel);
+
             bossListPanel.revalidate();
             bossListPanel.repaint();
 
-            // Restore scroll position
-            if (scrollPane != null)
-            {
-                final int finalScrollPosition = scrollPosition;
-                SwingUtilities.invokeLater(() -> {
-                    scrollPane.getVerticalScrollBar().setValue(finalScrollPosition);
-                });
-            }
+            final int scrollY = savedScroll;
+            SwingUtilities.invokeLater(() ->
+                    scrollPane.getVerticalScrollBar().setValue(scrollY));
         }
         finally
         {
@@ -639,481 +484,359 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         }
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Mouse-wheel propagation
+    // ═════════════════════════════════════════════════════════════════════════
+
     /**
-     * Find the parent scroll pane of a component
+     * Recursively attaches a {@link MouseWheelListener} to every component in
+     * the subtree rooted at {@code root}.  Each listener re-dispatches the
+     * event to {@link #scrollPane} so the viewport scrolls regardless of which
+     * child the cursor is hovering over.
+     *
+     * <p>A client-property flag ({@code "ra.wheel"}) prevents the listener
+     * being added more than once per component across repeated
+     * {@link #refreshDisplay()} calls.  Recursion still descends into
+     * marked containers to catch newly added children.
      */
-    private JScrollPane findScrollPane(Component component)
+    private void propagateWheelEvents(Component root)
     {
-        Component parent = component.getParent();
-        while (parent != null)
+        final String FLAG = "ra.wheel";
+
+        boolean alreadyDone = (root instanceof JComponent)
+                && Boolean.TRUE.equals(((JComponent) root).getClientProperty(FLAG));
+
+        if (!alreadyDone)
         {
-            if (parent instanceof JScrollPane)
-            {
-                return (JScrollPane) parent;
-            }
-            parent = parent.getParent();
+            root.addMouseWheelListener(e -> {
+                MouseWheelEvent converted = (MouseWheelEvent)
+                        SwingUtilities.convertMouseEvent(e.getComponent(), e, scrollPane);
+                scrollPane.dispatchEvent(converted);
+            });
+            if (root instanceof JComponent)
+                ((JComponent) root).putClientProperty(FLAG, Boolean.TRUE);
         }
-        return null;
+
+        if (root instanceof Container)
+            for (Component child : ((Container) root).getComponents())
+                propagateWheelEvents(child);
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Boss card
+    // ═════════════════════════════════════════════════════════════════════════
 
-    private JPanel createEmptyStatePanel()
+    private JPanel buildBossCard(BossKillStats stats)
     {
-        JPanel panel = RuneAlyticsUi.verticalPanel();
-        panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        panel.setBorder(new EmptyBorder(40, 20, 40, 20));
-        panel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        boolean highlighted = stats.getNpcName().equals(highlightedBoss);
 
-        JLabel emptyIcon = new JLabel("💀");
-        emptyIcon.setFont(new Font("Dialog", Font.PLAIN, 48));
-        emptyIcon.setAlignmentX(Component.CENTER_ALIGNMENT);
-        emptyIcon.setHorizontalAlignment(SwingConstants.CENTER);
-
-        JLabel emptyText = RuneAlyticsUi.titleLabel("No loot tracked yet");
-        emptyText.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        JLabel emptySubtext = RuneAlyticsUi.subtitleLabel("Kill bosses to start tracking!");
-        emptySubtext.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        panel.add(emptyIcon);
-        panel.add(RuneAlyticsUi.vSpace(10));
-        panel.add(emptyText);
-        panel.add(RuneAlyticsUi.vSpace(5));
-        panel.add(emptySubtext);
-
-        return panel;
-    }
-
-    private void sortBossStats(List<BossKillStats> stats)
-    {
-        log.debug("Sorting {} bosses by: {}", stats.size(), currentSort);
-
-        switch (currentSort)
-        {
-            case VALUE:
-                stats.sort((a, b) -> {
-                    // PRIORITY: Highlighted boss always first
-                    if (highlightedBoss != null)
-                    {
-                        if (a.getNpcName().equals(highlightedBoss) && !b.getNpcName().equals(highlightedBoss))
-                            return -1;
-                        if (b.getNpcName().equals(highlightedBoss) && !a.getNpcName().equals(highlightedBoss))
-                            return 1;
-                    }
-                    return Long.compare(b.getTotalLootValue(), a.getTotalLootValue());
-                });
-                log.debug("Sorted by value - top boss: {} with {} gp",
-                        stats.get(0).getNpcName(), stats.get(0).getTotalLootValue());
-                break;
-
-            case KILLS:
-                stats.sort((a, b) -> {
-                    if (highlightedBoss != null)
-                    {
-                        if (a.getNpcName().equals(highlightedBoss) && !b.getNpcName().equals(highlightedBoss))
-                            return -1;
-                        if (b.getNpcName().equals(highlightedBoss) && !a.getNpcName().equals(highlightedBoss))
-                            return 1;
-                    }
-                    return Integer.compare(b.getKillCount(), a.getKillCount());
-                });
-                log.debug("Sorted by kills - top boss: {} with {} KC",
-                        stats.get(0).getNpcName(), stats.get(0).getKillCount());
-                break;
-
-            case RECENT:
-                stats.sort((a, b) -> {
-                    if (highlightedBoss != null)
-                    {
-                        if (a.getNpcName().equals(highlightedBoss) && !b.getNpcName().equals(highlightedBoss))
-                            return -1;
-                        if (b.getNpcName().equals(highlightedBoss) && !a.getNpcName().equals(highlightedBoss))
-                            return 1;
-                    }
-                    // Most recent kill first (higher timestamp = more recent)
-                    return Long.compare(b.getLastKillTimestamp(), a.getLastKillTimestamp());
-                });
-                log.debug("Sorted by recent - top boss: {} with last kill at {}",
-                        stats.get(0).getNpcName(), stats.get(0).getLastKillTimestamp());
-                break;
-        }
-    }
-
-    private JPanel createBossPanel(BossKillStats stats)
-    {
-        boolean isHighlighted = stats.getNpcName().equals(highlightedBoss);
-
-        // Main panel - NO SIZE CONSTRAINTS
-        JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-        panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        panel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        panel.setBorder(BorderFactory.createCompoundBorder(
-                new EmptyBorder(0, 5, 0, 5),
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(
-                        isHighlighted ? new Color(0, 200, 0) : new Color(60, 60, 60),
-                        isHighlighted ? 2 : 1
-                )
-        ));
+                        highlighted ? new Color(0, 200, 60) : new Color(55, 55, 55),
+                        highlighted ? 2 : 1),
+                new EmptyBorder(0, 0, 4, 0)));
 
-        // Header
-        JPanel headerPanel = new JPanel(new BorderLayout(5, 0));
-        headerPanel.setBackground(
-                isHighlighted ? new Color(30, 35, 30) : ColorScheme.DARKER_GRAY_COLOR
-        );
-        headerPanel.setBorder(new EmptyBorder(4, 6, 4, 6));
-        // Header can have fixed height
-        headerPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
-        headerPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // Header row
+        JPanel headerRow = new JPanel(new BorderLayout(6, 0));
+        headerRow.setBackground(highlighted ? new Color(25, 38, 25) : new Color(40, 40, 40));
+        headerRow.setBorder(new EmptyBorder(6, 8, 6, 8));
+        headerRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+        headerRow.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        String bossName = truncateText(stats.getNpcName(), 18);
-        JLabel nameLabel = new JLabel(bossName + " × " + formatNumber(stats.getKillCount()));
-        nameLabel.setForeground(Color.WHITE);
-        nameLabel.setFont(FontManager.getRunescapeSmallFont());
-        nameLabel.setToolTipText(stats.getNpcName());
+        String displayName = truncate(stats.getNpcName(), 20);
+        JLabel nameLabel = new JLabel(displayName + " × " + formatNumber(stats.getKillCount()));
+        nameLabel.setForeground(highlighted ? new Color(140, 255, 140) : Color.WHITE);
+        nameLabel.setFont(FontManager.getRunescapeSmallFont().deriveFont(Font.BOLD, 11f));
+        nameLabel.setToolTipText(stats.getNpcName() + " – " + stats.getKillCount() + " kills");
 
         JLabel valueLabel = new JLabel(formatGp(stats.getTotalLootValue()));
         valueLabel.setForeground(ColorScheme.GRAND_EXCHANGE_PRICE);
         valueLabel.setFont(FontManager.getRunescapeSmallFont());
 
-        headerPanel.add(nameLabel, BorderLayout.WEST);
-        headerPanel.add(valueLabel, BorderLayout.EAST);
+        headerRow.add(nameLabel,  BorderLayout.WEST);
+        headerRow.add(valueLabel, BorderLayout.EAST);
 
-        // Right-click menu
-        JPopupMenu popupMenu = new JPopupMenu();
-
-        JMenuItem prestigeItem = new JMenuItem("Prestige (Reset Stats)");
+        JPopupMenu ctx = new JPopupMenu();
+        JMenuItem prestigeItem = new JMenuItem("Prestige (Reset KC)");
         prestigeItem.addActionListener(e -> confirmPrestige(stats));
-        popupMenu.add(prestigeItem);
-
+        ctx.add(prestigeItem);
         JMenuItem clearItem = new JMenuItem("Clear Data");
-        clearItem.addActionListener(e -> confirmClear(stats));
-        popupMenu.add(clearItem);
+        clearItem.addActionListener(e -> confirmClearBoss(stats));
+        ctx.add(clearItem);
+        headerRow .setComponentPopupMenu(ctx);
+        nameLabel .setComponentPopupMenu(ctx);
+        valueLabel.setComponentPopupMenu(ctx);
 
-        headerPanel.setComponentPopupMenu(popupMenu);
+        // Collapsible grid
+        boolean       expanded    = bossExpandedState.getOrDefault(stats.getNpcName(), true);
+        final boolean[] isExpanded = { expanded };
 
-        // Expansion state
-        boolean expanded = bossExpandedState.getOrDefault(stats.getNpcName(), true);
-        final boolean[] isExpanded = new boolean[] { expanded };
+        JPanel grid = buildItemGrid(stats.getAggregatedDropsSorted(), stats.getNpcName());
+        grid.setVisible(isExpanded[0]);
+        grid.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        // Loot container - NO SIZE CONSTRAINTS
-        JPanel lootContainer = new JPanel(new BorderLayout());
-        lootContainer.setOpaque(false);
-        lootContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        // Loot grid holder (per-NPC, no shared refs)
-        final JPanel[] lootGridHolder = new JPanel[1];
-        lootGridHolder[0] = createAggregatedLootGridFlexible(
-                stats.getAggregatedDropsSorted(),
-                stats.getNpcName()
-        );
-        lootGridHolder[0].setVisible(isExpanded[0]);
-
-        lootContainer.add(lootGridHolder[0], BorderLayout.CENTER);
-
-        // Header click toggles ONLY this NPC
-        headerPanel.addMouseListener(new MouseAdapter()
+        MouseAdapter collapseToggle = new MouseAdapter()
         {
-            @Override
-            public void mouseClicked(MouseEvent e)
+            @Override public void mouseClicked(MouseEvent e)
             {
-                isExpanded[0] = !isExpanded[0];
-                bossExpandedState.put(stats.getNpcName(), isExpanded[0]);
-
-                // Toggle visibility ONLY
-                lootGridHolder[0].setVisible(isExpanded[0]);
-
-                // Force complete re-layout WITHOUT size constraints
-                lootContainer.invalidate();
-                panel.invalidate();
-                bossListPanel.invalidate();
-
-                SwingUtilities.getRoot(panel).validate();
-
-                panel.revalidate();
-                panel.repaint();
-                bossListPanel.revalidate();
-                bossListPanel.repaint();
+                if (SwingUtilities.isLeftMouseButton(e))
+                {
+                    isExpanded[0] = !isExpanded[0];
+                    bossExpandedState.put(stats.getNpcName(), isExpanded[0]);
+                    grid.setVisible(isExpanded[0]);
+                    card.revalidate(); card.repaint();
+                    bossListPanel.revalidate(); bossListPanel.repaint();
+                }
             }
-        });
+            @Override public void mouseEntered(MouseEvent e)
+            {
+                headerRow.setBackground(highlighted ? new Color(35, 55, 35) : new Color(50, 50, 50));
+            }
+            @Override public void mouseExited(MouseEvent e)
+            {
+                headerRow.setBackground(highlighted ? new Color(25, 38, 25) : new Color(40, 40, 40));
+            }
+        };
+        headerRow.addMouseListener(collapseToggle);
+        nameLabel .addMouseListener(collapseToggle);
 
-        // Assemble
-        panel.add(headerPanel);
-        panel.add(lootContainer);
-
-        return panel;
+        card.add(headerRow);
+        card.add(grid);
+        return card;
     }
 
-    private JPanel createAggregatedLootGridFlexible(List<BossKillStats.AggregatedDrop> drops, String npcName)
-    {
-        JPanel grid = new JPanel(new FixedColumnsWrapLayout(5, ITEM_SPACING, ITEM_SPACING));
-        grid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        grid.setBorder(new EmptyBorder(5, 5, 5, 5));
-        grid.setAlignmentX(Component.LEFT_ALIGNMENT);
-        // Don't constrain size - let it flow naturally
-        grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Item grid
+    // ═════════════════════════════════════════════════════════════════════════
 
+    private JPanel buildItemGrid(List<BossKillStats.AggregatedDrop> drops, String npcName)
+    {
+        JPanel grid = new JPanel(new FixedColumnsWrapLayout(ITEMS_PER_ROW, ITEM_GAP, ITEM_GAP));
+        grid.setBackground(new Color(30, 30, 30));
+        grid.setBorder(new EmptyBorder(5, 6, 6, 6));
         for (BossKillStats.AggregatedDrop drop : drops)
         {
-            JPanel itemPanel = createAggregatedItemPanel(drop, npcName);
-            grid.add(itemPanel);
+            if (lootManager.isDropHidden(npcName, drop.getItemId()) && !showIgnoredItems) continue;
+            grid.add(buildItemSlot(drop, npcName));
         }
-
         return grid;
     }
 
-    private String truncateText(String text, int maxLength)
+    private JPanel buildItemSlot(BossKillStats.AggregatedDrop drop, String npcName)
     {
-        if (text == null || text.length() <= maxLength)
-        {
-            return text;
-        }
+        boolean ignored = lootManager.isDropHidden(npcName, drop.getItemId());
 
-        // Try to break at word boundary
-        int lastSpace = text.substring(0, maxLength - 1).lastIndexOf(' ');
-        if (lastSpace > maxLength / 2)
-        {
-            return text.substring(0, lastSpace) + "...";
-        }
+        JLayeredPane slot = new JLayeredPane();
+        slot.setPreferredSize(new Dimension(ITEM_SIZE, ITEM_SIZE));
+        slot.setMinimumSize  (new Dimension(ITEM_SIZE, ITEM_SIZE));
+        slot.setMaximumSize  (new Dimension(ITEM_SIZE, ITEM_SIZE));
+        slot.setOpaque(true);
+        slot.setBackground(ignored ? new Color(55, 35, 35) : new Color(38, 38, 38));
+        slot.setBorder(BorderFactory.createLineBorder(new Color(65, 65, 65), 1));
 
-        // Otherwise just truncate
-        return text.substring(0, maxLength - 3) + "...";
-    }
-
-    private String formatNumber(int number)
-    {
-        if (number >= 1_000_000_000)
-        {
-            return String.format("%.1fB", number / 1_000_000_000.0);
-        }
-        else if (number >= 1_000_000)
-        {
-            return String.format("%.1fM", number / 1_000_000.0);
-        }
-        else if (number >= 1_000)
-        {
-            return String.format("%.1fK", number / 1_000.0);
-        }
-        else
-        {
-            return String.valueOf(number);
-        }
-    }
-
-    private void confirmPrestige(BossKillStats stats)
-    {
-        int result = JOptionPane.showConfirmDialog(
-                this,
-                String.format(
-                        "Prestige %s?\n\n" +
-                                "Current Stats:\n" +
-                                "• Kills: %d\n" +
-                                "• Total Value: %s\n\n" +
-                                "Stats will be reset but saved to server history.\n" +
-                                "You will advance to Prestige %d.",
-                        stats.getNpcName(),
-                        stats.getKillCount(),
-                        formatGp(stats.getTotalLootValue()),
-                        stats.getPrestige() + 1
-                ),
-                "Confirm Prestige",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.WARNING_MESSAGE
-        );
-
-        if (result == JOptionPane.YES_OPTION)
-        {
-            lootManager.prestigeBoss(stats.getNpcName());
-        }
-    }
-
-    private void confirmClear(BossKillStats stats)
-    {
-        int result = JOptionPane.showConfirmDialog(
-                this,
-                String.format(
-                        "Clear all data for %s?\n\n" +
-                                "This will delete:\n" +
-                                "• %d kills\n" +
-                                "• %s total loot\n" +
-                                "• All prestige history\n\n" +
-                                "This action cannot be undone!",
-                        stats.getNpcName(),
-                        stats.getKillCount(),
-                        formatGp(stats.getTotalLootValue())
-                ),
-                "Confirm Clear Data",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.ERROR_MESSAGE
-        );
-
-        if (result == JOptionPane.YES_OPTION)
-        {
-            lootManager.clearBossData(stats.getNpcName());
-            refreshDisplay();
-        }
-    }
-
-    private JPanel createAggregatedLootGrid(List<BossKillStats.AggregatedDrop> drops, String npcName)
-    {
-        JPanel grid = new JPanel(
-                new WrapLayout(FlowLayout.LEFT, ITEM_SPACING, ITEM_SPACING)
-        );
-
-        grid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        grid.setBorder(new EmptyBorder(5, 5, 5, 5));
-        grid.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        for (BossKillStats.AggregatedDrop drop : drops)
-        {
-            JPanel itemPanel = createAggregatedItemPanel(drop, npcName);
-            grid.add(itemPanel);
-        }
-
-        return grid;
-    }
-
-    private JPanel createAggregatedItemPanel(BossKillStats.AggregatedDrop drop, String npcName)
-    {
-        JLayeredPane layeredPane = new JLayeredPane();
-        layeredPane.setPreferredSize(new Dimension(ITEM_SIZE, ITEM_SIZE));
-        layeredPane.setMinimumSize(new Dimension(ITEM_SIZE, ITEM_SIZE));
-        layeredPane.setMaximumSize(new Dimension(ITEM_SIZE, ITEM_SIZE));
-        layeredPane.setOpaque(true);
-
-        boolean isIgnored = lootManager.isDropHidden(npcName, drop.getItemId());
-        layeredPane.setBackground(isIgnored ? new Color(60, 40, 40) : new Color(40, 40, 40));
-        layeredPane.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60), 1));
-
-        long displayQty = drop.getTotalQuantity();
-        AsyncBufferedImage itemImage = itemManager.getImage(drop.getItemId(), (int)displayQty, false);
-
-        // Icon layer
         JLabel iconLabel = new JLabel();
         iconLabel.setBounds(0, 0, ITEM_SIZE, ITEM_SIZE);
         iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
-        iconLabel.setVerticalAlignment(SwingConstants.CENTER);
-        iconLabel.setOpaque(false);
+        iconLabel.setVerticalAlignment  (SwingConstants.CENTER);
 
-        if (itemImage != null)
+        AsyncBufferedImage img =
+                itemManager.getImage(drop.getItemId(), (int) drop.getTotalQuantity(), false);
+        if (img != null) img.addTo(iconLabel);
+        slot.add(iconLabel, JLayeredPane.DEFAULT_LAYER);
+
+        if (drop.getTotalQuantity() > 1)
         {
-            itemImage.addTo(iconLabel);
+            JLabel qty = new JLabel(formatQuantity(drop.getTotalQuantity()));
+            qty.setFont(new Font("Arial", Font.BOLD, 10));
+            qty.setForeground(valueColour(drop.getTotalValue()));
+            qty.setBounds(2, 1, ITEM_SIZE - 4, 13);
+            qty.setHorizontalAlignment(SwingConstants.LEFT);
+            slot.add(qty, JLayeredPane.PALETTE_LAYER);
         }
 
-        layeredPane.add(iconLabel, JLayeredPane.DEFAULT_LAYER);
+        String tt = buildTooltip(drop);
+        slot.setToolTipText(tt); iconLabel.setToolTipText(tt);
 
-        // Quantity overlay
-        if (displayQty > 1)
-        {
-            String qtyText = formatQuantity(displayQty);
-            Color qtyColor = getValueColor(drop.getTotalValue());
-
-            JLabel qtyLabel = new JLabel(qtyText);
-            qtyLabel.setFont(new Font("Arial", Font.BOLD, 11));
-            qtyLabel.setForeground(qtyColor);
-            qtyLabel.setBounds(2, 1, ITEM_SIZE - 4, 14);
-            qtyLabel.setHorizontalAlignment(SwingConstants.LEFT);
-            qtyLabel.setVerticalAlignment(SwingConstants.TOP);
-            qtyLabel.setOpaque(false);
-
-            layeredPane.add(qtyLabel, JLayeredPane.PALETTE_LAYER);
-        }
-
-        // Right-click menu
-        JPopupMenu itemMenu = new JPopupMenu();
-        JMenuItem ignoreItem = new JMenuItem(isIgnored ? "Unignore" : "Ignore");
-        ignoreItem.addActionListener(e -> {
-            if (isIgnored)
-            {
-                lootManager.unhideDropForNpc(npcName, drop.getItemId());
-            }
-            else
-            {
-                lootManager.hideDropForNpc(npcName, drop.getItemId());
-            }
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem toggleItem = new JMenuItem(ignored ? "Un-ignore" : "Ignore");
+        toggleItem.addActionListener(e -> {
+            if (ignored) lootManager.unhideDropForNpc(npcName, drop.getItemId());
+            else         lootManager.hideDropForNpc  (npcName, drop.getItemId());
             refreshDisplay();
         });
-        itemMenu.add(ignoreItem);
+        menu.add(toggleItem);
 
-        layeredPane.addMouseListener(new MouseAdapter()
+        slot.addMouseListener(new MouseAdapter()
         {
-            @Override
-            public void mousePressed(MouseEvent e)
+            @Override public void mousePressed (MouseEvent e) { maybePopup(e); }
+            @Override public void mouseReleased(MouseEvent e) { maybePopup(e); }
+            private void maybePopup(MouseEvent e)
             {
-                if (e.isPopupTrigger())
-                {
-                    itemMenu.show(e.getComponent(), e.getX(), e.getY());
-                }
-            }
-
-            @Override
-            public void mouseReleased(MouseEvent e)
-            {
-                if (e.isPopupTrigger())
-                {
-                    itemMenu.show(e.getComponent(), e.getX(), e.getY());
-                }
+                if (e.isPopupTrigger()) menu.show(e.getComponent(), e.getX(), e.getY());
             }
         });
-
-        // Tooltip
-        String tooltip = buildAggregatedItemTooltip(drop);
-        layeredPane.setToolTipText(tooltip);
-        iconLabel.setToolTipText(tooltip);
 
         JPanel wrapper = new JPanel(new BorderLayout());
         wrapper.setPreferredSize(new Dimension(ITEM_SIZE, ITEM_SIZE));
-        wrapper.setMinimumSize(new Dimension(ITEM_SIZE, ITEM_SIZE));
-        wrapper.setMaximumSize(new Dimension(ITEM_SIZE, ITEM_SIZE));
+        wrapper.setMinimumSize  (new Dimension(ITEM_SIZE, ITEM_SIZE));
+        wrapper.setMaximumSize  (new Dimension(ITEM_SIZE, ITEM_SIZE));
         wrapper.setOpaque(false);
-        wrapper.add(layeredPane, BorderLayout.CENTER);
-
+        wrapper.add(slot, BorderLayout.CENTER);
         return wrapper;
     }
 
-    private static Color getValueColor(long value)
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Empty state
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private JPanel buildEmptyState()
     {
-        if (value >= 10_000_000) return new Color(255, 170, 0);  // Orange
-        if (value >= 1_000_000)  return new Color(200, 100, 255); // Purple
-        if (value >= 100_000)    return new Color(100, 200, 255); // Cyan
-        if (value >= 1_000)      return new Color(100, 255, 100); // Green
-        return new Color(255, 215, 0); // Gold
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        p.setBorder(new EmptyBorder(40, 20, 40, 20));
+        p.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        JLabel skull = new JLabel("💀");
+        skull.setFont(new Font("Dialog", Font.PLAIN, 48));
+        skull.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        JLabel msg = new JLabel("No loot tracked yet");
+        msg.setForeground(Color.WHITE);
+        msg.setFont(FontManager.getRunescapeSmallFont().deriveFont(Font.BOLD, 12f));
+        msg.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        JLabel sub = new JLabel("Kill bosses to start tracking!");
+        sub.setForeground(Color.GRAY);
+        sub.setFont(FontManager.getRunescapeSmallFont());
+        sub.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        p.add(skull);
+        p.add(Box.createVerticalStrut(8));
+        p.add(msg);
+        p.add(Box.createVerticalStrut(4));
+        p.add(sub);
+
+        totalKillsLabel.setText("0 kills");
+        totalValueLabel.setText("0 gp total");
+        return p;
     }
 
-    public void refresh()
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Sorting
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void sortStats(List<BossKillStats> stats)
     {
-        SwingUtilities.invokeLater(this::refreshDisplay);
+        stats.sort((a, b) -> {
+            boolean aHl = a.getNpcName().equals(highlightedBoss);
+            boolean bHl = b.getNpcName().equals(highlightedBoss);
+            if (aHl && !bHl) return -1;
+            if (bHl && !aHl) return  1;
+            switch (currentSort)
+            {
+                case VALUE:  return Long.   compare(b.getTotalLootValue(),    a.getTotalLootValue());
+                case KILLS:  return Integer.compare(b.getKillCount(),         a.getKillCount());
+                case RECENT: return Long.   compare(b.getLastKillTimestamp(), a.getLastKillTimestamp());
+                default:     return 0;
+            }
+        });
     }
 
-    private String buildAggregatedItemTooltip(BossKillStats.AggregatedDrop drop)
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Confirm dialogs
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void confirmPrestige(BossKillStats stats)
     {
-        StringBuilder sb = new StringBuilder();
-        sb.append("<html>");
-        sb.append("<b>").append(drop.getItemName()).append("</b><br>");
-        sb.append("<br>");
-        sb.append("Times Dropped: <b>").append(drop.getDropCount()).append("</b><br>");
-        sb.append("Total Quantity: ").append(QuantityFormatter.formatNumber(drop.getTotalQuantity())).append("<br>");
-        sb.append("<br>");
-        sb.append("GE Price: ").append(formatGp(drop.getGePrice())).append(" ea<br>");
-        sb.append("Total Value: <b>").append(formatGp(drop.getTotalValue())).append("</b><br>");
-        sb.append("High Alch: ").append(formatGp(drop.getHighAlchValue())).append(" ea");
-        sb.append("</html>");
-        return sb.toString();
+        int r = JOptionPane.showConfirmDialog(this,
+                String.format("Prestige %s? Resets KC to Prestige %d.",
+                        stats.getNpcName(), stats.getPrestige() + 1),
+                "Confirm Prestige", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (r == JOptionPane.YES_OPTION) lootManager.prestigeBoss(stats.getNpcName());
     }
 
-    private String formatGp(long value)
+    private void confirmClearBoss(BossKillStats stats)
     {
-        if (value >= 1_000_000_000) return String.format("%.2fB gp", value / 1_000_000_000.0);
-        if (value >= 1_000_000) return String.format("%.2fM gp", value / 1_000_000.0);
-        if (value >= 1_000) return String.format("%.1fK gp", value / 1_000.0);
-        return value + " gp";
+        int r = JOptionPane.showConfirmDialog(this,
+                String.format("Clear all data for %s? (%d kills, %s loot)",
+                        stats.getNpcName(), stats.getKillCount(),
+                        formatGp(stats.getTotalLootValue())),
+                "Confirm Clear", JOptionPane.YES_NO_OPTION, JOptionPane.ERROR_MESSAGE);
+        if (r == JOptionPane.YES_OPTION) lootManager.clearBossData(stats.getNpcName());
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Utility
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void restoreButtonColor(JButton btn)
+    {
+        if      (btn == eyeButton)   btn.setBackground(showIgnoredItems ? ColorScheme.BRAND_ORANGE : ColorScheme.DARK_GRAY_COLOR);
+        else if (btn == sortButton)
+        {
+            switch (currentSort)
+            {
+                case RECENT: btn.setBackground(new Color(55, 90, 55));       break;
+                case VALUE:  btn.setBackground(ColorScheme.DARK_GRAY_COLOR); break;
+                case KILLS:  btn.setBackground(new Color(55, 55, 90));       break;
+            }
+        }
+        else btn.setBackground(ColorScheme.DARK_GRAY_COLOR);
+    }
+
+    private String truncate(String s, int maxLen)
+    {
+        if (s == null || s.length() <= maxLen) return s;
+        int cut = s.lastIndexOf(' ', maxLen - 1);
+        return (cut > maxLen / 2 ? s.substring(0, cut) : s.substring(0, maxLen - 1)) + "…";
+    }
+
+    private String formatGp(long v)
+    {
+        if (v >= 1_000_000_000) return String.format("%.2fB gp", v / 1e9);
+        if (v >= 1_000_000)     return String.format("%.2fM gp", v / 1e6);
+        if (v >= 1_000)         return String.format("%.1fK gp", v / 1e3);
+        return v + " gp";
+    }
+
+    private String formatNumber(long n)
+    {
+        if (n >= 1_000_000_000) return String.format("%.1fB", n / 1e9);
+        if (n >= 1_000_000)     return String.format("%.1fM", n / 1e6);
+        if (n >= 1_000)         return String.format("%.1fK", n / 1e3);
+        return String.valueOf(n);
     }
 
     private String formatQuantity(long qty)
     {
-        if (qty >= 1_000_000) return String.format("%.1fM", qty / 1_000_000.0);
-        if (qty >= 1_000) return String.format("%.1fK", qty / 1_000.0);
+        if (qty >= 1_000_000) return String.format("%.1fM", qty / 1e6);
+        if (qty >= 1_000)     return String.format("%.1fK", qty / 1e3);
         return String.valueOf(qty);
+    }
+
+    private Color valueColour(long value)
+    {
+        if (value >= 10_000_000) return new Color(255, 170,   0);
+        if (value >=  1_000_000) return new Color(200, 100, 255);
+        if (value >=    100_000) return new Color(100, 200, 255);
+        if (value >=      1_000) return new Color(100, 255, 100);
+        return new Color(255, 215, 0);
+    }
+
+    private String buildTooltip(BossKillStats.AggregatedDrop drop)
+    {
+        return "<html>"
+                + "<b>" + drop.getItemName() + "</b><br>"
+                + "Dropped: <b>" + drop.getDropCount() + "×</b><br>"
+                + "Qty: "        + QuantityFormatter.formatNumber((int) drop.getTotalQuantity()) + "<br>"
+                + "GE: "         + formatGp(drop.getGePrice()) + " ea<br>"
+                + "Total: <b>"   + formatGp(drop.getTotalValue()) + "</b><br>"
+                + "Alch: "       + formatGp(drop.getHighAlchValue()) + " ea"
+                + "</html>";
     }
 }

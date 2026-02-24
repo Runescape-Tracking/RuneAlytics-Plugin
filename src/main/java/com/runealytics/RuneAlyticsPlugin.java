@@ -1,16 +1,13 @@
 package com.runealytics;
 
-import com.google.common.eventbus.Subscribe;
 import com.google.gson.Gson;
 import com.google.inject.Provides;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.api.Client;
+import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.api.*; // General API
-import net.runelite.api.widgets.Widget; // Specific import for Widget
 import net.runelite.api.events.*;
-
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -19,7 +16,6 @@ import net.runelite.client.events.PlayerLootReceived;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
-import net.runelite.client.task.Schedule;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.ImageUtil;
@@ -33,161 +29,159 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import static com.runealytics.RuneAlyticsPanel.FEATURE_LOOT;
+import static com.runealytics.RuneAlyticsPanel.FEATURE_MATCHES;
 
 @Slf4j
 @PluginDescriptor(
-        name = "RuneAlytics",
+        name        = "RuneAlytics",
         description = "Complete analytics and tracking for Old School RuneScape",
-        tags = {"analytics", "tracking", "loot", "stats", "runealytics"}
+        tags        = {"analytics", "tracking", "loot", "stats", "runealytics"}
 )
 public class RuneAlyticsPlugin extends Plugin
 {
-    // ==================== WIDGET GROUP IDs ====================
-    // These are the RuneLite widget group IDs for reward/loot interfaces.
-    // When onWidgetLoaded fires with one of these IDs, we know loot is incoming
-    // via PlayerLootReceived and set lastChestSource accordingly.
+    // ═════════════════════════════════════════════════════════════════════════
+    //  WIDGET GROUP-IDs  (mirrors the constants defined in LootTrackerManager)
+    // ═════════════════════════════════════════════════════════════════════════
+    // These are referenced only inside this plugin to dispatch to the manager.
 
+    // ── Standard reward containers ────────────────────────────────────────────
+    /** Barrows reward chest (container-read path) */
+    static final int WIDGET_BARROWS           = LootTrackerManager.WIDGET_BARROWS;
+    /** Chambers of Xeric chest */
+    static final int WIDGET_COX               = LootTrackerManager.WIDGET_COX;
+    /** Theatre of Blood chest */
+    static final int WIDGET_TOB               = LootTrackerManager.WIDGET_TOB;
+    /** Tombs of Amascut chest */
+    static final int WIDGET_TOA               = LootTrackerManager.WIDGET_TOA;
+    /** Corrupted Gauntlet chest */
+    static final int WIDGET_CORRUPTED_GAUNTLET= LootTrackerManager.WIDGET_CORRUPTED_GAUNTLET;
+    /** Normal Gauntlet chest */
+    static final int WIDGET_GAUNTLET          = LootTrackerManager.WIDGET_GAUNTLET;
+    /** Nightmare / Phosani chest */
+    static final int WIDGET_NIGHTMARE         = LootTrackerManager.WIDGET_NIGHTMARE;
+    /** Zalcano chest */
+    static final int WIDGET_ZALCANO           = LootTrackerManager.WIDGET_ZALCANO;
 
-
-
-    /** Barrows reward chest interface */
-    private static final int WIDGET_BARROWS_REWARD = 155;
-
-    /** Chambers of Xeric (CoX) reward chest — uses RuneLite's InterfaceID constant */
-    private static final int WIDGET_COX_REWARD = 234;
-
-    /** Theatre of Blood (ToB) reward chest */
-    private static final int WIDGET_TOB_REWARD = 513;
-
-    /** Tombs of Amascut (ToA) reward chest */
-    private static final int WIDGET_TOA_REWARD = 773;
-
-    /** Corrupted Gauntlet reward chest */
-    private static final int WIDGET_CORRUPTED_GAUNTLET_REWARD = 700;
-
-    /** Clue scroll reward casket */
-    private static final int WIDGET_CLUE_REWARD = 73;
-
+    // ── Widget-tree reads (no fixed InventoryID) ─────────────────────────────
     /** Tempoross reward pool */
-    private static final int WIDGET_TEMPOROSS_REWARD = 229;
+    static final int WIDGET_TEMPOROSS         = LootTrackerManager.WIDGET_TEMPOROSS;
+    /** Wintertodt reward crate */
+    static final int WIDGET_WINTERTODT        = LootTrackerManager.WIDGET_WINTERTODT;
+    /** Clue scroll casket */
+    static final int WIDGET_CLUE              = LootTrackerManager.WIDGET_CLUE;
+    /** Royal Titans (Varlamore lair) */
+    static final int WIDGET_ROYAL_TITANS      = LootTrackerManager.WIDGET_ROYAL_TITANS;
+    /** Yama reward */
+    static final int WIDGET_YAMA              = LootTrackerManager.WIDGET_YAMA;
+    /** Fortis Colosseum chest */
+    static final int WIDGET_COLOSSEUM         = LootTrackerManager.WIDGET_COLOSSEUM;
+    /** Hespori flower chest */
+    static final int WIDGET_HESPORI           = LootTrackerManager.WIDGET_HESPORI;
 
-    /**
-     * Varlamore lair bosses reward interface (Eldric the Ice King, Branda the Fire Queen).
-     * Fires when the boss dies and the loot chest/room becomes available.
-     * Widget groupId confirmed in-game: 174
-     */
-    static final int WIDGET_VARLAMORE_LAIR_REWARD = 174;
-
-    /**
-     * Yama (Path of Glouphrie area boss) reward interface.
-     * TODO: Verify this widget ID against current OSRS client — update if wrong.
-     * Check with: log.info("Widget loaded: {}", groupId) and open the loot interface.
-     */
-    private static final int WIDGET_YAMA_REWARD = 810;
-
-    /**
-     * Fortis Colosseum reward interface.
-     * This fires after completing a Colosseum wave set.
-     */
-    private static final int WIDGET_COLOSSEUM_REWARD = 867;
-
-    // ==================== TIMING CONSTANTS ====================
-
-    /**
-     * How long (ms) after an NPC death to accept nearby ground item spawns
-     * as belonging to that kill. Keep short to avoid false attribution.
-     */
-    private static final long GROUND_ITEM_WINDOW_MS = 3_000;
-
-    /**
-     * How long (ms) before we give up waiting for Tempoross inventory changes
-     * and reset the snapshot state.
-     */
-    private static final long TEMPOROSS_LOOT_WINDOW_MS = 10_000;
-
-    /** Seconds before we clear lastKilledBoss to prevent stale attributions */
+    // ── Timing ────────────────────────────────────────────────────────────────
+    /** ms after a kill during which spawning ground items are attributed to it */
+    private static final long GROUND_ITEM_WINDOW_MS      = 3_000;
+    /** seconds before we clear lastKilledBoss to avoid stale attributions */
     private static final long BOSS_CLEAR_TIMEOUT_SECONDS = 30;
 
-    /** Buffer for ground items spawned near a recently killed boss */
-    private final List<ItemStack> groundItemBuffer = new ArrayList<>();
+    // ═════════════════════════════════════════════════════════════════════════
+    //  INJECTED FIELDS
+    // ═════════════════════════════════════════════════════════════════════════
 
-    /** Guards against scheduling multiple flush tasks simultaneously */
-    private final java.util.concurrent.atomic.AtomicBoolean groundItemFlushScheduled
-            = new java.util.concurrent.atomic.AtomicBoolean(false);
-
-    // ==================== INJECTED DEPENDENCIES ====================
-
-    @Inject private Client client;
-    @Inject private ClientThread clientThread;
-    @Inject private RunealyticsConfig config;
-    @Inject private ClientToolbar clientToolbar;
-    @Inject private OkHttpClient okHttpClient;
-    @Inject private Gson gson;
-    @Inject private ConfigManager configManager;
-    @Inject private ItemManager itemManager;
-    @Inject private LootTrackerManager lootManager;
-    @Inject private RuneAlyticsState state;
+    @Inject private Client                   client;
+    @Inject private ClientThread             clientThread;
+    @Inject private RunealyticsConfig        config;
+    @Inject private ClientToolbar            clientToolbar;
+    @Inject private OkHttpClient             okHttpClient;
+    @Inject private Gson                     gson;
+    @Inject private ConfigManager            configManager;
+    @Inject private ItemManager              itemManager;
+    @Inject private LootTrackerManager       lootManager;
+    @Inject private RuneAlyticsState         state;
     @Inject private ScheduledExecutorService executorService;
-    @Inject private XpTrackerManager xpTrackerManager;
+    @Inject private XpTrackerManager         xpTrackerManager;
+    @Inject private RunealyticsApiClient     apiClient;
 
-    // ==================== UI ====================
-
-    /** The main plugin panel shown in the RuneLite sidebar */
-    @Getter
-    private RuneAlyticsPanel mainPanel;
-
-    /** The sidebar navigation button */
+    // ── UI ───────────────────────────────────────────────────────────────────
+    @Getter private RuneAlyticsPanel mainPanel;
     private NavigationButton navButton;
 
-    // ==================== LOOT TRACKING STATE ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT TRACKING STATE
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Inventory snapshot taken just BEFORE Tempoross reward is collected,
-     * so we can diff new items afterward. Null when not awaiting Tempoross loot.
+     * Inventory snapshot taken just before Tempoross / Wintertodt rewards arrive.
+     * Used to diff new items out of the inventory rather than reading the widget.
      */
-    private List<ItemStack> inventoryBeforeTempoross = null;
+    private List<ItemStack> inventorySnapshot = null;
 
     /**
-     * Whether we are currently waiting for a Tempoross inventory change
-     * after the completion message fired.
+     * Whether we are waiting for Tempoross inventory changes after the
+     * subdual chat message.
      */
     private boolean waitingForTemporossLoot = false;
 
     /**
-     * The most recently killed boss NPC. Used to attribute nearby ground
-     * item spawns to the correct kill source. Cleared after BOSS_CLEAR_TIMEOUT_SECONDS.
+     * Whether we are waiting for Wintertodt inventory changes after the
+     * reward crate message.
      */
-    private  NPC lastKilledBoss;
+    private boolean waitingForWintertodtLoot = false;
 
     /**
-     * Timestamp of when lastKilledBoss was set. Used to expire the attribution window.
+     * The NPC that most recently dropped loot, used to attribute nearby
+     * ground-item spawns (ItemSpawned fallback path).
+     */
+    private NPC lastKilledBoss;
+
+    /**
+     * When {@link #lastKilledBoss} was set; used to expire the attribution window.
      */
     private Instant lastKillTime;
 
     /**
+     * Buffer of ground items collected within the attribution window.
+     * Flushed as a batch 500ms after the first item arrives.
+     */
+    private final List<ItemStack> groundItemBuffer = new ArrayList<>();
+
+    /**
+     * Guards against scheduling multiple ground-item flush tasks at once.
+     */
+    private final AtomicBoolean groundItemFlushScheduled = new AtomicBoolean(false);
+
+    /**
      * Source name for the next PlayerLootReceived event.
-     * Set by onWidgetLoaded (chest opened) or onChatMessage (completion message).
-     * Cleared immediately after being consumed in onPlayerLootReceived.
+     * Set by onWidgetLoaded or onChatMessage; consumed and cleared in
+     * onPlayerLootReceived.
      */
     private String lastChestSource = null;
 
-    /**
-     * XP values from the previous StatChanged event per skill.
-     * Used to calculate the delta (xpGained) for each skill event.
-     */
+    /** Previous XP values per skill for delta calculation. */
     private final Map<Skill, Integer> previousXp = new EnumMap<>(Skill.class);
 
-    // ==================== STARTUP ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  STARTUP / SHUTDOWN
+    // ═════════════════════════════════════════════════════════════════════════
 
     @Override
     protected void startUp()
     {
-        log.info("RuneAlytics started");
+        log.info("RuneAlytics starting");
         logConfiguration();
 
         mainPanel = injector.getInstance(RuneAlyticsPanel.class);
         LootTrackerPanel lootPanel = injector.getInstance(LootTrackerPanel.class);
-        mainPanel.addLootTrackerTab(lootPanel);
+
+        // Register tabs with their feature-flag keys.
+        // The server controls visibility; tabs not enabled for this account are hidden.
+        mainPanel.addTab("Loot Tracker",  FEATURE_LOOT,    lootPanel);
+        // Uncomment when MatchFinderPanel exists:
+        MatchmakingPanel matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
+        mainPanel.addTab("Match Finder", FEATURE_MATCHES, matchmakingPanel);
 
         navButton = NavigationButton.builder()
                 .tooltip("RuneAlytics")
@@ -200,27 +194,30 @@ public class RuneAlyticsPlugin extends Plugin
         lootManager.setPanel(lootPanel);
         lootManager.initialize();
 
-        log.info("RuneAlytics plugin fully initialized");
+        log.info("RuneAlytics started");
     }
 
     @Override
     protected void shutDown()
     {
-        log.info("RuneAlytics plugin shutting down");
-
-        if (lootManager != null)
-        {
-            lootManager.shutdown();
-        }
-
-        if (navButton != null)
-        {
-            clientToolbar.removeNavigation(navButton);
-        }
-
+        log.info("RuneAlytics shutting down");
+        lootManager.shutdown();
+        if (navButton != null) clientToolbar.removeNavigation(navButton);
         state.reset();
-        log.info("RuneAlytics plugin shut down complete");
     }
+
+    private void clearTransientLootState()
+    {
+        lastKilledBoss           = null;
+        lastKillTime             = null;
+        lastChestSource          = null;
+        inventorySnapshot        = null;
+        waitingForTemporossLoot  = false;
+        waitingForWintertodtLoot = false;
+        groundItemBuffer.clear();
+        groundItemFlushScheduled.set(false);
+    }
+
 
     @Provides
     RunealyticsConfig provideConfig(ConfigManager manager)
@@ -228,311 +225,248 @@ public class RuneAlyticsPlugin extends Plugin
         return manager.getConfig(RunealyticsConfig.class);
     }
 
-    // ==================== NPC LOOT (ground drops) ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 1 – NPC GROUND DROPS
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Fired by RuneLite when an NPC dies and drops items on the ground.
-     * This covers ALL standard ground-drop kills: giants, dragons, wilderness bosses,
-     * Vorkath, Zulrah, Cerberus, Hydra, GWD bosses, DKS, etc.
-     *
-     * <p>FIX: Previously routed through processPlayerLoot() which lost the NPC object
-     * (no combat level, no NPC ID). Now routes through processNpcLoot() so full NPC
-     * data is available and deduplication is NPC-specific.</p>
-     *
-     * @param event the NpcLootReceived event containing the NPC and item list
+     * Fired by RuneLite when an NPC drops items on the ground.
+     * Covers all standard monsters, bosses, wilderness NPCs, etc.
      */
     @Subscribe
     public void onNpcLootReceived(NpcLootReceived event)
     {
-        if (!config.enableLootTracking())
-        {
-            return;
-        }
+        if (!config.enableLootTracking()) return;
 
         NPC npc = event.getNpc();
-        if (npc == null)
-        {
-            log.warn("onNpcLootReceived: NPC is null, skipping");
-            return;
-        }
+        if (npc == null) return;
 
-        // Track for ground item attribution (ItemSpawned events)
+        // Track for ground-item fallback attribution
         lastKilledBoss = npc;
-        lastKillTime = Instant.now();
+        lastKillTime   = Instant.now();
 
-        Collection<net.runelite.client.game.ItemStack> runeliteItems = event.getItems();
-        if (runeliteItems == null || runeliteItems.isEmpty())
-        {
-            log.debug("onNpcLootReceived: No items for {}", npc.getName());
-            return;
-        }
+        Collection<net.runelite.client.game.ItemStack> rlItems = event.getItems();
+        if (rlItems == null || rlItems.isEmpty()) return;
 
-        // Convert RuneLite ItemStacks → our internal ItemStack type
         List<ItemStack> items = new ArrayList<>();
-        for (net.runelite.client.game.ItemStack rlItem : runeliteItems)
-        {
-            items.add(new ItemStack(rlItem.getId(), rlItem.getQuantity()));
-        }
+        for (net.runelite.client.game.ItemStack i : rlItems)
+            items.add(new ItemStack(i.getId(), i.getQuantity()));
 
-        log.info("NPC loot received from {} (id={}, cb={}): {} items",
-                npc.getName(), npc.getId(), npc.getCombatLevel(), items.size());
-
-        // Route through processNpcLoot so NPC ID + combat level are preserved
-        // and boss-specific dedup logic applies correctly
         lootManager.processNpcLoot(npc, items);
     }
 
-    @Subscribe
-    public void onNpcDespawned(NpcDespawned event){
-        LootTrackerManager.onNpcDespawned(event);
-    }
-
-    // ==================== PLAYER / CHEST LOOT ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 2 – PLAYER / CHEST LOOT
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Fired by RuneLite for non-NPC loot sources: raid chests, Barrows chest,
-     * Gauntlet reward, PvP loot piles, etc.
-     *
-     * <p>The event itself carries no source name, so we rely on {@link #lastChestSource}
-     * which is set by {@link #onWidgetLoaded} (chest UI opens) or
-     * {@link #onChatMessage} (completion message). If neither fires first,
-     * we fall back to "Unknown Chest" rather than silently discarding.</p>
-     *
-     * @param event the PlayerLootReceived event with the item list
+     * Fired by RuneLite for non-NPC loot sources: raids, Barrows, Gauntlet,
+     * PvP piles, etc.  We consume {@link #lastChestSource} (set by
+     * onWidgetLoaded / onChatMessage) to label the source correctly.
      */
     @Subscribe
     public void onPlayerLootReceived(PlayerLootReceived event)
     {
-        if (!config.enableLootTracking())
-        {
-            return;
-        }
+        if (!config.enableLootTracking()) return;
 
-        Collection<net.runelite.client.game.ItemStack> runeliteItems = event.getItems();
-        if (runeliteItems == null || runeliteItems.isEmpty())
-        {
-            log.debug("onPlayerLootReceived: empty item list, skipping");
-            return;
-        }
+        Collection<net.runelite.client.game.ItemStack> rlItems = event.getItems();
+        if (rlItems == null || rlItems.isEmpty()) return;
 
-        // Consume the pending source label; fall back to "Unknown Chest"
+        // Consume pending source; fall back to "Unknown Chest"
         String source = (lastChestSource != null && !lastChestSource.isEmpty())
-                ? lastChestSource
-                : "Unknown Chest";
-        lastChestSource = null; // reset so the next event gets a clean slate
+                ? lastChestSource : "Unknown Chest";
+        lastChestSource = null;
 
-        // Normalise Tempoross variants into one label
-        if (source.contains("Reward pool") || source.contains("Casket (Tempoross)"))
-        {
+        // Normalise Tempoross variants
+        if (source.toLowerCase().contains("reward pool")
+                || source.toLowerCase().contains("casket (tempoross)"))
             source = "Tempoross";
-        }
-
-        log.info("Player loot received from '{}': {} items", source, runeliteItems.size());
 
         List<ItemStack> items = new ArrayList<>();
-        for (net.runelite.client.game.ItemStack rlItem : runeliteItems)
-        {
-            items.add(new ItemStack(rlItem.getId(), rlItem.getQuantity()));
-        }
+        for (net.runelite.client.game.ItemStack i : rlItems)
+            items.add(new ItemStack(i.getId(), i.getQuantity()));
 
         lootManager.processPlayerLoot(source, items);
     }
 
-    // ==================== WIDGET / UI DETECTION ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 3 – WIDGET LOADED  (primes source + triggers container reads)
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Fires whenever a new interface widget is loaded.  We use this to detect
-     * which reward chest was just opened and prime {@link #lastChestSource}
-     * before the matching PlayerLootReceived event arrives.
-     *
-     * <p>Widget group IDs are defined as constants at the top of this class.
-     * If you add new content, add a constant there and a branch here.</p>
-     *
-     * @param event the WidgetLoaded event with the interface group ID
+     * Fires whenever a UI widget is loaded.  We use this to:
+     * <ol>
+     *   <li>Set {@link #lastChestSource} so PlayerLootReceived is labelled.</li>
+     *   <li>Directly read the reward container / widget tree (more reliable than
+     *       waiting for PlayerLootReceived in some cases).</li>
+     * </ol>
      */
     @Subscribe
     public void onWidgetLoaded(WidgetLoaded event)
     {
-        if (!config.enableLootTracking())
-        {
-            return;
-        }
+        if (!config.enableLootTracking()) return;
 
-        int groupId = event.getGroupId();
-        log.info("RuneAlytics - Widget loaded: groupId={}", groupId);
+        int gid = event.getGroupId();
+        log.info("WidgetLoaded: groupId={}", gid);
 
-        if (groupId == WIDGET_BARROWS_REWARD) // 155
+        // ── Standard container reads ──────────────────────────────────────────
+        if (gid == WIDGET_BARROWS)
         {
             lastChestSource = "Barrows";
-            clientThread.invokeLater(() -> processChestLoot(lastChestSource, 141));
+            lootManager.readRewardContainer("Barrows", 141);
         }
-        else if (groupId == WIDGET_COX_REWARD) // 234
+        else if (gid == WIDGET_COX)
         {
             lastChestSource = "Chambers of Xeric";
-            clientThread.invokeLater(() -> processChestLoot(lastChestSource, 122));
+            lootManager.readRewardContainer("Chambers of Xeric", 122);
         }
-        else if (groupId == WIDGET_TOB_REWARD) // 513
+        else if (gid == WIDGET_TOB)
         {
             lastChestSource = "Theatre of Blood";
-            clientThread.invokeLater(() -> processChestLoot(lastChestSource, 612));
+            lootManager.readRewardContainer("Theatre of Blood", 612);
         }
-        else if (groupId == WIDGET_VARLAMORE_LAIR_REWARD) { // 174
-            log.info("Varlamore lair reward interface detected");
-            // Ensure source is set if chat detection was missed
-            if (lastChestSource == null) lastChestSource = "Royal Titans";
-            clientThread.invokeLater(this::processVariableReward);
-        }
-        else if (groupId == WIDGET_TOA_REWARD) // 773
+        else if (gid == WIDGET_TOA)
         {
             lastChestSource = "Tombs of Amascut";
-            clientThread.invokeLater(() -> processChestLoot(lastChestSource, 141));
+            lootManager.readRewardContainer("Tombs of Amascut", 141);
         }
-        else if (groupId == WIDGET_CORRUPTED_GAUNTLET_REWARD) // 700
+        else if (gid == WIDGET_CORRUPTED_GAUNTLET)
         {
             lastChestSource = "Corrupted Gauntlet";
-            clientThread.invokeLater(() -> processChestLoot(lastChestSource, 141));
+            lootManager.readRewardContainer("Corrupted Gauntlet", 179);
         }
-        else if (groupId == WIDGET_YAMA_REWARD) // 810
+        else if (gid == WIDGET_GAUNTLET)
+        {
+            lastChestSource = "The Gauntlet";
+            lootManager.readRewardContainer("The Gauntlet", 179);
+        }
+        else if (gid == WIDGET_NIGHTMARE)
+        {
+            // Determine Phosani vs normal from the source primed by chat
+            String nm = (lastChestSource != null && lastChestSource.contains("Phosani"))
+                    ? "Phosani's Nightmare" : "The Nightmare";
+            lastChestSource = nm;
+            lootManager.readRewardContainer(nm, 646);
+        }
+        else if (gid == WIDGET_ZALCANO)
+        {
+            lastChestSource = "Zalcano";
+            lootManager.readRewardContainer("Zalcano", 631);
+        }
+
+        // ── Widget-tree reads (no standard InventoryID) ───────────────────────
+        else if (gid == WIDGET_ROYAL_TITANS)
+        {
+            if (lastChestSource == null) lastChestSource = "Royal Titans";
+            lootManager.readWidgetLoot(lastChestSource, WIDGET_ROYAL_TITANS, 100);
+        }
+        else if (gid == WIDGET_YAMA)
         {
             lastChestSource = "Yama";
-            clientThread.invokeLater(() -> processChestLoot(lastChestSource, 141));
+            lootManager.readWidgetLoot("Yama", WIDGET_YAMA, 100);
         }
-        else if (groupId == WIDGET_COLOSSEUM_REWARD) // 867
+        else if (gid == WIDGET_COLOSSEUM)
         {
             lastChestSource = "Fortis Colosseum";
-            clientThread.invokeLater(() -> processChestLoot(lastChestSource, 141));
+            lootManager.readWidgetLoot("Fortis Colosseum", WIDGET_COLOSSEUM, 150);
         }
-        else if (groupId == WIDGET_CLUE_REWARD) // 73
+        else if (gid == WIDGET_HESPORI)
         {
-            clientThread.invokeLater(this::processClueReward);
+            lastChestSource = "Hespori";
+            lootManager.readWidgetLoot("Hespori", WIDGET_HESPORI, 60);
         }
-        else if (groupId == WIDGET_TEMPOROSS_REWARD) // 229
+        else if (gid == WIDGET_WINTERTODT)
         {
-            clientThread.invokeLater(this::processTemporossReward);
+            lastChestSource = "Wintertodt";
+            // Also start inventory-diff path as a fallback
+            clientThread.invokeLater(() -> {
+                inventorySnapshot     = getCurrentInventory();
+                waitingForWintertodtLoot = true;
+            });
+            lootManager.readWidgetLoot("Wintertodt", WIDGET_WINTERTODT, 80);
+        }
+        else if (gid == WIDGET_TEMPOROSS)
+        {
+            // Widget path – try reading the reward pool widget tree
+            lootManager.readWidgetLoot("Tempoross", WIDGET_TEMPOROSS, 80);
+            // Inventory-diff is the reliable fallback (already started via chat)
+        }
+        else if (gid == WIDGET_CLUE)
+        {
+            // clue source was set by onChatMessage (treasure trail message)
+            String src = (lastChestSource != null) ? lastChestSource : "Clue Scroll";
+            lastChestSource = null;
+            lootManager.readClueReward(src);
         }
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 4 – INVENTORY DIFF  (Tempoross / Wintertodt fallback)
+    // ═════════════════════════════════════════════════════════════════════════
+
     /**
-     * Helper to process reward containers by looking at the specific container ID
+     * Fires when any item container changes.  Used exclusively as a fallback
+     * for Tempoross and Wintertodt when the widget-read path does not capture
+     * all items (can depend on client timing).
      */
-    private void processChestLoot(String source, int containerId)
+    @Subscribe
+    public void onItemContainerChanged(ItemContainerChanged event)
     {
-        // Use the integer containerId directly
-        ItemContainer container = client.getItemContainer(containerId);
-        if (container != null)
-        {
-            List<ItemStack> lootItems = new ArrayList<>();
-            for (Item item : container.getItems())
+        if (!config.enableLootTracking()) return;
+        if (event.getContainerId() != InventoryID.INVENTORY.getId()) return;
+        if (!waitingForTemporossLoot && !waitingForWintertodtLoot) return;
+
+        clientThread.invokeLater(() -> {
+            if (inventorySnapshot == null) return;
+
+            List<ItemStack> current = getCurrentInventory();
+            List<ItemStack> gained  = diffInventory(inventorySnapshot, current);
+
+            if (gained.isEmpty()) return;  // wait another tick
+
+            if (waitingForTemporossLoot)
             {
-                if (item.getId() != -1 && item.getQuantity() > 0)
-                {
-                    lootItems.add(new ItemStack(item.getId(), item.getQuantity()));
-                }
+                lootManager.processInventoryDiff("Tempoross", gained);
+                waitingForTemporossLoot = false;
+            }
+            else if (waitingForWintertodtLoot)
+            {
+                lootManager.processInventoryDiff("Wintertodt", gained);
+                waitingForWintertodtLoot = false;
             }
 
-            if (!lootItems.isEmpty())
-            {
-                log.info("RuneAlytics: Successfully captured {} items from {}", lootItems.size(), source);
-                lootManager.processPlayerLoot(source, lootItems);
-            }
-        }
+            inventorySnapshot = null;
+        });
     }
 
-    /**
-     * Processes loot from a non-NPC source: raid chests, Barrows chest,
-     * Gauntlet, Tempoross, clue scrolls, etc.
-     *
-     * <p>A 2-second deduplication window IS applied here to prevent double-recording
-     * when both the widget-read path AND the PlayerLootReceived event fire for the
-     * same loot (e.g. Tempoross can arrive via both inventory-diff and widget read).</p>
-     *
-     * @param sourceName the display name of the loot source (e.g. "Barrows", "Zulrah")
-     * @param items      the item list in our internal ItemStack format
-     */
-    private void processVariableReward()
-    {
-        // These variables (client, executorService, etc.) exist ONLY in this file
-        executorService.schedule(() -> clientThread.invokeLater(() ->
-        {
-            List<ItemStack> items = new ArrayList<>();
-
-            for (int i = 0; i < 100; i++)
-            {
-                Widget w = client.getWidget(WIDGET_VARLAMORE_LAIR_REWARD, i);
-                if (w == null) continue;
-
-                if (w.getItemId() > 0 && w.getItemQuantity() > 0)
-                {
-                    items.add(new ItemStack(w.getItemId(), w.getItemQuantity()));
-                }
-
-                Widget[] children = w.getChildren();
-                if (children != null)
-                {
-                    for (Widget child : children)
-                    {
-                        if (child != null && child.getItemId() > 0 && child.getItemQuantity() > 0)
-                        {
-                            items.add(new ItemStack(child.getItemId(), child.getItemQuantity()));
-                        }
-                    }
-                }
-            }
-
-            // We resolve the name HERE where 'lastChestSource' is visible
-            String sourceName = (lastChestSource != null) ? lastChestSource : "Royal Titans";
-
-            if (!items.isEmpty())
-            {
-                // We hand the items and the name to the Manager
-                lootManager.processPlayerLoot(sourceName, items);
-                lastChestSource = null;
-            }
-        }), 200, TimeUnit.MILLISECONDS);
-    }
-
-    // ==================== GROUND ITEM SPAWN ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 5 – GROUND ITEM SPAWN  (fallback for unsupported new content)
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Fired when any item appears on the ground.  We use this as a supplemental
-     * loot source for rare cases where NpcLootReceived doesn't fire but items
-     * do appear near a recently killed boss (e.g., certain special-attack kills
-     * or very new content not yet supported by RuneLite's loot tracker).
+     * Fires when any item appears on the ground.  Only used as a fallback:
+     * items spawning within GROUND_ITEM_WINDOW_MS of a recorded kill and
+     * within 5 tiles are batched and sent to the manager as a group.
      *
-     * <p>This does NOT duplicate items already captured by onNpcLootReceived —
-     * it is purely a fallback that only fires when lastKilledBoss is set and
-     * the item spawns within GROUND_ITEM_WINDOW_MS of the kill.</p>
-     *
-     * @param event the ItemSpawned event
+     * <p>This does NOT duplicate items from onNpcLootReceived because the
+     * manager applies its own deduplication via kill-record timestamps.</p>
      */
     @Subscribe
     public void onItemSpawned(ItemSpawned event)
     {
         if (!config.enableLootTracking() || lastKilledBoss == null || lastKillTime == null)
-        {
             return;
-        }
 
         long elapsedMs = Instant.now().toEpochMilli() - lastKillTime.toEpochMilli();
-        if (elapsedMs > GROUND_ITEM_WINDOW_MS)
-        {
-            return;
-        }
+        if (elapsedMs > GROUND_ITEM_WINDOW_MS) return;
 
-        TileItem tileItem = event.getItem();
         WorldPoint itemLoc = event.getTile().getWorldLocation();
         WorldPoint bossLoc = lastKilledBoss.getWorldLocation();
+        if (itemLoc == null || bossLoc == null || itemLoc.distanceTo(bossLoc) > 5) return;
 
-        if (itemLoc == null || bossLoc == null || itemLoc.distanceTo(bossLoc) > 5)
-        {
-            return;
-        }
+        TileItem tile = event.getItem();
+        groundItemBuffer.add(new ItemStack(tile.getId(), tile.getQuantity()));
 
-        // Collect all ground items in a small window then batch-process them
-        // to avoid one API call per item. We piggyback on the NPC source.
-        groundItemBuffer.add(new ItemStack(tileItem.getId(), tileItem.getQuantity()));
-
-        // Schedule a flush after 500ms to catch all items from the same kill
         if (groundItemFlushScheduled.compareAndSet(false, true))
         {
             final NPC boss = lastKilledBoss;
@@ -542,10 +476,7 @@ public class RuneAlyticsPlugin extends Plugin
                     List<ItemStack> batch = new ArrayList<>(groundItemBuffer);
                     groundItemBuffer.clear();
                     groundItemFlushScheduled.set(false);
-
-                    log.info("Ground items from {} ({}): {} items",
-                            boss.getName(), boss.getId(), batch.size());
-                    lootManager.processNpcLoot(boss, batch);
+                    lootManager.processGroundItemBatch(boss, batch);
                 }
                 else
                 {
@@ -555,176 +486,178 @@ public class RuneAlyticsPlugin extends Plugin
         }
     }
 
-    // ==================== CHAT MESSAGE DETECTION ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  CHAT MESSAGE  (sets lastChestSource + inventory snapshots)
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Listens for game/spam chat messages to detect:
+     * Listens for game / spam messages to:
      * <ul>
-     *   <li>Raid / activity completion — sets lastChestSource for upcoming PlayerLootReceived</li>
-     *   <li>Tempoross subdual — triggers an inventory snapshot</li>
-     *   <li>Kill count messages — passed to lootManager for KC tracking</li>
+     *   <li>Prime {@link #lastChestSource} for the upcoming PlayerLootReceived</li>
+     *   <li>Snapshot inventory before Tempoross / Wintertodt rewards arrive</li>
+     *   <li>Forward KC messages to the manager for logging</li>
      * </ul>
-     *
-     * @param event the ChatMessage event
      */
     @Subscribe
     public void onChatMessage(ChatMessage event)
     {
-        if (!config.enableLootTracking())
-        {
-            return;
-        }
+        if (!config.enableLootTracking()) return;
 
         ChatMessageType type = event.getType();
-        if (type != ChatMessageType.GAMEMESSAGE && type != ChatMessageType.SPAM)
-        {
-            return;
-        }
+        if (type != ChatMessageType.GAMEMESSAGE && type != ChatMessageType.SPAM) return;
 
-        String msg = event.getMessage();
+        String msg   = event.getMessage();
         String lower = msg.toLowerCase();
 
-        // Tempoross completion — snapshot inventory before reward items arrive
+        // ── Inventory snapshot triggers ───────────────────────────────────────
         if (lower.contains("subdued the spirit") || lower.contains("you have helped to subdue"))
         {
-            log.info("Tempoross completion message detected — snapshotting inventory");
             clientThread.invokeLater(() -> {
-                inventoryBeforeTempoross = getCurrentInventory();
+                inventorySnapshot     = getCurrentInventory();
                 waitingForTemporossLoot = true;
-                log.info("Tempoross inventory snapshot: {} items", inventoryBeforeTempoross.size());
+                log.info("Tempoross: inventory snapshot taken ({} items)",
+                        inventorySnapshot.size());
             });
+            lastChestSource = "Tempoross";
             return;
         }
 
-        // Kill count messages (e.g. "Your Zulrah kill count is: 42")
+        if (lower.contains("supply crate") && lower.contains("wintertodt"))
+        {
+            clientThread.invokeLater(() -> {
+                inventorySnapshot        = getCurrentInventory();
+                waitingForWintertodtLoot = true;
+            });
+        }
+
+        // ── KC messages ───────────────────────────────────────────────────────
         if (msg.contains("kill count is:") || msg.contains("killcount is:"))
         {
             lootManager.parseKillCountMessage(msg);
         }
 
-        // Detect which chest/activity completed so PlayerLootReceived is attributed
-        detectChestSource(lower);
+        // ── Chest source detection ────────────────────────────────────────────
+        String detected = lootManager.detectChestSource(lower);
+        if (detected != null && lastChestSource == null)
+        {
+            lastChestSource = detected;
+            log.info("Chat: chest source set to '{}'", detected);
+        }
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  GAME TICK  (expire stale kill attribution)
+    // ═════════════════════════════════════════════════════════════════════════
 
-    // ==================== INVENTORY CHANGE (Tempoross) ====================
-
-    /**
-     * Fires when any item container changes.  We use this exclusively for
-     * Tempoross: after the subdual message we snapshot the inventory, then
-     * watch here for new items to appear and record them as Tempoross loot.
-     *
-     * @param event the ItemContainerChanged event
-     */
-    @Subscribe
-    public void onItemContainerChanged(ItemContainerChanged event)
-    {
-        if (!config.enableLootTracking() || !waitingForTemporossLoot)
-        {
-            return;
-        }
-
-        if (event.getContainerId() != InventoryID.INVENTORY.getId())
-        {
-            return;
-        }
-
-        // Let the inventory settle one more tick before diffing
-        clientThread.invokeLater(() -> {
-            if (inventoryBeforeTempoross == null)
-            {
-                log.warn("Tempoross: no inventory snapshot found — resetting");
-                waitingForTemporossLoot = false;
-                return;
-            }
-
-            List<ItemStack> current = getCurrentInventory();
-            List<ItemStack> newItems = findNewItems(inventoryBeforeTempoross, current);
-
-            if (newItems.isEmpty())
-            {
-                log.debug("Tempoross: no new items yet, still waiting");
-                return; // keep waiting — items may arrive on the next tick
-            }
-
-            log.info("Tempoross: found {} new items from inventory diff", newItems.size());
-            lootManager.processPlayerLoot("Tempoross", newItems);
-
-            // Reset state so we don't double-count
-            waitingForTemporossLoot = false;
-            inventoryBeforeTempoross = null;
-        });
-    }
-
-    // ==================== GAME TICK ====================
-
-    /**
-     * Fires every game tick (~600ms).  Used to:
-     * <ul>
-     *   <li>Expire the lastKilledBoss attribution after BOSS_CLEAR_TIMEOUT_SECONDS</li>
-     * </ul>
-     *
-     * @param tick the GameTick event
-     */
     @Subscribe
     public void onGameTick(GameTick tick)
     {
         if (lastKillTime != null
-                && ChronoUnit.SECONDS.between(lastKillTime, Instant.now()) > BOSS_CLEAR_TIMEOUT_SECONDS)
+                && ChronoUnit.SECONDS.between(lastKillTime, Instant.now())
+                > BOSS_CLEAR_TIMEOUT_SECONDS)
         {
             lastKilledBoss = null;
-            lastKillTime = null;
+            lastKillTime   = null;
         }
     }
 
-    // ==================== GAME STATE ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  GAME STATE CHANGE  (login / logout)
+    // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Handles login/logout state changes.  Resets transient loot tracking state
-     * on logout so stale sources don't bleed into the next session.
-     *
-     * @param event the GameStateChanged event
-     */
     @Subscribe
     public void onGameStateChanged(GameStateChanged event)
     {
         GameState gs = event.getGameState();
-        log.info("Game state changed: {}", gs);
+        log.info("GameState: {}", gs);
+
+        if (gs == GameState.LOGIN_SCREEN)
+        {
+            state.setLoggedIn(false);
+
+            // Fully hide Loot + Match Finder while at login screen
+            SwingUtilities.invokeLater(() -> mainPanel.showLoggedOutState());
+            return;
+        }
+
+        if (gs == GameState.HOPPING)
+        {
+            // Do NOT reset panel on world hop
+            return;
+        }
 
         if (gs == GameState.LOGGED_IN)
         {
             state.setLoggedIn(true);
-        }
-        else if (gs == GameState.LOGIN_SCREEN || gs == GameState.HOPPING)
-        {
-            state.setLoggedIn(false);
 
-            // Clear all transient loot state on logout
-            lastKilledBoss = null;
-            lastKillTime = null;
-            lastChestSource = null;
-            waitingForTemporossLoot = false;
-            inventoryBeforeTempoross = null;
-            groundItemBuffer.clear();
-            groundItemFlushScheduled.set(false);
+            String username = client.getLocalPlayer() != null
+                    ? client.getLocalPlayer().getName()
+                    : null;
+
+            if (username == null || username.isEmpty())
+            {
+                return;
+            }
+
+            final String rsn = username.toLowerCase();
+
+            // If not verified → show verification only
+            if (!state.isVerified())
+            {
+                SwingUtilities.invokeLater(() ->
+                        mainPanel.showVerificationOnly());
+                return;
+            }
+
+            // Verified → fetch feature flags async
+            executorService.submit(() ->
+            {
+                Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
+
+                SwingUtilities.invokeLater(() ->
+                        mainPanel.showMainFeatures(
+                                flags.getOrDefault(FEATURE_LOOT, false),
+                                flags.getOrDefault(FEATURE_MATCHES, false)
+                        )
+                );
+            });
         }
     }
 
-    // ==================== PLAYER SPAWNED ====================
+    private void handlePostLogin()
+    {
+        String username = client.getLocalPlayer() != null
+                ? client.getLocalPlayer().getName()
+                : null;
 
-    /**
-     * Fires when the local player appears in the world (login or world-hop).
-     * Triggers auto-verification check and loads local loot data.
-     *
-     * @param event the PlayerSpawned event
-     */
+        if (username == null || username.isEmpty())
+            return;
+
+        // Not verified → show only verification tab
+        if (!state.isVerified())
+        {
+            SwingUtilities.invokeLater(() ->
+                    mainPanel.showVerificationOnly());
+            return;
+        }
+
+        // Verified → fetch feature flags
+        executorService.submit(() -> {
+            Map<String, Boolean> flags = apiClient.fetchFeatureFlags(username.toLowerCase());
+
+            SwingUtilities.invokeLater(() ->
+                    mainPanel.applyFeatureFlags(flags));
+        });
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  PLAYER SPAWNED  (post-login data load + auto-verification)
+    // ═════════════════════════════════════════════════════════════════════════
+
     @Subscribe
     public void onPlayerSpawned(PlayerSpawned event)
     {
-        if (event.getPlayer() != client.getLocalPlayer())
-        {
-            return;
-        }
+        if (event.getPlayer() != client.getLocalPlayer()) return;
 
         log.info("Local player spawned");
 
@@ -733,479 +666,189 @@ public class RuneAlyticsPlugin extends Plugin
             checkVerificationStatus();
         }
 
-        // Load only from local storage — no automatic server sync
+        // Load local data 2s after spawn to give the client time to settle
         executorService.schedule(() -> {
-            log.info("Post-login: verified={}, user={}",
-                    state.isVerified(), state.getVerifiedUsername());
             if (state.isVerified())
             {
-                log.info("Loading local loot data only");
+                log.info("Post-login: loading local loot data");
                 lootManager.loadFromStorage();
             }
             else
             {
-                log.warn("Not verified — skipping data load");
+                log.warn("Not verified – skipping data load");
             }
         }, 2, TimeUnit.SECONDS);
+
+        // Restore the tab the player was last on.
+        // Delayed slightly to let the flag-fetch and layout settle first.
+        executorService.schedule(
+                () -> SwingUtilities.invokeLater(mainPanel::restoreLastTab),
+                2_500, TimeUnit.MILLISECONDS
+        );
     }
 
-    @Subscribe
-    public void onScriptPostFired(ScriptPostFired event){
-        LootTrackerManager.onScriptPostFired(event);
-    }
+    // ═════════════════════════════════════════════════════════════════════════
+    //  XP TRACKING
+    // ═════════════════════════════════════════════════════════════════════════
 
-    // ==================== XP TRACKING ====================
-
-    /**
-     * Fires when any skill's XP changes.  Calculates the delta and records
-     * it asynchronously via XpTrackerManager if above the configured minimum.
-     *
-     * @param statChanged the StatChanged event
-     */
     @Subscribe
-    public void onStatChanged(StatChanged statChanged)
+    public void onStatChanged(StatChanged event)
     {
-        if (!config.enableXpTracking() || !state.isVerified())
-        {
-            return;
-        }
+        if (!config.enableXpTracking() || !state.isVerified()) return;
 
-        Skill skill = statChanged.getSkill();
-        if (skill == Skill.OVERALL)
-        {
-            return;
-        }
+        Skill skill = event.getSkill();
+        if (skill == Skill.OVERALL) return;
 
-        int currentXp = statChanged.getXp();
-        Integer prevXp = previousXp.get(skill);
+        int current = event.getXp();
+        Integer prev = previousXp.get(skill);
 
-        // First time we see this skill — just store baseline
-        if (prevXp == null)
-        {
-            previousXp.put(skill, currentXp);
-            return;
-        }
+        if (prev == null) { previousXp.put(skill, current); return; }
 
-        int xpGained = currentXp - prevXp;
-        previousXp.put(skill, currentXp);
+        int gained = current - prev;
+        previousXp.put(skill, current);
 
-        if (xpGained <= 0 || xpGained < config.minXpGain())
-        {
-            return;
-        }
+        if (gained <= 0 || gained < config.minXpGain()) return;
 
         String username = state.getVerifiedUsername();
-        String token = config.authToken();
-
-        if (username == null || username.isEmpty() || token == null || token.isEmpty())
-        {
-            return;
-        }
-
-        int level = statChanged.getLevel();
-        log.info("XP gain: {} +{} (total={}, level={})", skill.getName(), xpGained, currentXp, level);
+        String token    = config.authToken();
+        if (username == null || token == null) return;
 
         executorService.submit(() ->
-                xpTrackerManager.recordXpGain(token, username, skill, xpGained, currentXp, level));
+                xpTrackerManager.recordXpGain(token, username, skill, gained, current, event.getLevel()));
     }
 
-    // ==================== SCHEDULED SYNC ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  SCHEDULED SYNC  (background upload of unsynced kills every 60s)
+    // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Runs every 60 seconds to upload any unsynced local kills to the server.
-     * Only fires when the player is logged in and verified.
-     */
-    @Schedule(
+    @net.runelite.client.task.Schedule(
             period = 60000,
-            unit = ChronoUnit.MILLIS,
+            unit   = ChronoUnit.MILLIS,
             asynchronous = true
     )
     public void syncDataScheduled()
     {
-        if (!config.syncLootToServer() || !state.isLoggedIn() || !state.isVerified())
-        {
-            return;
-        }
-
-        log.debug("Scheduled sync: uploading unsynced kills");
+        if (!config.syncLootToServer() || !state.isLoggedIn() || !state.isVerified()) return;
         lootManager.uploadUnsyncedKills();
     }
 
-    // ==================== SPECIAL LOOT PROCESSING ====================
+    // ═════════════════════════════════════════════════════════════════════════
+    //  UTILITY HELPERS
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Reads items directly from the Tempoross reward pool widget (group 229).
-     * Called from onWidgetLoaded as an alternative path for Tempoross loot
-     * when the inventory-diff method hasn't captured items yet.
-     *
-     * <p>Widget child layout: parent=229, children contain item/quantity pairs.</p>
-     */
-    private void processTemporossReward()
-    {
-        Widget rewardWidget = client.getWidget(WIDGET_TEMPOROSS_REWARD, 1);
-
-        // Try sibling child indices if the primary one is null
-        if (rewardWidget == null || rewardWidget.getChildren() == null)
-        {
-            for (int i = 0; i < 20; i++)
-            {
-                Widget w = client.getWidget(WIDGET_TEMPOROSS_REWARD, i);
-                if (w != null && w.getChildren() != null)
-                {
-                    log.debug("Found Tempoross widget at {},{}", WIDGET_TEMPOROSS_REWARD, i);
-                    rewardWidget = w;
-                    break;
-                }
-            }
-        }
-
-        if (rewardWidget == null)
-        {
-            log.warn("Tempoross reward widget not found — relying on inventory diff");
-            return;
-        }
-
-        Widget[] children = rewardWidget.getChildren();
-        if (children == null || children.length == 0)
-        {
-            log.warn("Tempoross reward widget has no children");
-            return;
-        }
-
-        List<ItemStack> items = new ArrayList<>();
-        for (Widget child : children)
-        {
-            if (child != null && child.getItemId() > 0 && child.getItemQuantity() > 0)
-            {
-                items.add(new ItemStack(child.getItemId(), child.getItemQuantity()));
-            }
-        }
-
-        if (items.isEmpty())
-        {
-            log.warn("No valid items in Tempoross reward widget");
-            return;
-        }
-
-        log.info("Tempoross widget: processing {} items", items.size());
-        lootManager.processPlayerLoot("Tempoross", items);
-
-        // Prevent double-counting from inventory diff
-        waitingForTemporossLoot = false;
-        inventoryBeforeTempoross = null;
-    }
-
-    /**
-     * Reads items from the clue scroll reward casket widget (group 73, child 10).
-     * The source label is whatever was last set in lastChestSource by detectChestSource().
-     *
-     * <p>Widget structure: parent=73, child=10 holds the reward item icons.</p>
-     */
-    private void processClueReward()
-    {
-        Widget rewardWidget = client.getWidget(WIDGET_CLUE_REWARD, 10);
-
-        if (rewardWidget == null)
-        {
-            log.warn("Clue reward widget (73,10) not found");
-            return;
-        }
-
-        Widget[] children = rewardWidget.getChildren();
-        if (children == null || children.length == 0)
-        {
-            log.warn("Clue reward widget has no children");
-            return;
-        }
-
-        List<ItemStack> items = new ArrayList<>();
-        for (Widget child : children)
-        {
-            if (child != null && child.getItemId() > 0 && child.getItemQuantity() > 0)
-            {
-                items.add(new ItemStack(child.getItemId(), child.getItemQuantity()));
-            }
-        }
-
-        if (items.isEmpty())
-        {
-            log.warn("No valid items in clue reward widget");
-            return;
-        }
-
-        // lastChestSource was set by detectChestSource() in onChatMessage
-        String source = (lastChestSource != null && !lastChestSource.isEmpty())
-                ? lastChestSource
-                : "Clue Scroll";
-        lastChestSource = null;
-
-        log.info("Clue reward: {} items from '{}'", items.size(), source);
-        lootManager.processPlayerLoot(source, items);
-    }
-
-    // ==================== UTILITY ====================
-
-    /**
-     * Parses chat message text to determine the source name for the next
-     * PlayerLootReceived event. Sets lastChestSource when a completion message
-     * is recognised. Call this from onChatMessage with the lowercased message.
-     *
-     * @param lower the lowercased chat message text
-     */
-    private void detectChestSource(String lower)
-    {
-        // Tempoross — handled via inventory snapshot, not PlayerLootReceived
-        if (lower.contains("subdued the spirit") || lower.contains("you have helped to subdue"))
-        {
-            return; // handled in onChatMessage
-        }
-
-        // Wintertodt
-        if (lower.contains("the cold of the wintertodt") || lower.contains("wintertodt"))
-        {
-            lastChestSource = "Wintertodt";
-            log.info("Source set: Wintertodt");
-            return;
-        }
-
-        // Clue scrolls
-        if (lower.contains("you have completed") && lower.contains("treasure trail"))
-        {
-            if      (lower.contains("beginner")) lastChestSource = "Beginner Clue";
-            else if (lower.contains("easy"))     lastChestSource = "Easy Clue";
-            else if (lower.contains("medium"))   lastChestSource = "Medium Clue";
-            else if (lower.contains("hard"))     lastChestSource = "Hard Clue";
-            else if (lower.contains("elite"))    lastChestSource = "Elite Clue";
-            else if (lower.contains("master"))   lastChestSource = "Master Clue";
-            else                                  lastChestSource = "Clue Scroll";
-            log.info("Source set: {}", lastChestSource);
-            return;
-        }
-
-        if (lower.contains("branda the fire queen") || lower.contains("eldric the ice king") || lower.contains("royal titans"))
-        {
-            lastChestSource = "Royal Titans";
-            log.info("RuneAlytics: Source set to Royal Titans from chat");
-            return;
-        }
-
-        // Raids
-        if (lower.contains("congratulations - your raid is complete")
-                || lower.contains("congratulations! your raid is complete"))
-        {
-            // onWidgetLoaded already set lastChestSource for CoX/ToA;
-            // this fallback covers edge cases where widget fires after chat
-            if (lastChestSource == null)
-            {
-                lastChestSource = "Chambers of Xeric";
-                log.info("Source set (chat fallback): Chambers of Xeric");
-            }
-            return;
-        }
-
-        if (lower.contains("theatre of blood") && lower.contains("complete"))
-        {
-            if (lastChestSource == null)
-            {
-                lastChestSource = "Theatre of Blood";
-                log.info("Source set (chat fallback): Theatre of Blood");
-            }
-            return;
-        }
-
-        if (lower.contains("tombs of amascut") && lower.contains("complete"))
-        {
-            if (lastChestSource == null)
-            {
-                lastChestSource = "Tombs of Amascut";
-                log.info("Source set (chat fallback): Tombs of Amascut");
-            }
-            return;
-        }
-
-        // Gauntlet
-        if (lower.contains("gauntlet") && lower.contains("complete"))
-        {
-            if (lastChestSource == null)
-            {
-                lastChestSource = lower.contains("corrupted")
-                        ? "Corrupted Gauntlet"
-                        : "The Gauntlet";
-                log.info("Source set (chat fallback): {}", lastChestSource);
-            }
-        }
-    }
-
-    /**
-     * Builds a snapshot of the player's current inventory as a list of ItemStacks.
+     * Returns a snapshot of the player's current inventory as ItemStacks.
      * Returns an empty list if the inventory container is unavailable.
-     *
-     * @return non-null list of items currently in the inventory
      */
     private List<ItemStack> getCurrentInventory()
     {
-        ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
-        if (inventory == null)
-        {
-            return Collections.emptyList();
-        }
+        ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
+        if (inv == null) return Collections.emptyList();
 
         List<ItemStack> items = new ArrayList<>();
-        Item[] containerItems = inventory.getItems();
-
-        if (containerItems != null)
+        for (Item item : inv.getItems())
         {
-            for (Item item : containerItems)
-            {
-                if (item != null && item.getId() > 0 && item.getQuantity() > 0)
-                {
-                    items.add(new ItemStack(item.getId(), item.getQuantity()));
-                }
-            }
+            if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+                items.add(new ItemStack(item.getId(), item.getQuantity()));
         }
-
         return items;
     }
 
     /**
-     * Returns the items that appear in {@code after} but not (or in greater
-     * quantity than) in {@code before}.  Used to diff inventory snapshots for
-     * Tempoross reward detection.
+     * Returns the net-new items gained between two inventory snapshots.
+     * Items whose quantity increased appear in the result.
      *
-     * @param before inventory snapshot taken before rewards
-     * @param after  inventory snapshot taken after rewards
-     * @return list of net-new ItemStacks gained between the two snapshots
+     * @param before snapshot taken before the reward
+     * @param after  snapshot taken after the reward
+     * @return list of gained ItemStacks (delta quantities only)
      */
-    private List<ItemStack> findNewItems(List<ItemStack> before, List<ItemStack> after)
+    private List<ItemStack> diffInventory(List<ItemStack> before, List<ItemStack> after)
     {
-        // Sum quantities per item ID in the before snapshot
         Map<Integer, Integer> beforeMap = new HashMap<>();
-        for (ItemStack item : before)
-        {
-            beforeMap.merge(item.getId(), item.getQuantity(), Integer::sum);
-        }
+        for (ItemStack i : before) beforeMap.merge(i.getId(), i.getQuantity(), Integer::sum);
 
-        // Sum quantities per item ID in the after snapshot
         Map<Integer, Integer> afterMap = new HashMap<>();
-        for (ItemStack item : after)
-        {
-            afterMap.merge(item.getId(), item.getQuantity(), Integer::sum);
-        }
+        for (ItemStack i : after) afterMap.merge(i.getId(), i.getQuantity(), Integer::sum);
 
-        // Return only the delta (items that increased in quantity)
-        List<ItemStack> newItems = new ArrayList<>();
-        for (Map.Entry<Integer, Integer> entry : afterMap.entrySet())
+        List<ItemStack> gained = new ArrayList<>();
+        for (Map.Entry<Integer, Integer> e : afterMap.entrySet())
         {
-            int itemId = entry.getKey();
-            int delta = entry.getValue() - beforeMap.getOrDefault(itemId, 0);
-            if (delta > 0)
-            {
-                newItems.add(new ItemStack(itemId, delta));
-            }
+            int delta = e.getValue() - beforeMap.getOrDefault(e.getKey(), 0);
+            if (delta > 0) gained.add(new ItemStack(e.getKey(), delta));
         }
-
-        return newItems;
+        return gained;
     }
 
     /**
-     * Checks whether the stored auth token is still valid for the currently
-     * logged-in RSN.  Updates RuneAlyticsState and refreshes the settings panel UI.
+     * Checks whether the stored auth token is valid for the currently
+     * logged-in RSN, then updates RuneAlyticsState and the settings panel.
      */
     private void checkVerificationStatus()
     {
-        if (client.getLocalPlayer() == null)
-        {
-            log.warn("Local player is null — cannot check verification");
-            return;
-        }
-
-        String rsn = client.getLocalPlayer().getName();
+        if (client.getLocalPlayer() == null) return;
+        String rsn   = client.getLocalPlayer().getName();
         String token = config.authToken();
-
-        if (rsn == null || rsn.isEmpty() || token == null || token.isEmpty())
-        {
-            log.debug("Missing RSN or token — skipping auto-verification");
-            return;
-        }
-
-        log.info("Auto-verifying RSN '{}' with stored token", rsn);
+        if (rsn == null || token == null || token.isEmpty()) return;
 
         executorService.submit(() -> {
             try
             {
-                RunealyticsApiClient apiClient = injector.getInstance(RunealyticsApiClient.class);
-                boolean verified = apiClient.verifyToken(token, rsn);
+                RunealyticsApiClient api = injector.getInstance(RunealyticsApiClient.class);
+                boolean verified = api.verifyToken(token, rsn);
 
                 if (verified)
                 {
-                    log.info("Auto-verification succeeded for '{}'", rsn);
                     state.setVerified(true);
                     state.setVerifiedUsername(rsn);
                     state.setVerificationCode(token);
                 }
                 else
                 {
-                    log.warn("Auto-verification failed for '{}' — token may be invalid", rsn);
                     state.setVerified(false);
                     state.setVerifiedUsername(null);
                 }
 
                 SwingUtilities.invokeLater(() -> {
-                    if (mainPanel != null)
-                    {
-                        RuneAlyticsSettingsPanel settingsPanel =
-                                injector.getInstance(RuneAlyticsSettingsPanel.class);
-                        settingsPanel.updateVerificationStatus(verified, verified ? rsn : null);
-                        mainPanel.revalidate();
-                        mainPanel.repaint();
-                    }
+                    RuneAlyticsSettingsPanel sp = injector.getInstance(RuneAlyticsSettingsPanel.class);
+                    sp.updateVerificationStatus(verified, verified ? rsn : null);
                 });
             }
             catch (Exception e)
             {
-                log.error("Exception during auto-verification for '{}'", rsn, e);
+                log.error("Auto-verification error for '{}'", rsn, e);
             }
         });
     }
 
-    /**
-     * Logs the current plugin configuration for debug purposes.
-     * Called once during startUp().
-     */
+    /** Logs the active configuration at startup for easy debug inspection. */
     private void logConfiguration()
     {
-        log.info("=== RUNEALYTICS CONFIGURATION ===");
-        log.info("Enable Loot Tracking : {}", config.enableLootTracking());
-        log.info("Track All NPCs       : {}", config.trackAllNpcs());
-        log.info("Min Loot Value       : {}", config.minimumLootValue());
-        log.info("Sync to Server       : {}", config.syncLootToServer());
-        log.info("Auto Verification    : {}", config.enableAutoVerification());
-        log.info("API URL              : {}", config.apiUrl());
-        log.info("=================================");
+        log.info("=== RUNEALYTICS CONFIG ===");
+        log.info("Loot tracking : {}", config.enableLootTracking());
+        log.info("Track all NPCs: {}", config.trackAllNpcs());
+        log.info("Min loot value: {}", config.minimumLootValue());
+        log.info("Sync to server: {}", config.syncLootToServer());
+        log.info("Auto-verify   : {}", config.enableAutoVerification());
+        log.info("API URL       : {}", config.apiUrl());
+        log.info("=========================");
     }
 
     /**
-     * Loads the plugin icon from resources, falling back to a generated
-     * orange square if the image file is missing.
-     *
-     * @return the plugin icon as a BufferedImage
+     * Loads the plugin icon from resources, falling back to an orange square
+     * if the image file is missing.
      */
     private BufferedImage loadPluginIcon()
     {
         try
         {
             BufferedImage img = ImageUtil.loadImageResource(getClass(), "/runealytics_icon.png");
-            if (img != null)
-            {
-                return img;
-            }
+            if (img != null) return img;
         }
         catch (Exception e)
         {
             log.debug("Plugin icon not found, using fallback", e);
         }
 
-        // Fallback: orange square
         BufferedImage img = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
         var g = img.createGraphics();
         g.setColor(new java.awt.Color(255, 165, 0));
