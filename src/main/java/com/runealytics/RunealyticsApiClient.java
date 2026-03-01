@@ -30,10 +30,10 @@ public class RunealyticsApiClient
     private final RunealyticsConfig config;
 
     @Inject
-    public RunealyticsApiClient(OkHttpClient httpClient, RunealyticsConfig config)
+    public RunealyticsApiClient(OkHttpClient httpClient, RunealyticsConfig config, Gson gson)
     {
         this.config = config;
-        this.gson = new Gson();
+        this.gson = gson;
 
         // ─── KEY FIX ────────────────────────────────────────────────────────
         // Always derive from RuneLite's *shared* OkHttpClient rather than
