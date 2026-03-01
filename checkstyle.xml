@@ -1,0 +1,176 @@
+<?xml version="1.0"?>
+<!DOCTYPE module PUBLIC
+        "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+        "https://checkstyle.org/dtds/configuration_1_3.dtd">
+<!--
+    RuneAlytics Plugin - Checkstyle Configuration
+    Based on the official RuneLite Plugin Hub checkstyle ruleset.
+    Required by the Plugin Hub CI build; violations will fail the build.
+-->
+<module name="Checker">
+    <property name="charset" value="UTF-8"/>
+    <property name="fileExtensions" value="java"/>
+
+    <!-- ═══════════════════════════════════════════════════
+         File-level checks
+         ═══════════════════════════════════════════════════ -->
+
+    <!-- No tab characters anywhere in source files -->
+    <module name="FileTabCharacter">
+        <property name="eachLine" value="true"/>
+    </module>
+
+    <!-- Files must end with a newline -->
+    <module name="NewlineAtEndOfFile"/>
+
+    <!-- No trailing whitespace on any line -->
+    <module name="RegexpSingleline">
+        <property name="format" value="\s+$"/>
+        <property name="minimum" value="0"/>
+        <property name="maximum" value="0"/>
+        <property name="message" value="Line has trailing spaces."/>
+    </module>
+
+    <!-- ═══════════════════════════════════════════════════
+         Tree-walker checks (per-token AST rules)
+         ═══════════════════════════════════════════════════ -->
+    <module name="TreeWalker">
+
+        <!-- ── Imports ──────────────────────────────────── -->
+
+        <!-- No wildcard imports (e.g. import java.util.*) -->
+        <module name="AvoidStarImport"/>
+
+        <!-- No unused imports -->
+        <module name="UnusedImports"/>
+
+        <!-- Imports must be in a consistent order -->
+        <module name="ImportOrder">
+            <property name="groups" value="java,javax,net.runelite,com.google,*"/>
+            <property name="ordered" value="true"/>
+            <property name="separated" value="true"/>
+            <property name="option" value="bottom"/>
+            <property name="sortStaticImportsAlphabetically" value="true"/>
+        </module>
+
+        <!-- ── Whitespace ───────────────────────────────── -->
+
+        <!-- Space after commas -->
+        <module name="WhitespaceAfter">
+            <property name="tokens" value="COMMA, SEMI"/>
+        </module>
+
+        <!-- No space before colons/semicolons/commas -->
+        <module name="NoWhitespaceBefore">
+            <property name="tokens" value="SEMI, DOT, POST_DEC, POST_INC"/>
+            <property name="allowLineBreaks" value="true"/>
+        </module>
+
+        <!-- Space around operators -->
+        <module name="WhitespaceAround">
+            <property name="allowEmptyConstructors" value="true"/>
+            <property name="allowEmptyMethods" value="true"/>
+            <property name="allowEmptyTypes" value="true"/>
+            <property name="allowEmptyLoops" value="true"/>
+        </module>
+
+        <!-- Parentheses: no space padding inside -->
+        <module name="ParenPad"/>
+
+        <!-- ── Braces & blocks ──────────────────────────── -->
+
+        <!-- Opening braces on same line -->
+        <module name="LeftCurly"/>
+
+        <!-- Closing braces on their own line -->
+        <module name="RightCurly"/>
+
+        <!-- Braces required for all control structures -->
+        <module name="NeedBraces"/>
+
+        <!-- Empty catch blocks must have a comment -->
+        <module name="EmptyCatchBlock">
+            <property name="exceptionVariableName" value="expected|ignore"/>
+        </module>
+
+        <!-- ── Naming conventions ───────────────────────── -->
+
+        <!-- Class names: UpperCamelCase -->
+        <module name="TypeName"/>
+
+        <!-- Method names: lowerCamelCase -->
+        <module name="MethodName"/>
+
+        <!-- Local variables: lowerCamelCase -->
+        <module name="LocalVariableName"/>
+
+        <!-- Instance variables: lowerCamelCase -->
+        <module name="MemberName"/>
+
+        <!-- Static variables: lowerCamelCase (RuneLite style, not UPPER_SNAKE) -->
+        <module name="StaticVariableName"/>
+
+        <!-- Parameters: lowerCamelCase -->
+        <module name="ParameterName"/>
+
+        <!-- Constants (static final): UPPER_SNAKE_CASE -->
+        <module name="ConstantName"/>
+
+        <!-- Package names: lowercase only -->
+        <module name="PackageName">
+            <property name="format" value="^[a-z]+(\.[a-z][a-z0-9]*)*$"/>
+        </module>
+
+        <!-- ── Modifiers ────────────────────────────────── -->
+
+        <!-- Modifiers in standard order: public protected private abstract static ... -->
+        <module name="ModifierOrder"/>
+
+        <!-- No redundant modifiers (e.g. public on interface methods) -->
+        <module name="RedundantModifier"/>
+
+        <!-- ── Code quality ─────────────────────────────── -->
+
+        <!-- No empty statements (lone semicolons) -->
+        <module name="EmptyStatement"/>
+
+        <!-- == on strings must use .equals() -->
+        <module name="StringLiteralEquality"/>
+
+        <!-- No unnecessary parentheses -->
+        <module name="UnnecessaryParentheses"/>
+
+        <!-- No unused local variables -->
+        <module name="UnusedLocalVariable"/>
+
+        <!-- Switch statements must have a default case -->
+        <module name="MissingSwitchDefault"/>
+
+        <!-- Fall-through in switch must be commented -->
+        <module name="FallThrough"/>
+
+        <!-- Each source file may only declare one top-level type -->
+        <module name="OneTopLevelClass"/>
+
+        <!-- Only one statement per line -->
+        <module name="OneStatementPerLine"/>
+
+        <!-- ── Javadoc ───────────────────────────────────── -->
+
+        <!-- Public methods in public classes should have Javadoc -->
+        <module name="MissingJavadocMethod">
+            <property name="scope" value="public"/>
+            <property name="allowMissingPropertyJavadoc" value="true"/>
+            <property name="ignoreMethodNamesRegex" value="^(get|set|is|on[A-Z].*)$"/>
+        </module>
+
+        <!-- ── Line length ──────────────────────────────── -->
+
+        <!-- Maximum 200 characters per line (generous for plugin code) -->
+        <module name="LineLength">
+            <property name="max" value="200"/>
+            <property name="ignorePattern" value="^package.*|^import.*|a href|href|http://|https://|ftp://"/>
+        </module>
+
+    </module>
+</module>
