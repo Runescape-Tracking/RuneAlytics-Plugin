@@ -177,7 +177,7 @@ public class LootTrackerManager
     /** Chambers of Xeric reward chest                        */
     static final int WIDGET_COX              = 539;
     /** Theatre of Blood reward chest                         */
-    static final int WIDGET_TOB              = 513;
+    static final int WIDGET_TOB              = 23;
     /** Tombs of Amascut reward chest                         */
     static final int WIDGET_TOA              = 773;
     /** The Corrupted Gauntlet reward chest                   */
@@ -209,7 +209,7 @@ public class LootTrackerManager
     // These are the integer container IDs used in client.getItemContainer(id)
     private static final int CONTAINER_BARROWS   = 141;
     private static final int CONTAINER_COX       = 582;
-    private static final int CONTAINER_TOB       = 612;
+    private static final int CONTAINER_TOB       = 23;
     private static final int CONTAINER_TOA       = 141; // same slot reused
     private static final int CONTAINER_GAUNTLET  = 179;
     private static final int CONTAINER_NIGHTMARE = 646;
