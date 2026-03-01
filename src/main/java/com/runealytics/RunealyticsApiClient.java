@@ -30,11 +30,22 @@ public class RunealyticsApiClient
     private final RunealyticsConfig config;
 
     @Inject
-    public RunealyticsApiClient(RunealyticsConfig config)
+    public RunealyticsApiClient(OkHttpClient httpClient, RunealyticsConfig config)
     {
         this.config = config;
         this.gson = new Gson();
-        this.httpClient = new OkHttpClient.Builder()
+
+        // ─── KEY FIX ────────────────────────────────────────────────────────
+        // Always derive from RuneLite's *shared* OkHttpClient rather than
+        // constructing a brand-new one.  A new OkHttpClient gets its own
+        // DiskLruCache pointed at the same directory as RuneLite's cache,
+        // and two processes writing to one DiskLruCache simultaneously
+        // corrupts the journal file, producing the repeated warning:
+        //   "DiskLruCache … is corrupt: unexpected journal line"
+        // newBuilder() reuses the existing cache, connection pool, dispatcher,
+        // etc. while still letting us override timeouts for our own requests.
+        // ────────────────────────────────────────────────────────────────────
+        this.httpClient = httpClient.newBuilder()
                 .connectTimeout(config.syncTimeout(), TimeUnit.SECONDS)
                 .readTimeout(config.syncTimeout(), TimeUnit.SECONDS)
                 .writeTimeout(config.syncTimeout(), TimeUnit.SECONDS)

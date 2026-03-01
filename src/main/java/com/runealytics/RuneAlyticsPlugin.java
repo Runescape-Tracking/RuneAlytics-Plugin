@@ -328,7 +328,7 @@ public class RuneAlyticsPlugin extends Plugin
         else if (gid == WIDGET_TOA)
         {
             lastChestSource = "Tombs of Amascut";
-            lootManager.readRewardContainer("Tombs of Amascut", 141);
+            lootManager.readRewardContainer("Tombs of Amascut", 801);
         }
         else if (gid == WIDGET_CORRUPTED_GAUNTLET)
         {

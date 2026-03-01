@@ -175,7 +175,7 @@ public class LootTrackerManager
     /** Barrows reward chest                                  */
     static final int WIDGET_BARROWS          = 155;
     /** Chambers of Xeric reward chest                        */
-    static final int WIDGET_COX              = 234;
+    static final int WIDGET_COX              = 539;
     /** Theatre of Blood reward chest                         */
     static final int WIDGET_TOB              = 513;
     /** Tombs of Amascut reward chest                         */
@@ -208,7 +208,7 @@ public class LootTrackerManager
     // ── InventoryID constants for container reads ────────────────────────────
     // These are the integer container IDs used in client.getItemContainer(id)
     private static final int CONTAINER_BARROWS   = 141;
-    private static final int CONTAINER_COX       = 122;
+    private static final int CONTAINER_COX       = 582;
     private static final int CONTAINER_TOB       = 612;
     private static final int CONTAINER_TOA       = 141; // same slot reused
     private static final int CONTAINER_GAUNTLET  = 179;
@@ -747,7 +747,7 @@ public class LootTrackerManager
             Map<String, List<LootStorageData.KillRecord>> unsynced =
                     storageManager.getAllUnsyncedKills();
 
-            if (unsynced.isEmpty()) { log.debug("No unsynced kills"); return; }
+            if (unsynced.isEmpty()) {  return; }
 
             int total = unsynced.values().stream().mapToInt(List::size).sum();
             log.info("Uploading {} unsynced kills across {} bosses", total, unsynced.size());

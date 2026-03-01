@@ -24,7 +24,24 @@ public class BankDataManager
         this.apiClient = apiClient;
     }
 
-    public void syncBankData(String token, String username, ItemContainer bankContainer)
+    /**
+     * Syncs a complete wealth snapshot: bank + inventory + equipped items.
+     *
+     * Call this when the player opens their bank so that all three containers
+     * are available simultaneously, giving an accurate total wealth figure.
+     *
+     * @param token              auth token
+     * @param username           verified RSN
+     * @param bankContainer      InventoryID.BANK container
+     * @param inventoryContainer InventoryID.INVENTORY container (may be null)
+     * @param equipmentContainer InventoryID.EQUIPMENT container (may be null)
+     */
+    public void syncBankData(
+            String token,
+            String username,
+            ItemContainer bankContainer,
+            ItemContainer inventoryContainer,
+            ItemContainer equipmentContainer)
     {
         if (token == null || token.isEmpty())
         {
@@ -46,56 +63,102 @@ public class BankDataManager
 
         try
         {
-            JsonObject bankData = buildBankData(username, bankContainer);
+            JsonObject bankData = buildBankData(username, bankContainer, inventoryContainer, equipmentContainer);
 
-            int itemCount = bankData.getAsJsonArray("items").size();
-            log.info("Syncing bank data for user: {} ({} items)", username, itemCount);
+            int bankCount      = bankData.getAsJsonArray("items").size();
+            int inventoryCount = bankData.getAsJsonArray("inventory").size();
+            int equipmentCount = bankData.getAsJsonArray("equipment").size();
+
+            log.info("Syncing wealth snapshot for {}: bank={} inv={} equip={} items",
+                    username, bankCount, inventoryCount, equipmentCount);
 
             boolean success = apiClient.syncBankData(token, bankData);
 
             if (success)
             {
-                log.info("Bank data synced successfully for {}", username);
+                log.info("Wealth snapshot synced successfully for {}", username);
             }
             else
             {
-                log.error("Failed to sync bank data for {}", username);
+                log.error("Failed to sync wealth snapshot for {}", username);
             }
         }
         catch (Exception e)
         {
-            log.error("Error syncing bank data for {}: {}", username, e.getMessage(), e);
+            log.error("Error syncing wealth snapshot for {}: {}", username, e.getMessage(), e);
         }
     }
 
-    private JsonObject buildBankData(String username, ItemContainer bankContainer)
+    /**
+     * Backward-compatible overload for callers that only have the bank container.
+     * Inventory and equipment will be sent as empty arrays.
+     */
+    public void syncBankData(String token, String username, ItemContainer bankContainer)
+    {
+        syncBankData(token, username, bankContainer, null, null);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private JsonObject buildBankData(
+            String username,
+            ItemContainer bankContainer,
+            ItemContainer inventoryContainer,
+            ItemContainer equipmentContainer)
     {
         JsonObject data = new JsonObject();
-        data.addProperty("username", username);
+        data.addProperty("username",  username);
         data.addProperty("timestamp", Instant.now().getEpochSecond());
         data.addProperty("world", 0); // Future: populate if you track world
 
-        JsonArray items = new JsonArray();
-        Item[] bankItems = bankContainer.getItems();
+        // Bank items
+        JsonArray bankItems = buildItemArray(bankContainer);
+        data.add("items", bankItems);
 
-        if (bankItems != null)
+        // Inventory items — included so the snapshot captures carried wealth
+        JsonArray inventoryItems = buildItemArray(inventoryContainer);
+        data.add("inventory", inventoryItems);
+
+        // Equipped items — included so BiS gear is counted even if not banked
+        JsonArray equipmentItems = buildItemArray(equipmentContainer);
+        data.add("equipment", equipmentItems);
+
+        log.debug("Wealth snapshot: bank={} inv={} equip={} items for {}",
+                bankItems.size(), inventoryItems.size(), equipmentItems.size(), username);
+
+        return data;
+    }
+
+    /**
+     * Converts an {@link ItemContainer} to a JSON array of {@code {id, qty}} objects.
+     * Returns an empty array if the container is null or empty.
+     */
+    private JsonArray buildItemArray(ItemContainer container)
+    {
+        JsonArray array = new JsonArray();
+
+        if (container == null)
         {
-            for (Item item : bankItems)
+            return array;
+        }
+
+        Item[] items = container.getItems();
+        if (items == null)
+        {
+            return array;
+        }
+
+        for (Item item : items)
+        {
+            if (item != null && item.getId() > 0 && item.getQuantity() > 0)
             {
-                if (item != null && item.getId() > 0 && item.getQuantity() > 0)
-                {
-                    JsonObject itemData = new JsonObject();
-                    itemData.addProperty("id", item.getId());
-                    itemData.addProperty("qty", item.getQuantity());
-                    items.add(itemData);
-                }
+                JsonObject entry = new JsonObject();
+                entry.addProperty("id",  item.getId());
+                entry.addProperty("qty", item.getQuantity());
+                array.add(entry);
             }
         }
 
-        data.add("items", items);
-
-        log.debug("Built bank data with {} items for {}", items.size(), username);
-
-        return data;
+        return array;
     }
 }

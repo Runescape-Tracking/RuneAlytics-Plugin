@@ -53,14 +53,10 @@ public class XpTrackerManager
         {
             JsonObject xpData = buildXpData(username, skill, xpGained, totalXp, currentLevel);
 
-            log.info("Recording {} XP gain in {} for user: {} (Total: {}, Level: {})",
-                    xpGained, skill.getName(), username, totalXp, currentLevel);
-
             boolean success = apiClient.recordXpGain(token, xpData);
 
             if (success)
             {
-                log.debug("XP gain recorded successfully for {} in {}", username, skill.getName());
             }
             else
             {
@@ -90,7 +86,7 @@ public class XpTrackerManager
         data.addProperty("current_level", currentLevel);
         data.addProperty("timestamp", Instant.now().getEpochSecond());
 
-        log.debug("Built XP data for {} in {} (+{} XP)", username, skill.getName(), xpGained);
+        //log.debug("Built XP data for {} in {} (+{} XP)", username, skill.getName(), xpGained);
 
         return data;
     }
