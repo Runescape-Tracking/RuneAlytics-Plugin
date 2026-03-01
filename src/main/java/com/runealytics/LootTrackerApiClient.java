@@ -421,7 +421,7 @@ public class LootTrackerApiClient
         payload.addProperty("drop_count", dropCount); // ← Added
         payload.add("drops", dropsArray);
 
-        String jsonPayload = new Gson().toJson(payload);
+        String jsonPayload = gson.toJson(payload);
         RequestBody body = RequestBody.create(JSON, jsonPayload);
 
         Request request = new Request.Builder()

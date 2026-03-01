@@ -1,7 +1,6 @@
 package com.runealytics;
 
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.RuneLite;
 
@@ -24,10 +23,10 @@ public class LootStorageManager
     private LootStorageData currentData;
 
     @Inject
-    public LootStorageManager(RuneAlyticsState state)
+    public LootStorageManager(RuneAlyticsState state, Gson gson)
     {
         this.state = state;
-        this.gson = new GsonBuilder()
+        this.gson = gson.newBuilder()
                 .setPrettyPrinting()
                 .create();
     }

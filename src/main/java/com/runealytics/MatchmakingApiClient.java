@@ -28,13 +28,14 @@ public class MatchmakingApiClient
 
     private final OkHttpClient httpClient;
     private final RunealyticsConfig config;
-    private final Gson gson = new Gson();
+    private final Gson gson;
 
     @Inject
-    public MatchmakingApiClient(OkHttpClient httpClient, RunealyticsConfig config)
+    public MatchmakingApiClient(OkHttpClient httpClient, RunealyticsConfig config, Gson gson)
     {
         this.httpClient = httpClient;
         this.config = config;
+        this.gson = gson;
     }
 
     public MatchmakingApiResult getMatch(String verificationCode, String matchCode, String osrsRsn) throws IOException
