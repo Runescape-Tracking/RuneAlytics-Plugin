@@ -10,7 +10,9 @@ import javax.inject.Singleton;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -19,64 +21,49 @@ import java.util.Map;
  * <h2>Tab persistence</h2>
  * The index of the active tab is saved to {@link ConfigManager} under the key
  * {@code "runealytics:lastTab"} whenever the user switches tabs, and restored
- * on the next call to {@link #restoreLastTab()}.  The plugin calls
- * {@link #restoreLastTab()} from {@link RuneAlyticsPlugin#onPlayerSpawned}
- * after the player has fully logged in.
+ * on the next call to {@link #restoreLastTab()}.
  *
  * <h2>Feature-flag driven tab visibility</h2>
- * {@link #applyFeatureFlags(Map)} accepts a map of {@code featureName → enabled}
- * received from the RuneAlytics server (fetched in
- * {@link RuneAlyticsPlugin#onGameStateChanged}).  Any tab whose feature flag is
- * {@code false} is hidden; tabs that become enabled are shown again.  The
- * active-tab index is clamped so the panel never shows a blank screen after a
- * tab is hidden.
+ * {@link #applyFeatureFlags(Map)} is the single authoritative method for showing
+ * and hiding tabs.  All helper methods ({@link #showVerificationOnly},
+ * {@link #showMainFeatures}, {@link #showLoggedOutState}) delegate to it so that
+ * {@link #onTabShownCallbacks tab-shown callbacks} are always fired when a tab
+ * becomes visible.
  *
- * <h2>Integration in the plugin</h2>
- * <pre>
- * // In startUp():
- * mainPanel = injector.getInstance(RuneAlyticsPanel.class);
- * mainPanel.addTab("Loot Tracker",  FEATURE_LOOT,   lootPanel);
- * mainPanel.addTab("Match Finder",  FEATURE_MATCHES, matchPanel);
- * clientToolbar.addNavigation(navButton);
- *
- * // In onGameStateChanged(LOGGED_IN):
- * executor.submit(() -> {
- *     Map<String,Boolean> flags = apiClient.fetchFeatureFlags(username);
- *     SwingUtilities.invokeLater(() -> mainPanel.applyFeatureFlags(flags));
- * });
- *
- * // In onPlayerSpawned():
- * SwingUtilities.invokeLater(() -> mainPanel.restoreLastTab());
- * </pre>
+ * <h2>Verification tab</h2>
+ * {@link #FEATURE_VERIFICATION} is a locally-controlled pseudo-flag (not from the
+ * server).  The Settings tab is shown whenever the account is not yet verified so
+ * the player always sees something actionable, and hidden once verification succeeds.
  */
 @Slf4j
 @Singleton
 public class RuneAlyticsPanel extends PluginPanel
 {
-    // ── Feature-flag key constants (must match keys returned by the server) ───
-    public static final String FEATURE_LOOT    = "loot_tracker";
-    public static final String FEATURE_MATCHES = "match_finder";
+    // ── Feature-flag key constants ────────────────────────────────────────────
+    /** Server-controlled: shows the Loot Tracker tab. */
+    public static final String FEATURE_LOOT         = "loot_tracker";
+    /** Server-controlled: shows the Match Finder tab. */
+    public static final String FEATURE_MATCHES      = "match_finder";
+    /**
+     * Locally-controlled pseudo-flag: shows the Settings / Verification tab.
+     * Set {@code true} when the account is not verified; {@code false} once verified.
+     */
+    public static final String FEATURE_VERIFICATION = "verification";
 
     // ── Config keys ───────────────────────────────────────────────────────────
-    private static final String CONFIG_GROUP  = "runealytics";
+    private static final String CONFIG_GROUP    = "runealytics";
     private static final String CONFIG_LAST_TAB = "lastTab";
 
     // ── Dependencies ─────────────────────────────────────────────────────────
     private final ConfigManager configManager;
-    private final JPanel lootPanel = new JPanel();
-    private final JPanel matchFinderPanel = new JPanel(); // same for match finder
 
     // ── Internal tab registry ─────────────────────────────────────────────────
-    /**
-     * Holds the metadata for each registered tab so we can show/hide them
-     * without losing their components or their feature-flag associations.
-     */
     private static class TabEntry
     {
-        final String       title;
-        final String       featureKey; // null = always visible
-        final JComponent   content;
-        boolean            visible;
+        final String     title;
+        final String     featureKey; // null = always visible
+        final JComponent content;
+        boolean          visible;
 
         TabEntry(String title, String featureKey, JComponent content)
         {
@@ -87,7 +74,17 @@ public class RuneAlyticsPanel extends PluginPanel
         }
     }
 
-    private final java.util.List<TabEntry> tabRegistry = new java.util.ArrayList<>();
+    private final List<TabEntry> tabRegistry = new ArrayList<>();
+
+    /**
+     * Callbacks fired on the EDT immediately after a tab transitions from
+     * hidden → visible.  Keyed by {@code featureKey}.
+     *
+     * <p>Register with {@link #registerOnTabShownCallback}.  Use this to reload
+     * data when a tab is re-enabled after being hidden by a feature flag — for
+     * example, reload loot history when the Loot Tracker tab reappears.
+     */
+    private final Map<String, Runnable> onTabShownCallbacks = new HashMap<>();
 
     // ── Swing components ──────────────────────────────────────────────────────
     private final JTabbedPane tabbedPane;
@@ -96,7 +93,7 @@ public class RuneAlyticsPanel extends PluginPanel
     @Inject
     public RuneAlyticsPanel(ConfigManager configManager)
     {
-        super(false); // we manage our own layout
+        super(false);
         this.configManager = configManager;
 
         setLayout(new BorderLayout());
@@ -108,7 +105,6 @@ public class RuneAlyticsPanel extends PluginPanel
         tabbedPane.setFont(tabbedPane.getFont().deriveFont(Font.PLAIN, 11f));
         tabbedPane.setBorder(new EmptyBorder(0, 0, 0, 0));
 
-        // Save the active tab whenever the user switches tabs
         tabbedPane.addChangeListener(e -> saveLastTab());
 
         add(tabbedPane, BorderLayout.CENTER);
@@ -118,22 +114,17 @@ public class RuneAlyticsPanel extends PluginPanel
     //  Tab registration
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Adds a new tab that is always visible (no feature gate).
-     *
-     * @param title   label shown on the tab
-     * @param content panel to display when the tab is selected
-     */
+    /** Adds a new tab that is always visible (no feature gate). */
     public void addTab(String title, JComponent content)
     {
         addTab(title, null, content);
     }
 
     /**
-     * Adds a new tab that can be shown or hidden by a server feature flag.
+     * Adds a new tab gated behind a feature flag.
      *
      * @param title      label shown on the tab
-     * @param featureKey the key this tab is gated behind (e.g. {@link #FEATURE_LOOT})
+     * @param featureKey the key this tab is controlled by (e.g. {@link #FEATURE_LOOT})
      * @param content    panel to display when the tab is selected
      */
     public void addTab(String title, String featureKey, JComponent content)
@@ -147,21 +138,46 @@ public class RuneAlyticsPanel extends PluginPanel
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Feature flags
+    //  Tab-shown callbacks
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Applies a map of {@code featureKey → enabled} received from the
-     * RuneAlytics server.
+     * Registers a callback that fires on the EDT whenever the tab for
+     * {@code featureKey} transitions from hidden to visible.
      *
-     * <p>Tabs whose {@code featureKey} maps to {@code false} are removed from
-     * the {@link JTabbedPane}; tabs that map to {@code true} (or whose key is
-     * absent, meaning server didn't mention them) are kept / re-added.
+     * <p>Example — reload loot data when the Loot Tracker tab is re-enabled:
+     * <pre>
+     * mainPanel.registerOnTabShownCallback(FEATURE_LOOT,
+     *     () -> lootManager.loadFromStorage());
+     * </pre>
      *
-     * <p>Tabs registered with {@code featureKey = null} are always visible
-     * and are not affected by this call.
+     * @param featureKey the feature key of the tab to watch
+     * @param callback   action to run on the EDT when the tab becomes visible
+     */
+    public void registerOnTabShownCallback(String featureKey, Runnable callback)
+    {
+        if (featureKey != null && callback != null)
+        {
+            onTabShownCallbacks.put(featureKey, callback);
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Feature flags  (single authoritative write path)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Applies a map of {@code featureKey → enabled}.
      *
-     * <p><b>Must be called on the EDT.</b>
+     * <ul>
+     *   <li>Tabs whose key maps to {@code false} are removed from the pane.</li>
+     *   <li>Tabs that map to {@code true} (or whose key is absent) are shown.</li>
+     *   <li>When a tab transitions hidden → visible its registered
+     *       {@link #onTabShownCallbacks callback} fires so the panel can reload data.</li>
+     *   <li>Tabs with {@code featureKey = null} are always visible.</li>
+     * </ul>
+     *
+     * <p>Safe to call off the EDT — it re-dispatches automatically.
      *
      * @param flags map from feature key to enabled state
      */
@@ -179,7 +195,6 @@ public class RuneAlyticsPanel extends PluginPanel
         {
             if (entry.featureKey == null)
             {
-                // Always-visible tab — ensure it's in the pane
                 ensureTabVisible(entry);
                 continue;
             }
@@ -188,14 +203,19 @@ public class RuneAlyticsPanel extends PluginPanel
 
             if (shouldBeVisible && !entry.visible)
             {
-                // Re-enable tab: insert it at its logical position
                 insertTabAtLogicalPosition(entry);
                 entry.visible = true;
                 log.info("Tab '{}' enabled (flag '{}')", entry.title, entry.featureKey);
+
+                // Fire reload callback so the panel gets fresh data
+                Runnable cb = onTabShownCallbacks.get(entry.featureKey);
+                if (cb != null)
+                {
+                    SwingUtilities.invokeLater(cb);
+                }
             }
             else if (!shouldBeVisible && entry.visible)
             {
-                // Disable tab: remove it from the pane
                 int idx = findTabIndex(entry);
                 if (idx >= 0)
                 {
@@ -215,71 +235,69 @@ public class RuneAlyticsPanel extends PluginPanel
         tabbedPane.repaint();
     }
 
+    // ── Convenience helpers — all route through applyFeatureFlags ─────────────
+
+    /**
+     * Called when a <b>verified</b> player reaches the login screen or logs out.
+     *
+     * <p>Keeps the Loot Tracker visible so the player can still browse their
+     * drops while logged out.  Match Finder and Settings are hidden because
+     * both require an active session.
+     */
+    public void showLoggedOutVerified()
+    {
+        Map<String, Boolean> flags = new HashMap<>();
+        flags.put(FEATURE_VERIFICATION, false);
+        flags.put(FEATURE_LOOT,         true);
+        flags.put(FEATURE_MATCHES,      false);
+        applyFeatureFlags(flags);
+    }
+
+    /**
+     * Called when an <b>unverified</b> player reaches the login screen or logs out.
+     * Shows only the Settings / Verification tab so they can link their account.
+     */
     public void showLoggedOutState()
     {
-        removeMatchFinderTab();
-        tabbedPane.revalidate();
-        tabbedPane.repaint();
+        showVerificationOnly();
     }
 
+    /**
+     * Called when the player is logged in but not yet verified (or becomes
+     * unverified).  Shows only the Settings / Verification tab.
+     */
+    public void showVerificationOnly()
+    {
+        Map<String, Boolean> flags = new HashMap<>();
+        flags.put(FEATURE_VERIFICATION, true);
+        flags.put(FEATURE_LOOT,         false);
+        flags.put(FEATURE_MATCHES,      false);
+        applyFeatureFlags(flags);
+    }
+
+    /**
+     * Called after feature flags are fetched for a verified account.
+     *
+     * <p>Hides the Settings / Verification tab and shows Loot Tracker / Match
+     * Finder per the server response.  Re-enabling a tab fires its registered
+     * {@link #onTabShownCallbacks on-shown callback} so the panel reloads data.
+     *
+     * @param lootEnabled  whether the Loot Tracker tab should be visible
+     * @param matchEnabled whether the Match Finder tab should be visible
+     */
     public void showMainFeatures(boolean lootEnabled, boolean matchEnabled)
     {
-        if (lootEnabled)
-            addLootTab();
-        else
-            removeLootTab();
-
-        if (matchEnabled)
-            addMatchFinderTab();
-        else
-            removeMatchFinderTab();
-
-        tabbedPane.revalidate();
-        tabbedPane.repaint();
-    }
-
-    private void addLootTab()
-    {
-        if (tabbedPane.indexOfTab("Loot Tracker") == -1)
-        {
-            tabbedPane.addTab("Loot Tracker", lootPanel);
-        }
-    }
-
-    private void removeLootTab()
-    {
-        int index = tabbedPane.indexOfTab("Loot Tracker");
-        if (index != -1)
-        {
-            tabbedPane.removeTabAt(index);
-        }
-    }
-
-    private void addMatchFinderTab()
-    {
-        if (tabbedPane.indexOfTab("Match Finder") == -1)
-        {
-            tabbedPane.addTab("Match Finder", matchFinderPanel);
-        }
-    }
-
-    private void removeMatchFinderTab()
-    {
-        int index = tabbedPane.indexOfTab("Match Finder");
-        if (index != -1)
-        {
-            tabbedPane.removeTabAt(index);
-        }
+        Map<String, Boolean> flags = new HashMap<>();
+        flags.put(FEATURE_VERIFICATION, false);
+        flags.put(FEATURE_LOOT,         lootEnabled);
+        flags.put(FEATURE_MATCHES, matchEnabled);
+        applyFeatureFlags(flags);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  Tab persistence
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Saves the index of the currently selected tab to {@link ConfigManager}.
-     * Called automatically on every tab-change event.
-     */
     private void saveLastTab()
     {
         int idx = tabbedPane.getSelectedIndex();
@@ -290,20 +308,9 @@ public class RuneAlyticsPanel extends PluginPanel
         }
     }
 
-    public void showVerificationOnly()
-    {
-        Map<String, Boolean> flags = new HashMap<>();
-        flags.put(FEATURE_LOOT, false);
-        flags.put(FEATURE_MATCHES, false);
-
-        applyFeatureFlags(flags);
-    }
-
     /**
      * Restores the previously selected tab.
-     *
-     * <p>Call this from {@link RuneAlyticsPlugin#onPlayerSpawned} (on the EDT)
-     * after login so the user always returns to the same tab they were on.
+     * Call from {@link RuneAlyticsPlugin#onPlayerSpawned} after login.
      */
     public void restoreLastTab()
     {
@@ -313,7 +320,7 @@ public class RuneAlyticsPanel extends PluginPanel
 
             try
             {
-                int idx = Integer.parseInt(saved.trim());
+                int idx   = Integer.parseInt(saved.trim());
                 int count = tabbedPane.getTabCount();
                 if (idx >= 0 && idx < count)
                 {
@@ -332,10 +339,6 @@ public class RuneAlyticsPanel extends PluginPanel
     //  Private helpers
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Returns the current position of a tab in the {@link JTabbedPane}, or
-     * {@code -1} if it is not currently added (i.e. has been hidden).
-     */
     private int findTabIndex(TabEntry entry)
     {
         for (int i = 0; i < tabbedPane.getTabCount(); i++)
@@ -345,10 +348,6 @@ public class RuneAlyticsPanel extends PluginPanel
         return -1;
     }
 
-    /**
-     * Ensures a tab is present in the pane, adding it if it was previously
-     * hidden.  No-op if already present.
-     */
     private void ensureTabVisible(TabEntry entry)
     {
         if (findTabIndex(entry) < 0)
@@ -358,23 +357,16 @@ public class RuneAlyticsPanel extends PluginPanel
         }
     }
 
-    /**
-     * Re-inserts a tab at the correct logical position relative to the other
-     * tabs in {@link #tabRegistry}.  This preserves the original tab order
-     * when flags change multiple times.
-     */
     private void insertTabAtLogicalPosition(TabEntry entry)
     {
         int logicalIndex = tabRegistry.indexOf(entry);
 
-        // Count how many registry entries before this one are currently visible
         int insertAt = 0;
         for (int i = 0; i < logicalIndex; i++)
         {
             if (tabRegistry.get(i).visible) insertAt++;
         }
 
-        // insertAt is now the correct position in the live JTabbedPane
         int clampedAt = Math.min(insertAt, tabbedPane.getTabCount());
         tabbedPane.insertTab(entry.title, null, entry.content, null, clampedAt);
     }

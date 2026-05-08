@@ -117,6 +117,7 @@ public interface RunealyticsConfig extends Config
         return false;
     }
 
+    // ==================== LOOT TRACKING ====================
 
     @ConfigSection(
             name = "Loot Tracking",
@@ -125,19 +126,6 @@ public interface RunealyticsConfig extends Config
     )
     String lootSection = "loot";
 
-    @ConfigItem(
-            keyName = "trackAllNpcs",
-            name = "Track All NPCs",
-            description = "Track loot from all NPCs, not just bosses",
-            section = lootSection,
-            position = 3
-    )
-    default boolean trackAllNpcs()
-    {
-        return true;
-    }
-
-    // Add config items:
     @ConfigItem(
             keyName = "enableLootTracking",
             name = "Enable Loot Tracking",
@@ -174,9 +162,39 @@ public interface RunealyticsConfig extends Config
         return true;
     }
 
+    @ConfigItem(
+            keyName = "trackAllNpcs",
+            name = "Track All NPCs",
+            description = "Track loot from all NPCs, not just bosses",
+            section = lootSection,
+            position = 3
+    )
+    default boolean trackAllNpcs()
+    {
+        return true;
+    }
+
+    /**
+     * When enabled, every successful pickpocket / thieving action is recorded
+     * as a separate loot entry in the Loot Tracker.  Each success increments
+     * the pickpocket counter for that NPC and accumulates the items gained.
+     *
+     * <p>Stalls (e.g. Bakery Stall, Gem Stall) are also captured because they
+     * share the "Pickpocket" menu-option path.</p>
+     */
+    @ConfigItem(
+            keyName = "enablePickpocketTracking",
+            name = "Track Pickpocketing",
+            description = "Track loot and attempt counts from pickpocketing / thieving",
+            section = lootSection,
+            position = 4
+    )
+    default boolean enablePickpocketTracking()
+    {
+        return true;
+    }
 
     // ==================== ADVANCED ====================
-
 
     @ConfigItem(
             keyName = "syncTimeout",

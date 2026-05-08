@@ -2,10 +2,7 @@ package com.runealytics;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
+import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import javax.inject.Inject;
@@ -14,10 +11,12 @@ import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import com.google.gson.reflect.TypeToken;
-import okhttp3.HttpUrl;
+import net.runelite.api.Skill;
 import java.lang.reflect.Type;
 import java.util.HashMap;
 import java.util.Map;
+
+import static com.runealytics.RuneAlyticsHttp.JSON;
 
 
 @Singleton
@@ -28,23 +27,16 @@ public class RunealyticsApiClient
     private final OkHttpClient httpClient;
     private final Gson gson;
     private final RunealyticsConfig config;
+    private final RuneAlyticsState state;
+
 
     @Inject
-    public RunealyticsApiClient(OkHttpClient httpClient, RunealyticsConfig config, Gson gson)
+    public RunealyticsApiClient(OkHttpClient httpClient, RunealyticsConfig config, RuneAlyticsState state, Gson gson)
     {
         this.config = config;
         this.gson = gson;
+        this.state = state;
 
-        // ─── KEY FIX ────────────────────────────────────────────────────────
-        // Always derive from RuneLite's *shared* OkHttpClient rather than
-        // constructing a brand-new one.  A new OkHttpClient gets its own
-        // DiskLruCache pointed at the same directory as RuneLite's cache,
-        // and two processes writing to one DiskLruCache simultaneously
-        // corrupts the journal file, producing the repeated warning:
-        //   "DiskLruCache … is corrupt: unexpected journal line"
-        // newBuilder() reuses the existing cache, connection pool, dispatcher,
-        // etc. while still letting us override timeouts for our own requests.
-        // ────────────────────────────────────────────────────────────────────
         this.httpClient = httpClient.newBuilder()
                 .connectTimeout(config.syncTimeout(), TimeUnit.SECONDS)
                 .readTimeout(config.syncTimeout(), TimeUnit.SECONDS)
@@ -52,25 +44,48 @@ public class RunealyticsApiClient
                 .build();
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
-    //  Feature flags
-    // ═════════════════════════════════════════════════════════════════════════
-
     /**
-     * Fetches the feature-flag map for {@code username} from the server.
-     *
-     * <p>Called on {@code GameStateChanged → LOGGED_IN} from a background
-     * thread.  The returned map is keyed by feature name (e.g.
-     * {@code "loot_tracker"}, {@code "match_finder"}) and values are
-     * {@code true} (tab visible) or {@code false} (tab hidden).
-     *
-     * <p>On any network or parse error an empty map is returned, which
-     * causes {@link RuneAlyticsPanel#applyFeatureFlags} to leave all tabs
-     * in their current state (safe default).
-     *
-     * @param username the verified RSN (lower-case)
-     * @return mutable map of {@code featureKey → enabled}; never {@code null}
+     * Syncs batched XP gains to the server to prevent spamming during high-intensity tasks.
      */
+    public void syncXpBatch(Map<Skill, Integer> xpGains)
+    {
+        String token = config.authToken();
+        String username = state.getVerifiedUsername();
+
+        if (token == null || username == null || xpGains.isEmpty()) return;
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("username", username);
+
+        JsonObject skillsObj = new JsonObject();
+        xpGains.forEach((skill, gain) -> {
+            skillsObj.addProperty(skill.getName().toLowerCase(), gain);
+        });
+
+        payload.add("xp_gains", skillsObj);
+        payload.addProperty("timestamp", System.currentTimeMillis() / 1000);
+
+        RequestBody body = RequestBody.create(JSON, gson.toJson(payload));
+
+        Request request = new Request.Builder()
+                .url(config.apiUrl() + "/xp/batch")
+                .post(body)
+                .addHeader("Authorization", "Bearer " + token)
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                log.warn("Failed to sync XP batch: {}", e.getMessage());
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) {
+                response.close();
+            }
+        });
+    }
+
     public Map<String, Boolean> fetchFeatureFlags(String username)
     {
         HttpUrl url = Objects.requireNonNull(HttpUrl.parse(config.apiUrl() + "/plugin/features"))
@@ -102,7 +117,6 @@ public class RunealyticsApiClient
                 return new HashMap<>();
             }
 
-            // Deserialise the inner "flags" object as Map<String, Boolean>
             Type mapType = new TypeToken<Map<String, Boolean>>(){}.getType();
             Map<String, Boolean> flags = gson.fromJson(json.get("flags"), mapType);
 
@@ -170,7 +184,6 @@ public class RunealyticsApiClient
                     return false;
                 }
 
-                // Check multiple possible response formats
                 boolean verified = false;
 
                 if (result.has("verified"))

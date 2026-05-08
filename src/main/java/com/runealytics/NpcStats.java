@@ -1,30 +1,26 @@
 package com.runealytics;
 
 import lombok.Data;
-
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Aggregates statistics for a single NPC/boss across multiple kills
- */
 @Data
 public class NpcStats
 {
     private final String name;
     private int npcId;
     private int combatLevel;
-    private final List<NpcKillRecord> kills = new ArrayList<>();
+    private final List<LootStorageData.KillRecord> kills = new ArrayList<>();
 
     public NpcStats(String name)
     {
         this.name = name;
     }
 
-    public void addKill(NpcKillRecord kill)
+    public void addKill(LootStorageData.KillRecord kill)
     {
         kills.add(kill);
-        this.npcId = kill.getNpcId();
+        // npcId is usually passed from the BossKillData parent in the manager
         this.combatLevel = kill.getCombatLevel();
     }
 
@@ -33,12 +29,12 @@ public class NpcStats
         return kills.size();
     }
 
-    public List<LootDrop> getAllDrops()
+    public List<LootStorageData.DropRecord> getAllDrops()
     {
-        List<LootDrop> all = new ArrayList<>();
-        for (NpcKillRecord k : kills)
+        List<LootStorageData.DropRecord> all = new ArrayList<>();
+        for (LootStorageData.KillRecord k : kills)
         {
-            all.addAll(k.getVisibleDrops());
+            all.addAll(k.getDrops());
         }
         return all;
     }
@@ -46,7 +42,8 @@ public class NpcStats
     public long getTotalLootValue()
     {
         return kills.stream()
-                .mapToLong(NpcKillRecord::getTotalValue)
+                .flatMap(k -> k.getDrops().stream())
+                .mapToLong(LootStorageData.DropRecord::getTotalValue)
                 .sum();
     }
 }

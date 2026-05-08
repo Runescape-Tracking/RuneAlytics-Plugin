@@ -28,64 +28,91 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static com.runealytics.RuneAlyticsPanel.FEATURE_LOOT;
 import static com.runealytics.RuneAlyticsPanel.FEATURE_MATCHES;
 
 @Slf4j
 @PluginDescriptor(
-        name        = "RuneAlytics",
-        description = "Complete analytics and tracking for Old School RuneScape",
-        tags        = {"analytics", "tracking", "loot", "stats", "runealytics"}
+        name = "RuneAlytics",
+        description = "Advanced loot tracking and analytics",
+        tags = {"loot", "tracking", "analytics"},
+        enabledByDefault = true
 )
 public class RuneAlyticsPlugin extends Plugin
 {
     // ═════════════════════════════════════════════════════════════════════════
-    //  WIDGET GROUP-IDs  (mirrors the constants defined in LootTrackerManager)
+    //  WIDGET GROUP-IDs  (all sourced from {@link LootTrackerManager} constants)
     // ═════════════════════════════════════════════════════════════════════════
-    // These are referenced only inside this plugin to dispatch to the manager.
 
-    // ── Standard reward containers ────────────────────────────────────────────
-    /** Barrows reward chest (container-read path) */
-    static final int WIDGET_BARROWS           = LootTrackerManager.WIDGET_BARROWS;
+    /** Barrows reward chest */
+    static final int WIDGET_BARROWS            = LootTrackerManager.WIDGET_BARROWS;
     /** Chambers of Xeric chest */
-    static final int WIDGET_COX               = LootTrackerManager.WIDGET_COX;
+    static final int WIDGET_COX                = LootTrackerManager.WIDGET_COX;
     /** Theatre of Blood chest */
-    static final int WIDGET_TOB               = LootTrackerManager.WIDGET_TOB;
+    static final int WIDGET_TOB                = LootTrackerManager.WIDGET_TOB;
     /** Tombs of Amascut chest */
-    static final int WIDGET_TOA               = LootTrackerManager.WIDGET_TOA;
+    static final int WIDGET_TOA                = LootTrackerManager.WIDGET_TOA;
     /** Corrupted Gauntlet chest */
-    static final int WIDGET_CORRUPTED_GAUNTLET= LootTrackerManager.WIDGET_CORRUPTED_GAUNTLET;
+    static final int WIDGET_CORRUPTED_GAUNTLET = LootTrackerManager.WIDGET_CORRUPTED_GAUNTLET;
     /** Normal Gauntlet chest */
-    static final int WIDGET_GAUNTLET          = LootTrackerManager.WIDGET_GAUNTLET;
+    static final int WIDGET_GAUNTLET           = LootTrackerManager.WIDGET_GAUNTLET;
     /** Nightmare / Phosani chest */
-    static final int WIDGET_NIGHTMARE         = LootTrackerManager.WIDGET_NIGHTMARE;
+    static final int WIDGET_NIGHTMARE          = LootTrackerManager.WIDGET_NIGHTMARE;
     /** Zalcano chest */
-    static final int WIDGET_ZALCANO           = LootTrackerManager.WIDGET_ZALCANO;
-
-    // ── Widget-tree reads (no fixed InventoryID) ─────────────────────────────
+    static final int WIDGET_ZALCANO            = LootTrackerManager.WIDGET_ZALCANO;
     /** Tempoross reward pool */
-    static final int WIDGET_TEMPOROSS         = LootTrackerManager.WIDGET_TEMPOROSS;
+    static final int WIDGET_TEMPOROSS          = LootTrackerManager.WIDGET_TEMPOROSS;
     /** Wintertodt reward crate */
-    static final int WIDGET_WINTERTODT        = LootTrackerManager.WIDGET_WINTERTODT;
+    static final int WIDGET_WINTERTODT         = LootTrackerManager.WIDGET_WINTERTODT;
     /** Clue scroll casket */
-    static final int WIDGET_CLUE              = LootTrackerManager.WIDGET_CLUE;
+    static final int WIDGET_CLUE               = LootTrackerManager.WIDGET_CLUE;
     /** Royal Titans (Varlamore lair) */
-    static final int WIDGET_ROYAL_TITANS      = LootTrackerManager.WIDGET_ROYAL_TITANS;
+    static final int WIDGET_ROYAL_TITANS       = LootTrackerManager.WIDGET_ROYAL_TITANS;
     /** Yama reward */
-    static final int WIDGET_YAMA              = LootTrackerManager.WIDGET_YAMA;
+    static final int WIDGET_YAMA               = LootTrackerManager.WIDGET_YAMA;
     /** Fortis Colosseum chest */
-    static final int WIDGET_COLOSSEUM         = LootTrackerManager.WIDGET_COLOSSEUM;
+    static final int WIDGET_COLOSSEUM          = LootTrackerManager.WIDGET_COLOSSEUM;
     /** Hespori flower chest */
-    static final int WIDGET_HESPORI           = LootTrackerManager.WIDGET_HESPORI;
+    static final int WIDGET_HESPORI            = LootTrackerManager.WIDGET_HESPORI;
+    /**
+     * The Whisperer reward interface (Desert Treasure 2, group 834).
+     *
+     * @see LootTrackerManager#WIDGET_WHISPERER
+     * @see LootTrackerManager#WIDGET_ITEM_SEARCH_DEPTH
+     */
+    static final int WIDGET_WHISPERER          = LootTrackerManager.WIDGET_WHISPERER;
 
     // ── Timing ────────────────────────────────────────────────────────────────
     /** ms after a kill during which spawning ground items are attributed to it */
     private static final long GROUND_ITEM_WINDOW_MS      = 3_000;
     /** seconds before we clear lastKilledBoss to avoid stale attributions */
     private static final long BOSS_CLEAR_TIMEOUT_SECONDS = 30;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  PICKPOCKET / THIEVING TRACKING CONSTANTS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * How long (ms) after the most recent "Pickpocket" click we continue treating
+     * inventory changes as belonging to that pickpocket action.
+     */
+    private static final long PICKPOCKET_WINDOW_MS = 1_800;
+    private static final long SKILLING_SESSION_MS  = 8_000;
+
+    private static final Set<Skill> SKILLING_TRACKED = java.util.EnumSet.of(
+            Skill.WOODCUTTING, Skill.FISHING,  Skill.MINING,    Skill.FARMING,
+            Skill.HUNTER,      Skill.HERBLORE, Skill.RUNECRAFT, Skill.FLETCHING,
+            Skill.COOKING,     Skill.SMITHING, Skill.CRAFTING,  Skill.AGILITY
+    );
+
+    private final Map<String, List<ItemStack>> skillingSnapshot = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Long>            skillingExpiry   = new java.util.concurrent.ConcurrentHashMap<>();
 
     // ═════════════════════════════════════════════════════════════════════════
     //  INJECTED FIELDS
@@ -113,94 +140,127 @@ public class RuneAlyticsPlugin extends Plugin
     //  LOOT TRACKING STATE
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Inventory snapshot taken just before Tempoross / Wintertodt rewards arrive.
-     * Used to diff new items out of the inventory rather than reading the widget.
-     */
-    private List<ItemStack> inventorySnapshot = null;
+    private List<ItemStack> inventorySnapshot        = null;
+    private boolean         waitingForTemporossLoot  = false;
+    private boolean         waitingForWintertodtLoot = false;
 
     /**
-     * Whether we are waiting for Tempoross inventory changes after the
-     * subdual chat message.
+     * True for {@value #WHISPERER_GROUND_ITEM_WINDOW_MS} ms after the Whisperer
+     * KC chat message fires. During this window every {@code ItemSpawned} event
+     * near the player is collected and attributed to the Whisperer kill.
      */
-    private boolean waitingForTemporossLoot = false;
-
+    private boolean         whispererGroundItemWindow = false;
+    /** Timestamp when {@link #whispererGroundItemWindow} was opened. */
+    private Instant         whispererKillTime         = null;
     /**
-     * Whether we are waiting for Wintertodt inventory changes after the
-     * reward crate message.
+     * Accumulates {@link ItemStack}s collected via {@code ItemSpawned} while
+     * {@link #whispererGroundItemWindow} is open.
      */
-    private boolean waitingForWintertodtLoot = false;
+    private final List<ItemStack> whispererGroundItems = new ArrayList<>();
+    private static final long WHISPERER_GROUND_ITEM_WINDOW_MS = 5_000;
+    private ScheduledFuture<?> whispererFlushTask;
+    private static final int WHISPERER_DEBOUNCE_MS = 450;
+    private int whispererParsedKC = -1;
 
-    /**
-     * The NPC that most recently dropped loot, used to attribute nearby
-     * ground-item spawns (ItemSpawned fallback path).
-     */
-    private NPC lastKilledBoss;
+    private NPC             lastKilledBoss           = null;
+    private Instant         lastKillTime             = null;
 
-    /**
-     * When {@link #lastKilledBoss} was set; used to expire the attribution window.
-     */
-    private Instant lastKillTime;
+    private final List<ItemStack>  groundItemBuffer         = new ArrayList<>();
+    private final AtomicBoolean    groundItemFlushScheduled = new AtomicBoolean(false);
 
-    /**
-     * Buffer of ground items collected within the attribution window.
-     * Flushed as a batch 500ms after the first item arrives.
-     */
-    private final List<ItemStack> groundItemBuffer = new ArrayList<>();
-
-    /**
-     * Guards against scheduling multiple ground-item flush tasks at once.
-     */
-    private final AtomicBoolean groundItemFlushScheduled = new AtomicBoolean(false);
-
-    /**
-     * Source name for the next PlayerLootReceived event.
-     * Set by onWidgetLoaded or onChatMessage; consumed and cleared in
-     * onPlayerLootReceived.
-     */
     private String lastChestSource = null;
 
-    /** Previous XP values per skill for delta calculation. */
+    /**
+     * Baseline XP snapshot per skill — updated on every {@link StatChanged} event.
+     * Used to compute the XP delta (gained this tick) passed to
+     * {@link XpTrackerManager#onXpGained}.
+     */
     private final Map<Skill, Integer> previousXp = new EnumMap<>(Skill.class);
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  PICKPOCKET / THIEVING STATE
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The HTML-stripped NPC / stall name from the most recent "Pickpocket" menu click.
+     * Reset to {@code null} when {@link #pickpocketWindowExpiry} passes or when a
+     * successful pickpocket loot diff is recorded.
+     *
+     * <p>Example values: {@code "Master Farmer"}, {@code "Knight of Ardougne"},
+     * {@code "Gem Stall"}</p>
+     */
+    private String  pendingPickpocketNpc = null;
+
+    /**
+     * Inventory snapshot taken immediately after (on the next client tick following)
+     * a "Pickpocket" click.  Used to diff against the post-pickpocket inventory to
+     * determine which items were gained.
+     *
+     * <p>Updated to the <em>current</em> inventory after each successful diff so
+     * that rapid consecutive pickpocket actions are each counted separately.</p>
+     */
+    private List<ItemStack> pickpocketInventorySnapshot = null;
+
+    /**
+     * Absolute time (ms since epoch) at which the pickpocket attribution window closes.
+     * Set to {@code System.currentTimeMillis() + PICKPOCKET_WINDOW_MS} on each click,
+     * and reset on each successful loot diff so rapid pickpockets keep the window open.
+     */
+    private long pickpocketWindowExpiry = 0L;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  STARTUP / SHUTDOWN
     // ═════════════════════════════════════════════════════════════════════════
 
     @Override
-    protected void startUp()
+    protected void startUp() throws Exception
     {
         log.info("RuneAlytics starting");
-        logConfiguration();
-
         mainPanel = injector.getInstance(RuneAlyticsPanel.class);
-        LootTrackerPanel lootPanel = injector.getInstance(LootTrackerPanel.class);
 
-        // Register tabs with their feature-flag keys.
-        // The server controls visibility; tabs not enabled for this account are hidden.
-        mainPanel.addTab("Loot Tracker",  FEATURE_LOOT,    lootPanel);
-        // Uncomment when MatchFinderPanel exists:
-        MatchmakingPanel matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
-        mainPanel.addTab("Match Finder", FEATURE_MATCHES, matchmakingPanel);
+        executorService.execute(() ->
+        {
+            try
+            {
+                // Initialize heavy components
+                LootTrackerPanel lootPanel = injector.getInstance(LootTrackerPanel.class);
+                MatchmakingPanel matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
 
-        navButton = NavigationButton.builder()
-                .tooltip("RuneAlytics")
-                .icon(loadPluginIcon())
-                .priority(5)
-                .panel(mainPanel)
-                .build();
+                SwingUtilities.invokeLater(() ->
+                {
+                    mainPanel.addTab("Loot Tracker", FEATURE_LOOT, lootPanel);
+                    mainPanel.addTab("Match Finder", FEATURE_MATCHES, matchmakingPanel);
 
-        clientToolbar.addNavigation(navButton);
-        lootManager.setPanel(lootPanel);
-        lootManager.initialize();
+                    navButton = NavigationButton.builder()
+                            .tooltip("RuneAlytics")
+                            .icon(loadPluginIcon())
+                            .priority(1) // Priority 1 ensures it stays near the top/middle
+                            .panel(mainPanel)
+                            .build();
 
-        log.info("RuneAlytics started");
+                    // REMOVE first, then ADD to force a UI refresh
+                    clientToolbar.removeNavigation(navButton);
+                    clientToolbar.addNavigation(navButton);
+
+                    log.info("RuneAlytics UI forced onto toolbar");
+                });
+            }
+            catch (Exception e)
+            {
+                log.error("Failed to build RuneAlytics UI", e);
+            }
+        });
     }
 
     @Override
     protected void shutDown()
     {
         log.info("RuneAlytics shutting down");
+
+        // Flush any XP that accumulated in the current 30-second window before
+        // the executor shuts down, so the player's last session gains are not lost.
+        xpTrackerManager.flushImmediate();
+
         lootManager.shutdown();
         if (navButton != null) clientToolbar.removeNavigation(navButton);
         state.reset();
@@ -208,16 +268,23 @@ public class RuneAlyticsPlugin extends Plugin
 
     private void clearTransientLootState()
     {
-        lastKilledBoss           = null;
-        lastKillTime             = null;
-        lastChestSource          = null;
-        inventorySnapshot        = null;
-        waitingForTemporossLoot  = false;
-        waitingForWintertodtLoot = false;
+        lastKilledBoss            = null;
+        lastKillTime              = null;
+        lastChestSource           = null;
+        inventorySnapshot         = null;
+        waitingForTemporossLoot   = false;
+        waitingForWintertodtLoot  = false;
+        whispererGroundItemWindow = false;
+        whispererKillTime         = null;
+        whispererGroundItems.clear();
         groundItemBuffer.clear();
         groundItemFlushScheduled.set(false);
-    }
 
+        // Clear pickpocket state
+        pendingPickpocketNpc        = null;
+        pickpocketInventorySnapshot = null;
+        pickpocketWindowExpiry      = 0L;
+    }
 
     @Provides
     RunealyticsConfig provideConfig(ConfigManager manager)
@@ -229,10 +296,6 @@ public class RuneAlyticsPlugin extends Plugin
     //  LOOT PATH 1 – NPC GROUND DROPS
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Fired by RuneLite when an NPC drops items on the ground.
-     * Covers all standard monsters, bosses, wilderness NPCs, etc.
-     */
     @Subscribe
     public void onNpcLootReceived(NpcLootReceived event)
     {
@@ -241,7 +304,6 @@ public class RuneAlyticsPlugin extends Plugin
         NPC npc = event.getNpc();
         if (npc == null) return;
 
-        // Track for ground-item fallback attribution
         lastKilledBoss = npc;
         lastKillTime   = Instant.now();
 
@@ -259,11 +321,6 @@ public class RuneAlyticsPlugin extends Plugin
     //  LOOT PATH 2 – PLAYER / CHEST LOOT
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Fired by RuneLite for non-NPC loot sources: raids, Barrows, Gauntlet,
-     * PvP piles, etc.  We consume {@link #lastChestSource} (set by
-     * onWidgetLoaded / onChatMessage) to label the source correctly.
-     */
     @Subscribe
     public void onPlayerLootReceived(PlayerLootReceived event)
     {
@@ -272,12 +329,10 @@ public class RuneAlyticsPlugin extends Plugin
         Collection<net.runelite.client.game.ItemStack> rlItems = event.getItems();
         if (rlItems == null || rlItems.isEmpty()) return;
 
-        // Consume pending source; fall back to "Unknown Chest"
         String source = (lastChestSource != null && !lastChestSource.isEmpty())
                 ? lastChestSource : "Unknown Chest";
         lastChestSource = null;
 
-        // Normalise Tempoross variants
         if (source.toLowerCase().contains("reward pool")
                 || source.toLowerCase().contains("casket (tempoross)"))
             source = "Tempoross";
@@ -290,17 +345,9 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  LOOT PATH 3 – WIDGET LOADED  (primes source + triggers container reads)
+    //  LOOT PATH 3 – WIDGET LOADED
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Fires whenever a UI widget is loaded.  We use this to:
-     * <ol>
-     *   <li>Set {@link #lastChestSource} so PlayerLootReceived is labelled.</li>
-     *   <li>Directly read the reward container / widget tree (more reliable than
-     *       waiting for PlayerLootReceived in some cases).</li>
-     * </ol>
-     */
     @Subscribe
     public void onWidgetLoaded(WidgetLoaded event)
     {
@@ -309,7 +356,6 @@ public class RuneAlyticsPlugin extends Plugin
         int gid = event.getGroupId();
         log.info("WidgetLoaded: groupId={}", gid);
 
-        // ── Standard container reads ──────────────────────────────────────────
         if (gid == WIDGET_BARROWS)
         {
             lastChestSource = "Barrows";
@@ -342,7 +388,6 @@ public class RuneAlyticsPlugin extends Plugin
         }
         else if (gid == WIDGET_NIGHTMARE)
         {
-            // Determine Phosani vs normal from the source primed by chat
             String nm = (lastChestSource != null && lastChestSource.contains("Phosani"))
                     ? "Phosani's Nightmare" : "The Nightmare";
             lastChestSource = nm;
@@ -354,7 +399,20 @@ public class RuneAlyticsPlugin extends Plugin
             lootManager.readRewardContainer("Zalcano", 631);
         }
 
-        // ── Widget-tree reads (no standard InventoryID) ───────────────────────
+        if (gid == WIDGET_WHISPERER)
+        {
+            log.info("RuneAlytics: Whisperer widget 834 detected — waiting for drops (KC={})",
+                    whispererParsedKC);
+
+            whispererGroundItemWindow = true;
+
+            if (whispererFlushTask != null)
+                whispererFlushTask.cancel(false);
+
+            whispererFlushTask = executorService.schedule(
+                    this::flushWhispererLoot, 450, TimeUnit.MILLISECONDS);
+            return;
+        }
         else if (gid == WIDGET_ROYAL_TITANS)
         {
             if (lastChestSource == null) lastChestSource = "Royal Titans";
@@ -378,22 +436,18 @@ public class RuneAlyticsPlugin extends Plugin
         else if (gid == WIDGET_WINTERTODT)
         {
             lastChestSource = "Wintertodt";
-            // Also start inventory-diff path as a fallback
             clientThread.invokeLater(() -> {
-                inventorySnapshot     = getCurrentInventory();
+                inventorySnapshot        = getCurrentInventory();
                 waitingForWintertodtLoot = true;
             });
             lootManager.readWidgetLoot("Wintertodt", WIDGET_WINTERTODT, 80);
         }
         else if (gid == WIDGET_TEMPOROSS)
         {
-            // Widget path – try reading the reward pool widget tree
             lootManager.readWidgetLoot("Tempoross", WIDGET_TEMPOROSS, 80);
-            // Inventory-diff is the reliable fallback (already started via chat)
         }
         else if (gid == WIDGET_CLUE)
         {
-            // clue source was set by onChatMessage (treasure trail message)
             String src = (lastChestSource != null) ? lastChestSource : "Clue Scroll";
             lastChestSource = null;
             lootManager.readClueReward(src);
@@ -401,41 +455,148 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  LOOT PATH 4 – INVENTORY DIFF  (Tempoross / Wintertodt fallback)
+    //  LOOT PATH 4 – INVENTORY DIFF  (Tempoross / Wintertodt + Pickpocket)
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Fires when any item container changes.  Used exclusively as a fallback
-     * for Tempoross and Wintertodt when the widget-read path does not capture
-     * all items (can depend on client timing).
+     * Handles inventory container changes.
+     *
+     * <p>Serves two purposes:</p>
+     * <ol>
+     *   <li><b>Tempoross / Wintertodt</b> – existing fallback diff logic.</li>
+     *   <li><b>Pickpocket / Thieving</b> – when {@link #pendingPickpocketNpc} is set
+     *       and the pickpocket window has not expired, diffs the inventory against
+     *       {@link #pickpocketInventorySnapshot} to find the items gained from the
+     *       pickpocket.  The snapshot is then advanced to the current inventory so
+     *       rapid consecutive pickpockets are each counted as individual loot events.</li>
+     * </ol>
      */
     @Subscribe
     public void onItemContainerChanged(ItemContainerChanged event)
     {
         if (!config.enableLootTracking()) return;
         if (event.getContainerId() != InventoryID.INVENTORY.getId()) return;
-        if (!waitingForTemporossLoot && !waitingForWintertodtLoot) return;
 
-        clientThread.invokeLater(() -> {
-            if (inventorySnapshot == null) return;
+        clientThread.invokeLater(() ->
+        {
+            // ── Tempoross / Wintertodt ────────────────────────────────────────
+            if ((waitingForTemporossLoot || waitingForWintertodtLoot) && inventorySnapshot != null)
+            {
+                List<ItemStack> current = getCurrentInventory();
+                List<ItemStack> gained  = diffInventory(inventorySnapshot, current);
+
+                if (!gained.isEmpty())
+                {
+                    if (waitingForTemporossLoot)
+                    {
+                        lootManager.processInventoryDiff("Tempoross", gained);
+                        waitingForTemporossLoot = false;
+                        inventorySnapshot = null;
+                    }
+                    else
+                    {
+                        lootManager.processInventoryDiff("Wintertodt", gained);
+                        waitingForWintertodtLoot = false;
+                        inventorySnapshot = null;
+                    }
+                }
+            }
+
+            if (!config.enablePickpocketTracking()) return;
+            if (pendingPickpocketNpc == null || pickpocketInventorySnapshot == null) return;
+            if (System.currentTimeMillis() > pickpocketWindowExpiry)
+            {
+                log.debug("Pickpocket window expired for '{}'", pendingPickpocketNpc);
+                pendingPickpocketNpc        = null;
+                pickpocketInventorySnapshot = null;
+                return;
+            }
 
             List<ItemStack> current = getCurrentInventory();
-            List<ItemStack> gained  = diffInventory(inventorySnapshot, current);
+            List<ItemStack> gained  = diffInventory(pickpocketInventorySnapshot, current);
 
-            if (gained.isEmpty()) return;  // wait another tick
+            if (!gained.isEmpty())
+            {
+                String npc = pendingPickpocketNpc;
+                List<ItemStack> loot = new ArrayList<>(gained);
 
-            if (waitingForTemporossLoot)
-            {
-                lootManager.processInventoryDiff("Tempoross", gained);
-                waitingForTemporossLoot = false;
-            }
-            else if (waitingForWintertodtLoot)
-            {
-                lootManager.processInventoryDiff("Wintertodt", gained);
-                waitingForWintertodtLoot = false;
+                log.debug("Pickpocket diff: '{}' gained {} item type(s)", npc, loot.size());
+                lootManager.processPickpocketLoot(npc, loot);
+
+                pickpocketInventorySnapshot = current;
             }
 
-            inventorySnapshot = null;
+            if (!skillingSnapshot.isEmpty() && config.enableLootTracking())
+            {
+                List<ItemStack> inv = getCurrentInventory();
+                long now = System.currentTimeMillis();
+                for (String skill : new ArrayList<>(skillingExpiry.keySet()))
+                {
+                    if (now > skillingExpiry.getOrDefault(skill, 0L))
+                    {
+                        skillingExpiry.remove(skill);
+                        skillingSnapshot.remove(skill);
+                        log.debug("Skilling session expired: {}", skill);
+                        continue;
+                    }
+                    List<ItemStack> snap = skillingSnapshot.get(skill);
+                    if (snap == null) continue;
+                    List<ItemStack> items = diffInventory(snap, inv);
+                    if (!items.isEmpty())
+                    {
+                        lootManager.processSkillLoot(skill, new ArrayList<>(items));
+                        skillingSnapshot.put(skill, inv);
+                    }
+                }
+            }
+        });
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 6 – PICKPOCKET CLICK DETECTION  (MenuOptionClicked)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Detects "Pickpocket" menu option clicks and snapshots the current inventory
+     * so that the subsequent {@link #onItemContainerChanged} call can diff it.
+     *
+     * <p>Both "Pickpocket" (NPC right-click) and "Pick-pocket" (older variant) are
+     * accepted.  The NPC / stall name is extracted from the menu target by stripping
+     * RuneScape HTML colour tags.</p>
+     *
+     * <p>If pickpocket tracking is disabled in config this handler returns early.</p>
+     */
+    @Subscribe
+    public void onMenuOptionClicked(MenuOptionClicked event)
+    {
+        if (!config.enableLootTracking() || !config.enablePickpocketTracking()) return;
+
+        String option = event.getMenuOption();
+        if (option == null) return;
+
+        // Accept both the modern and legacy menu option spellings
+        if (!"Pickpocket".equalsIgnoreCase(option) && !"Pick-pocket".equalsIgnoreCase(option))
+            return;
+
+        // Strip RuneScape HTML colour tags from the NPC / stall name
+        String rawTarget = event.getMenuTarget();
+        if (rawTarget == null || rawTarget.isEmpty()) return;
+
+        String npcName = rawTarget.replaceAll("<[^>]*>", "").trim();
+        if (npcName.isEmpty()) return;
+
+        log.debug("Pickpocket click detected: option='{}' target='{}'", option, npcName);
+
+        // Snapshot the inventory on the next client tick (invokeLater ensures
+        // the snapshot is taken BEFORE the server-side result is applied)
+        pendingPickpocketNpc   = npcName;
+        pickpocketWindowExpiry = System.currentTimeMillis() + PICKPOCKET_WINDOW_MS;
+
+        clientThread.invokeLater(() ->
+        {
+            pickpocketInventorySnapshot = getCurrentInventory();
+            log.debug("Pickpocket snapshot taken for '{}' ({} slots occupied)",
+                    npcName, pickpocketInventorySnapshot.size());
         });
     }
 
@@ -443,61 +604,73 @@ public class RuneAlyticsPlugin extends Plugin
     //  LOOT PATH 5 – GROUND ITEM SPAWN  (fallback for unsupported new content)
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Fires when any item appears on the ground.  Only used as a fallback:
-     * items spawning within GROUND_ITEM_WINDOW_MS of a recorded kill and
-     * within 5 tiles are batched and sent to the manager as a group.
-     *
-     * <p>This does NOT duplicate items from onNpcLootReceived because the
-     * manager applies its own deduplication via kill-record timestamps.</p>
-     */
     @Subscribe
     public void onItemSpawned(ItemSpawned event)
     {
-        if (!config.enableLootTracking() || lastKilledBoss == null || lastKillTime == null)
+        if (!config.enableLootTracking()) return;
+
+        TileItem tile = event.getItem();
+        WorldPoint itemLoc = event.getTile().getWorldLocation();
+
+        // ── Whisperer personal drops (debounced) ──────────────────────────────
+        if (whispererGroundItemWindow)
+        {
+            Player local = client.getLocalPlayer();
+            if (local == null) return;
+
+            WorldPoint playerLoc = local.getWorldLocation();
+
+            if (itemLoc != null && itemLoc.distanceTo(playerLoc) <= 12)
+            {
+                whispererGroundItems.add(new ItemStack(tile.getId(), tile.getQuantity()));
+                log.debug("Whisperer ground item collected: id={} qty={} at {}",
+                        tile.getId(), tile.getQuantity(), itemLoc);
+
+                if (whispererFlushTask != null) whispererFlushTask.cancel(false);
+                whispererFlushTask = executorService.schedule(
+                        this::flushWhispererLoot, 450, TimeUnit.MILLISECONDS);
+            }
             return;
+        }
+
+        // ── Normal ground item logic ──────────────────────────────────────────
+        if (lastKilledBoss == null || lastKillTime == null) return;
 
         long elapsedMs = Instant.now().toEpochMilli() - lastKillTime.toEpochMilli();
         if (elapsedMs > GROUND_ITEM_WINDOW_MS) return;
 
-        WorldPoint itemLoc = event.getTile().getWorldLocation();
         WorldPoint bossLoc = lastKilledBoss.getWorldLocation();
         if (itemLoc == null || bossLoc == null || itemLoc.distanceTo(bossLoc) > 5) return;
 
-        TileItem tile = event.getItem();
         groundItemBuffer.add(new ItemStack(tile.getId(), tile.getQuantity()));
 
         if (groundItemFlushScheduled.compareAndSet(false, true))
         {
             final NPC boss = lastKilledBoss;
-            executorService.schedule(() -> clientThread.invokeLater(() -> {
-                if (!groundItemBuffer.isEmpty())
-                {
-                    List<ItemStack> batch = new ArrayList<>(groundItemBuffer);
-                    groundItemBuffer.clear();
-                    groundItemFlushScheduled.set(false);
-                    lootManager.processGroundItemBatch(boss, batch);
-                }
-                else
-                {
-                    groundItemFlushScheduled.set(false);
-                }
-            }), 500, TimeUnit.MILLISECONDS);
+
+            executorService.schedule(() ->
+                            clientThread.invokeLater(() ->
+                            {
+                                if (!groundItemBuffer.isEmpty())
+                                {
+                                    List<ItemStack> batch = new ArrayList<>(groundItemBuffer);
+                                    groundItemBuffer.clear();
+                                    groundItemFlushScheduled.set(false);
+                                    lootManager.processGroundItemBatch(boss, batch);
+                                }
+                                else
+                                {
+                                    groundItemFlushScheduled.set(false);
+                                }
+                            }),
+                    500, TimeUnit.MILLISECONDS);
         }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  CHAT MESSAGE  (sets lastChestSource + inventory snapshots)
+    //  CHAT MESSAGE
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Listens for game / spam messages to:
-     * <ul>
-     *   <li>Prime {@link #lastChestSource} for the upcoming PlayerLootReceived</li>
-     *   <li>Snapshot inventory before Tempoross / Wintertodt rewards arrive</li>
-     *   <li>Forward KC messages to the manager for logging</li>
-     * </ul>
-     */
     @Subscribe
     public void onChatMessage(ChatMessage event)
     {
@@ -509,34 +682,54 @@ public class RuneAlyticsPlugin extends Plugin
         String msg   = event.getMessage();
         String lower = msg.toLowerCase();
 
-        // ── Inventory snapshot triggers ───────────────────────────────────────
+        // ── Tempoross ─────────────────────────────────────────────────────────
         if (lower.contains("subdued the spirit") || lower.contains("you have helped to subdue"))
         {
             clientThread.invokeLater(() -> {
-                inventorySnapshot     = getCurrentInventory();
+                inventorySnapshot       = getCurrentInventory();
                 waitingForTemporossLoot = true;
-                log.info("Tempoross: inventory snapshot taken ({} items)",
-                        inventorySnapshot.size());
+                log.info("Tempoross: inventory snapshot taken ({} items)", inventorySnapshot.size());
             });
             lastChestSource = "Tempoross";
             return;
         }
 
+        // ── Wintertodt ───────────────────────────────────────────────────────
         if (lower.contains("supply crate") && lower.contains("wintertodt"))
         {
             clientThread.invokeLater(() -> {
                 inventorySnapshot        = getCurrentInventory();
                 waitingForWintertodtLoot = true;
             });
+            lastChestSource = "Wintertodt";
+            return;
         }
 
-        // ── KC messages ───────────────────────────────────────────────────────
-        if (msg.contains("kill count is:") || msg.contains("killcount is:"))
+        // ── The Whisperer ────────────────────────────────────────────────────
+        if (lower.contains("whisperer") && lower.contains("kill count"))
         {
-            lootManager.parseKillCountMessage(msg);
+            String stripped = msg.replaceAll("<[^>]*>", "");
+            Matcher kcM = Pattern
+                    .compile("kill count is:?\\s*(\\d+)", Pattern.CASE_INSENSITIVE)
+                    .matcher(stripped);
+
+            whispererParsedKC = kcM.find() ? Integer.parseInt(kcM.group(1)) : -1;
+
+            lastChestSource           = "The Whisperer";
+            whispererGroundItemWindow = true;
+            whispererKillTime         = Instant.now();
+            whispererGroundItems.clear();
+
+            log.info("The Whisperer: KC detected (game KC={}) – ground-item collection window opened",
+                    whispererParsedKC);
+            return;
         }
 
-        // ── Chest source detection ────────────────────────────────────────────
+        // ── Generic KC parser ────────────────────────────────────────────────
+        if (lower.contains("kill count is"))
+            lootManager.parseKillCountMessage(msg);
+
+        // ── Chest detection fallback ─────────────────────────────────────────
         String detected = lootManager.detectChestSource(lower);
         if (detected != null && lastChestSource == null)
         {
@@ -546,12 +739,13 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  GAME TICK  (expire stale kill attribution)
+    //  GAME TICK
     // ═════════════════════════════════════════════════════════════════════════
 
     @Subscribe
     public void onGameTick(GameTick tick)
     {
+        // ── Expire stale boss ground-item attribution ──────────────────────────
         if (lastKillTime != null
                 && ChronoUnit.SECONDS.between(lastKillTime, Instant.now())
                 > BOSS_CLEAR_TIMEOUT_SECONDS)
@@ -559,10 +753,50 @@ public class RuneAlyticsPlugin extends Plugin
             lastKilledBoss = null;
             lastKillTime   = null;
         }
+
+        // ── Expire the Whisperer ground-item window ───────────────────────────
+        if (whispererGroundItemWindow && whispererKillTime != null)
+        {
+            long elapsed = Instant.now().toEpochMilli() - whispererKillTime.toEpochMilli();
+            if (elapsed > WHISPERER_GROUND_ITEM_WINDOW_MS + 5_000)
+            {
+                log.warn("Whisperer ground-item window force-expired with {} items unclaimed",
+                        whispererGroundItems.size());
+                whispererGroundItemWindow = false;
+                whispererGroundItems.clear();
+                whispererKillTime = null;
+            }
+        }
+
+        // ── Expire pickpocket attribution window ──────────────────────────────
+        if (pendingPickpocketNpc != null
+                && System.currentTimeMillis() > pickpocketWindowExpiry)
+        {
+            log.debug("Pickpocket window ticked out for '{}'", pendingPickpocketNpc);
+            pendingPickpocketNpc        = null;
+            pickpocketInventorySnapshot = null;
+        }
+
+        // ── Expire skilling sessions ──────────────────────────────────────────
+        long nowMs = System.currentTimeMillis();
+        skillingExpiry.entrySet().removeIf(entry -> {
+            if (nowMs > entry.getValue())
+            {
+                skillingSnapshot.remove(entry.getKey());
+                log.debug("Skilling session ticked out: {}", entry.getKey());
+                return true;
+            }
+            return false;
+        });
+
+        // NOTE: The per-tick XP flush that was previously here has been removed.
+        // XP is now batched by XpTrackerManager and sent once every 30 seconds.
+        // Sending on every game tick (≈600 ms) was causing ~100 API calls/minute,
+        // which silently prevented XP from appearing on the website.
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  GAME STATE CHANGE  (login / logout)
+    //  GAME STATE CHANGE
     // ═════════════════════════════════════════════════════════════════════════
 
     @Subscribe
@@ -574,17 +808,11 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGIN_SCREEN)
         {
             state.setLoggedIn(false);
-
-            // Fully hide Loot + Match Finder while at login screen
             SwingUtilities.invokeLater(() -> mainPanel.showLoggedOutState());
             return;
         }
 
-        if (gs == GameState.HOPPING)
-        {
-            // Do NOT reset panel on world hop
-            return;
-        }
+        if (gs == GameState.HOPPING) return;
 
         if (gs == GameState.LOGGED_IN)
         {
@@ -594,32 +822,23 @@ public class RuneAlyticsPlugin extends Plugin
                     ? client.getLocalPlayer().getName()
                     : null;
 
-            if (username == null || username.isEmpty())
-            {
-                return;
-            }
+            if (username == null || username.isEmpty()) return;
 
             final String rsn = username.toLowerCase();
 
-            // If not verified → show verification only
             if (!state.isVerified())
             {
-                SwingUtilities.invokeLater(() ->
-                        mainPanel.showVerificationOnly());
+                SwingUtilities.invokeLater(() -> mainPanel.showVerificationOnly());
                 return;
             }
 
-            // Verified → fetch feature flags async
             executorService.submit(() ->
             {
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
-
                 SwingUtilities.invokeLater(() ->
                         mainPanel.showMainFeatures(
                                 flags.getOrDefault(FEATURE_LOOT, false),
-                                flags.getOrDefault(FEATURE_MATCHES, false)
-                        )
-                );
+                                flags.getOrDefault(FEATURE_MATCHES, false)));
             });
         }
     }
@@ -630,28 +849,22 @@ public class RuneAlyticsPlugin extends Plugin
                 ? client.getLocalPlayer().getName()
                 : null;
 
-        if (username == null || username.isEmpty())
-            return;
+        if (username == null || username.isEmpty()) return;
 
-        // Not verified → show only verification tab
         if (!state.isVerified())
         {
-            SwingUtilities.invokeLater(() ->
-                    mainPanel.showVerificationOnly());
+            SwingUtilities.invokeLater(() -> mainPanel.showVerificationOnly());
             return;
         }
 
-        // Verified → fetch feature flags
         executorService.submit(() -> {
             Map<String, Boolean> flags = apiClient.fetchFeatureFlags(username.toLowerCase());
-
-            SwingUtilities.invokeLater(() ->
-                    mainPanel.applyFeatureFlags(flags));
+            SwingUtilities.invokeLater(() -> mainPanel.applyFeatureFlags(flags));
         });
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  PLAYER SPAWNED  (post-login data load + auto-verification)
+    //  PLAYER SPAWNED
     // ═════════════════════════════════════════════════════════════════════════
 
     @Subscribe
@@ -662,11 +875,8 @@ public class RuneAlyticsPlugin extends Plugin
         log.info("Local player spawned");
 
         if (config.enableAutoVerification() && !state.isVerified())
-        {
             checkVerificationStatus();
-        }
 
-        // Load local data 2s after spawn to give the client time to settle
         executorService.schedule(() -> {
             if (state.isVerified())
             {
@@ -679,18 +889,26 @@ public class RuneAlyticsPlugin extends Plugin
             }
         }, 2, TimeUnit.SECONDS);
 
-        // Restore the tab the player was last on.
-        // Delayed slightly to let the flag-fetch and layout settle first.
         executorService.schedule(
                 () -> SwingUtilities.invokeLater(mainPanel::restoreLastTab),
-                2_500, TimeUnit.MILLISECONDS
-        );
+                2_500, TimeUnit.MILLISECONDS);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  XP TRACKING
     // ═════════════════════════════════════════════════════════════════════════
 
+    /**
+     * Fires whenever the local player's XP changes in any skill.
+     *
+     * <p>Computes the XP delta since the last event and hands it off to
+     * {@link XpTrackerManager#onXpGained}, which opens a 30-second accumulation
+     * window on the first gain and sends a single batched POST at T+30s.
+     * Nothing is sent per-tick here — all batching/scheduling lives in the manager.</p>
+     *
+     * <p>Also maintains the skilling-loot snapshot used by
+     * {@link #onItemContainerChanged} to diff inventory changes during skilling sessions.</p>
+     */
     @Subscribe
     public void onStatChanged(StatChanged event)
     {
@@ -702,23 +920,38 @@ public class RuneAlyticsPlugin extends Plugin
         int current = event.getXp();
         Integer prev = previousXp.get(skill);
 
-        if (prev == null) { previousXp.put(skill, current); return; }
+        // First observation for this skill — record a baseline and wait for a real gain
+        if (prev == null)
+        {
+            previousXp.put(skill, current);
+            return;
+        }
 
         int gained = current - prev;
         previousXp.put(skill, current);
 
         if (gained <= 0 || gained < config.minXpGain()) return;
 
-        String username = state.getVerifiedUsername();
-        String token    = config.authToken();
-        if (username == null || token == null) return;
+        // ── Delegate XP batching to XpTrackerManager ──────────────────────────
+        // The manager opens a 30-second window on the first call and accumulates
+        // all subsequent gains within that window.  At T+30s it drains the buffer
+        // and fires a single POST to /api/xp/batch.
+        xpTrackerManager.onXpGained(skill, gained);
 
-        executorService.submit(() ->
-                xpTrackerManager.recordXpGain(token, username, skill, gained, current, event.getLevel()));
+        // ── Skilling loot snapshot (unchanged) ────────────────────────────────
+        if (SKILLING_TRACKED.contains(skill))
+        {
+            String key = skill.getName();
+            clientThread.invokeLater(() -> {
+                if (!skillingSnapshot.containsKey(key))
+                    skillingSnapshot.put(key, getCurrentInventory());
+                skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
+            });
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  SCHEDULED SYNC  (background upload of unsynced kills every 60s)
+    //  SCHEDULED SYNC
     // ═════════════════════════════════════════════════════════════════════════
 
     @net.runelite.client.task.Schedule(
@@ -733,13 +966,52 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     // ═════════════════════════════════════════════════════════════════════════
+    //  WHISPERER FLUSH
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void flushWhispererLoot()
+    {
+        clientThread.invokeLater(() ->
+        {
+            whispererGroundItemWindow = false;
+
+            final int kc = whispererParsedKC;
+            whispererParsedKC = -1;
+
+            if (whispererGroundItems.isEmpty())
+            {
+                log.warn("Whisperer flush: no items");
+                return;
+            }
+
+            final List<ItemStack> loot = mergeItemStacks(whispererGroundItems);
+            whispererGroundItems.clear();
+
+            log.info("The Whisperer: merged into {} item types, KC={}", loot.size(), kc);
+            lootManager.processPlayerLootWithGameKC("The Whisperer", loot, kc);
+        });
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
     //  UTILITY HELPERS
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Returns a snapshot of the player's current inventory as ItemStacks.
-     * Returns an empty list if the inventory container is unavailable.
+     * Merges a list of {@link ItemStack}s with duplicate IDs into a single entry
+     * per item ID by summing quantities.
      */
+    private List<ItemStack> mergeItemStacks(List<ItemStack> raw)
+    {
+        Map<Integer, Integer> merged = new LinkedHashMap<>();
+        for (ItemStack s : raw)
+            merged.merge(s.getId(), s.getQuantity(), Integer::sum);
+
+        List<ItemStack> result = new ArrayList<>(merged.size());
+        for (Map.Entry<Integer, Integer> e : merged.entrySet())
+            result.add(new ItemStack(e.getKey(), e.getValue()));
+        return result;
+    }
+
     private List<ItemStack> getCurrentInventory()
     {
         ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
@@ -747,20 +1019,18 @@ public class RuneAlyticsPlugin extends Plugin
 
         List<ItemStack> items = new ArrayList<>();
         for (Item item : inv.getItems())
-        {
             if (item != null && item.getId() > 0 && item.getQuantity() > 0)
                 items.add(new ItemStack(item.getId(), item.getQuantity()));
-        }
         return items;
     }
 
     /**
-     * Returns the net-new items gained between two inventory snapshots.
-     * Items whose quantity increased appear in the result.
+     * Returns only the items that were GAINED (new or increased in quantity)
+     * between {@code before} and {@code after} inventory snapshots.
      *
-     * @param before snapshot taken before the reward
-     * @param after  snapshot taken after the reward
-     * @return list of gained ItemStacks (delta quantities only)
+     * @param before snapshot taken before the action
+     * @param after  snapshot taken after the action
+     * @return list of gained {@link ItemStack}s (may be empty)
      */
     private List<ItemStack> diffInventory(List<ItemStack> before, List<ItemStack> after)
     {
@@ -779,10 +1049,6 @@ public class RuneAlyticsPlugin extends Plugin
         return gained;
     }
 
-    /**
-     * Checks whether the stored auth token is valid for the currently
-     * logged-in RSN, then updates RuneAlyticsState and the settings panel.
-     */
     private void checkVerificationStatus()
     {
         if (client.getLocalPlayer() == null) return;
@@ -820,23 +1086,19 @@ public class RuneAlyticsPlugin extends Plugin
         });
     }
 
-    /** Logs the active configuration at startup for easy debug inspection. */
     private void logConfiguration()
     {
         log.info("=== RUNEALYTICS CONFIG ===");
-        log.info("Loot tracking : {}", config.enableLootTracking());
-        log.info("Track all NPCs: {}", config.trackAllNpcs());
-        log.info("Min loot value: {}", config.minimumLootValue());
-        log.info("Sync to server: {}", config.syncLootToServer());
-        log.info("Auto-verify   : {}", config.enableAutoVerification());
-        log.info("API URL       : {}", config.apiUrl());
+        log.info("Loot tracking     : {}", config.enableLootTracking());
+        log.info("Track all NPCs    : {}", config.trackAllNpcs());
+        log.info("Track pickpockets : {}", config.enablePickpocketTracking());
+        log.info("Min loot value    : {}", config.minimumLootValue());
+        log.info("Sync to server    : {}", config.syncLootToServer());
+        log.info("Auto-verify       : {}", config.enableAutoVerification());
+        log.info("API URL           : {}", config.apiUrl());
         log.info("=========================");
     }
 
-    /**
-     * Loads the plugin icon from resources, falling back to an orange square
-     * if the image file is missing.
-     */
     private BufferedImage loadPluginIcon()
     {
         try

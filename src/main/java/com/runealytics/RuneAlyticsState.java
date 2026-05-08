@@ -57,21 +57,18 @@ public class RuneAlyticsState
     }
     public void addLootRecord(LootRecord record)
     {
-        // Assuming you have a List of records inside this class
         if (lootRecords == null) {
             lootRecords = new ArrayList<>();
         }
         lootRecords.add(record);
     }
-    // The method your Manager is looking for
+
     public void incrementKillCount(String bossName)
     {
-        // Get the current count, add 1, and save it back
         int currentCount = killCounts.getOrDefault(bossName, 0);
         killCounts.put(bossName, currentCount + 1);
     }
 
-    // You'll likely need this later for your UI panel
     public int getKillCount(String bossName)
     {
         return killCounts.getOrDefault(bossName, 0);

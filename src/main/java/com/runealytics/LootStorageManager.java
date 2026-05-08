@@ -19,8 +19,15 @@ public class LootStorageManager
     private String currentUsername;
     private final Gson gson;
     private final RuneAlyticsState state;
-
     private LootStorageData currentData;
+
+    private final java.util.concurrent.ScheduledExecutorService saveExecutor =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "RuneAlytics-Save");
+                t.setDaemon(true);
+                return t;
+            });
+    private java.util.concurrent.ScheduledFuture<?> pendingSave = null;
 
     @Inject
     public LootStorageManager(RuneAlyticsState state, Gson gson)
@@ -211,6 +218,13 @@ public class LootStorageManager
         }
     }
 
+    private synchronized void scheduleSave()
+    {
+        if (pendingSave != null && !pendingSave.isDone())
+            pendingSave.cancel(false);
+        pendingSave = saveExecutor.schedule(this::saveData, 500, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
     /**
      * Add a kill to storage
      */
@@ -276,8 +290,7 @@ public class LootStorageManager
 
         bossData.setTotalLootValue(bossData.getTotalLootValue() + killValue);
 
-        // Save immediately
-        saveData();
+        scheduleSave();
 
         log.debug("Added kill #{} for {} - {} drops, {} gp",
                 killNumber, npcName, drops.size(), killValue);

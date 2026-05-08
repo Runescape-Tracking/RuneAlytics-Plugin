@@ -38,11 +38,11 @@ public class CollapsibleBossPanel extends JPanel
         // Boss info
         JLabel nameLabel = new JLabel(bossName + " × " + killCount);
         nameLabel.setForeground(Color.WHITE);
-        nameLabel.setFont(new Font("Runescape", Font.BOLD, 11));
+        nameLabel.setFont(new Font("Calibri", Font.PLAIN, 11));
 
         JLabel valueLabel = new JLabel(formatGp(totalValue));
         valueLabel.setForeground(Color.WHITE);
-        valueLabel.setFont(new Font("Runescape", Font.PLAIN, 11));
+        valueLabel.setFont(new Font("Calibri", Font.PLAIN, 11));
 
         JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         leftPanel.setOpaque(false);
@@ -102,14 +102,19 @@ public class CollapsibleBossPanel extends JPanel
 
     private String formatGp(long value)
     {
-        if (value >= 1000000)
+        if (value >= 1_000_000_000)
         {
-            return String.format("%.1fM gp", value / 1000000.0);
+            return String.format("%.2fB", value / 1_000_000_000.0);
         }
-        else if (value >= 1000)
+        else if (value >= 1_000_000)
         {
-            return String.format("%.1fK gp", value / 1000.0);
+            return String.format("%.1fM", value / 1_000_000.0);
         }
-        return value + " gp";
+        else if (value >= 1_000)
+        {
+            return String.format("%.1fK", value / 1_000.0);
+        }
+
+        return String.valueOf(value);
     }
 }

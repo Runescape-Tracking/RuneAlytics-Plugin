@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import com.runealytics.LootStorageData;
 import java.util.*;
+import net.runelite.api.Skill;
 
 import static com.runealytics.RuneAlyticsHttp.JSON;
 
@@ -47,6 +48,35 @@ public class LootTrackerApiClient
         this.config = config;
         this.state = state;
         this.gson = gson;
+    }
+
+    /**
+     * Sends a batch of pre-built kill payloads to the server.
+     */
+    public boolean syncBulkBatch(String username, List<JsonObject> batch) {
+        if (batch == null || batch.isEmpty()) return true;
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("username", username);
+
+        JsonArray killsArray = new JsonArray();
+        for (JsonObject killPayload : batch) {
+            killsArray.add(killPayload);
+        }
+        payload.add("kills", killsArray);
+
+        Request request = new Request.Builder()
+                .url(config.apiUrl() + LOOT_BULK_SYNC_PATH)
+                .post(RequestBody.create(JSON, gson.toJson(payload)))
+                .addHeader("Authorization", "Bearer " + config.authToken())
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            return response.isSuccessful();
+        } catch (IOException e) {
+            log.error("Batch sync request failed", e);
+            return false;
+        }
     }
 
     /**
@@ -442,6 +472,48 @@ public class LootTrackerApiClient
             log.debug("Successfully synced kill: {} #{}", npcName, killNumber);
         }
     }
+    /**
+     * Syncs batched XP gains to the server.
+     */
+    public void syncXpBatch(Map<Skill, Integer> xpGains)
+    {
+        String token = config.authToken();
+        String username = state.getVerifiedUsername();
+
+        if (token == null || username == null || xpGains.isEmpty()) return;
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("username", username);
+
+        JsonObject skillsObj = new JsonObject();
+        xpGains.forEach((skill, gain) -> {
+            skillsObj.addProperty(skill.getName().toLowerCase(), gain);
+        });
+
+        payload.add("xp_gains", skillsObj);
+        payload.addProperty("timestamp", System.currentTimeMillis() / 1000);
+
+        // Ensure the 'JSON' constant and 'gson' are available in this class
+        RequestBody body = RequestBody.create(JSON, gson.toJson(payload));
+
+        Request request = new Request.Builder()
+                .url(config.apiUrl() + "/xp/batch")
+                .post(body)
+                .addHeader("Authorization", "Bearer " + token)
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                log.warn("Failed to sync XP batch: {}", e.getMessage());
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) {
+                response.close();
+            }
+        });
+    }
 
     /**
      * Bulk sync all local loot data to server (for startup sync)
@@ -450,41 +522,39 @@ public class LootTrackerApiClient
     {
         log.info("=== BULK SYNC DEBUG ===");
         log.info("Full URL: {}{}", config.apiUrl(), LOOT_BULK_SYNC_PATH);
-        log.info("API Base: {}", config.apiUrl());
         log.info("Username: {}", username);
-        log.info("=======================");
-
-        log.info("Starting bulk loot sync for username: {}", username);
 
         JsonArray killsArray = new JsonArray();
         int totalKills = 0;
 
-        // Build kills array
         for (Map.Entry<String, BossKillStats> entry : bossStats.entrySet())
         {
             BossKillStats stats = entry.getValue();
-            log.debug("Processing {} with {} kill history records",
-                    stats.getNpcName(), stats.getKillHistory().size());
 
-            for (NpcKillRecord kill : stats.getKillHistory())
+            // Use the stats object for NPC-wide data
+            String npcName = stats.getNpcName();
+            int npcId = stats.getNpcId();
+
+            for (LootStorageData.KillRecord kill : stats.getKillHistory())
             {
                 JsonObject killObj = new JsonObject();
-                killObj.addProperty("npc_name", kill.getNpcName());
-                killObj.addProperty("npc_id", kill.getNpcId());
+                killObj.addProperty("npc_name", npcName);
+                killObj.addProperty("npc_id", npcId);
                 killObj.addProperty("combat_level", kill.getCombatLevel());
-                killObj.addProperty("kill_count", kill.getKillNumber()); // Use sequential kill number
-                killObj.addProperty("world", kill.getWorldNumber());
+                killObj.addProperty("kill_count", kill.getKillNumber());
+                killObj.addProperty("world", kill.getWorld()); // Corrected from getWorldNumber
                 killObj.addProperty("timestamp", kill.getTimestamp());
-                killObj.addProperty("prestige", 0);
+                killObj.addProperty("prestige", stats.getPrestige());
 
-                // Add drops array and calculate totals
                 JsonArray dropsArray = new JsonArray();
                 long killTotalValue = 0;
                 int killDropCount = 0;
 
-                for (LootDrop drop : kill.getDrops())
+                // Updated to use the correct DropRecord type
+                for (LootStorageData.DropRecord drop : kill.getDrops())
                 {
-                    long itemTotalValue = drop.getGePrice() * drop.getQuantity();
+                    // Use the pre-calculated totalValue from the record
+                    long itemTotalValue = drop.getTotalValue();
                     killTotalValue += itemTotalValue;
                     killDropCount++;
 
@@ -493,9 +563,9 @@ public class LootTrackerApiClient
                     dropObj.addProperty("item_name", drop.getItemName());
                     dropObj.addProperty("quantity", drop.getQuantity());
                     dropObj.addProperty("ge_price", drop.getGePrice());
-                    dropObj.addProperty("high_alch", drop.getHighAlchValue());
+                    dropObj.addProperty("high_alch", drop.getHighAlch()); // Corrected from getHighAlchValue
                     dropObj.addProperty("total_value", itemTotalValue);
-                    dropObj.addProperty("hidden", false);
+                    dropObj.addProperty("hidden", drop.isHidden());
                     dropsArray.add(dropObj);
                 }
 
@@ -508,24 +578,18 @@ public class LootTrackerApiClient
             }
         }
 
-        // Build root payload with username
         JsonObject payload = new JsonObject();
         payload.addProperty("username", username);
         payload.add("kills", killsArray);
-
-        log.info("Sending bulk sync request: {} kills across {} bosses",
-                totalKills, bossStats.size());
-
-        // Send request
-        String url = config.apiUrl() + LOOT_BULK_SYNC_PATH;
 
         MediaType JSON = MediaType.parse("application/json; charset=utf-8");
         RequestBody body = RequestBody.create(JSON, payload.toString());
 
         Request request = new Request.Builder()
-                .url(url)
+                .url(config.apiUrl() + LOOT_BULK_SYNC_PATH)
                 .post(body)
                 .addHeader("Content-Type", "application/json")
+                .addHeader("Authorization", "Bearer " + config.authToken()) // Recommended: include your auth token
                 .build();
 
         try (Response response = httpClient.newCall(request).execute())
@@ -534,68 +598,55 @@ public class LootTrackerApiClient
 
             if (!response.isSuccessful())
             {
-                log.error("✗ Bulk loot sync failed: HTTP {} - {}",
-                        response.code(), responseBody);
+                log.error("✗ Bulk loot sync failed: HTTP {} - {}", response.code(), responseBody);
                 throw new IOException("Bulk sync failed with status: " + response.code());
             }
 
             log.info("✓ Bulk loot sync successful - {} kills synced", totalKills);
-            log.debug("Server response: {}", responseBody);
         }
     }
 
     /**
-     * Build kill payload for real-time sync
+     * Builds the JSON payload for a single kill record.
+     * NPC info is passed in because KillRecord doesn't store it.
      */
-    public JsonObject buildKillPayload(NpcKillRecord kill)
+    public JsonObject buildKillPayload(LootStorageData.KillRecord kill, String npcName, int npcId, int prestige)
     {
-        String username = state.getVerifiedUsername();
-        if (username == null || username.isEmpty())
-        {
-            log.error("Cannot build kill payload - no verified username");
-            return null;
-        }
-
         JsonObject payload = new JsonObject();
 
-        // Basic kill info
-        payload.addProperty("username", username);
-        payload.addProperty("npc_name", kill.getNpcName());
-        payload.addProperty("npc_id", kill.getNpcId());
+        payload.addProperty("npc_name",     npcName);
+        payload.addProperty("npc_id",       npcId);
         payload.addProperty("combat_level", kill.getCombatLevel());
-        payload.addProperty("kill_count", kill.getKillNumber()); // Use sequential kill number
-        payload.addProperty("world", kill.getWorldNumber());
-        payload.addProperty("timestamp", kill.getTimestamp());
-        payload.addProperty("prestige", 0);
+        payload.addProperty("kill_count",   kill.getKillNumber());
+        payload.addProperty("world",        kill.getWorld());
+        payload.addProperty("timestamp",    kill.getTimestamp());
+        payload.addProperty("prestige",     prestige);
 
-        // Build drops array and calculate totals
-        JsonArray drops = new JsonArray();
-        long totalLootValue = 0;
-        int dropCount = 0;
+        JsonArray dropsArray = new JsonArray();
+        long totalValue = 0;
 
-        for (LootDrop drop : kill.getDrops())
+        for (LootStorageData.DropRecord drop : kill.getDrops())
         {
-            long itemTotalValue = drop.getGePrice() * drop.getQuantity();
-            totalLootValue += itemTotalValue;
-            dropCount++;
+            String itemName = drop.getItemName();
+            if (itemName == null || itemName.isEmpty() || itemName.startsWith("Item #"))
+                continue;
 
-            JsonObject dropObj = new JsonObject();
-            dropObj.addProperty("item_id", drop.getItemId());
-            dropObj.addProperty("item_name", drop.getItemName());
-            dropObj.addProperty("quantity", drop.getQuantity());
-            dropObj.addProperty("ge_price", drop.getGePrice());
-            dropObj.addProperty("high_alch", drop.getHighAlchValue());
-            dropObj.addProperty("total_value", itemTotalValue);
-            dropObj.addProperty("hidden", false);
-            drops.add(dropObj);
+            JsonObject d = new JsonObject();
+            d.addProperty("item_id",     drop.getItemId());
+            d.addProperty("item_name",   itemName);
+            d.addProperty("quantity",    Math.max(1, drop.getQuantity()));
+            d.addProperty("ge_price",    drop.getGePrice());
+            d.addProperty("high_alch",   drop.getHighAlch());
+            d.addProperty("total_value", drop.getTotalValue());
+            dropsArray.add(d);
+            totalValue += drop.getTotalValue();
         }
 
-        payload.add("drops", drops);
-        payload.addProperty("total_loot_value", totalLootValue);
-        payload.addProperty("drop_count", dropCount);
+        if (dropsArray.size() == 0) return null;
 
-        log.debug("Built kill payload for {}: kill #{}, {} drops, {} gp",
-                kill.getNpcName(), kill.getKillNumber(), dropCount, totalLootValue);
+        payload.add("drops",                    dropsArray);
+        payload.addProperty("total_loot_value", totalValue);
+        payload.addProperty("drop_count",       dropsArray.size());
 
         return payload;
     }

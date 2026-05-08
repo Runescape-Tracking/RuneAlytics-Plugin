@@ -10,7 +10,7 @@ public interface LootTrackerUpdateListener
      */
     void onKillRecorded(NpcKillRecord kill, BossKillStats stats);
 
-    void onLootUpdated();
+    void onLootUpdated(BossKillStats stats, LootStorageData.KillRecord kill);
 
     /**
      * Called when data is refreshed
