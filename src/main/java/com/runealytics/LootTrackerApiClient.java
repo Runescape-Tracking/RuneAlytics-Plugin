@@ -175,7 +175,7 @@ public class LootTrackerApiClient
                 serverStats.put(stats.bossName, stats);
             }
 
-            log.info("Fetched {} boss stats from server", serverStats.size());
+            log.debug("Fetched {} boss stats from server", serverStats.size());
             return serverStats;
         }
         catch (Exception e)
@@ -252,7 +252,7 @@ public class LootTrackerApiClient
                 return false;
             }
 
-            log.info("Bulk sync successful - {} kills", killsArray.size());
+            log.debug("Bulk sync successful - {} kills", killsArray.size());
             return true;
         }
     }
@@ -350,7 +350,7 @@ public class LootTrackerApiClient
                 bossData.setKillCount(bossData.getKillCount() + 1);
             }
 
-            log.info("Fetched {} bosses with total {} kills from server",
+            log.debug("Fetched {} bosses with total {} kills from server",
                     result.size(),
                     result.values().stream().mapToInt(b -> b.getKills().size()).sum());
 
@@ -448,13 +448,13 @@ public class LootTrackerApiClient
      */
     public void bulkSyncAllLoot(String username, Map<String, BossKillStats> bossStats) throws IOException
     {
-        log.info("=== BULK SYNC DEBUG ===");
-        log.info("Full URL: {}{}", config.apiUrl(), LOOT_BULK_SYNC_PATH);
-        log.info("API Base: {}", config.apiUrl());
-        log.info("Username: {}", username);
-        log.info("=======================");
+        log.debug("=== BULK SYNC DEBUG ===");
+        log.debug("Full URL: {}{}", config.apiUrl(), LOOT_BULK_SYNC_PATH);
+        log.debug("API Base: {}", config.apiUrl());
+        log.debug("Username: {}", username);
+        log.debug("=======================");
 
-        log.info("Starting bulk loot sync for username: {}", username);
+        log.debug("Starting bulk loot sync for username: {}", username);
 
         JsonArray killsArray = new JsonArray();
         int totalKills = 0;
@@ -513,7 +513,7 @@ public class LootTrackerApiClient
         payload.addProperty("username", username);
         payload.add("kills", killsArray);
 
-        log.info("Sending bulk sync request: {} kills across {} bosses",
+        log.debug("Sending bulk sync request: {} kills across {} bosses",
                 totalKills, bossStats.size());
 
         // Send request
@@ -539,7 +539,7 @@ public class LootTrackerApiClient
                 throw new IOException("Bulk sync failed with status: " + response.code());
             }
 
-            log.info("✓ Bulk loot sync successful - {} kills synced", totalKills);
+            log.debug("✓ Bulk loot sync successful - {} kills synced", totalKills);
             log.debug("Server response: {}", responseBody);
         }
     }

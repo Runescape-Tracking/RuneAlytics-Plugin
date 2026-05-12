@@ -196,14 +196,14 @@ public class RuneAlyticsSettingsPanel extends JPanel
                     statusLabel.setText("Verified ✓");
                     RuneAlyticsUi.stylePositiveStatus(statusLabel);
                     usernameLabel.setText("Username: " + (username != null ? username : "N/A"));
-                    log.info("UI updated: Account verified as {}", username);
+                    log.debug("UI updated: Account verified as {}", username);
                 }
                 else
                 {
                     statusLabel.setText("Not Verified");
                     RuneAlyticsUi.styleNegativeStatus(statusLabel);
                     usernameLabel.setText("Username: N/A");
-                    log.info("UI updated: Account not verified");
+                    log.debug("UI updated: Account not verified");
                 }
             }
         });

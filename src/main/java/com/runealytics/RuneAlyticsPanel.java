@@ -173,7 +173,7 @@ public class RuneAlyticsPanel extends PluginPanel
             return;
         }
 
-        log.info("Applying feature flags: {}", flags);
+        log.debug("Applying feature flags: {}", flags);
 
         for (TabEntry entry : tabRegistry)
         {
@@ -191,7 +191,7 @@ public class RuneAlyticsPanel extends PluginPanel
                 // Re-enable tab: insert it at its logical position
                 insertTabAtLogicalPosition(entry);
                 entry.visible = true;
-                log.info("Tab '{}' enabled (flag '{}')", entry.title, entry.featureKey);
+                log.debug("Tab '{}' enabled (flag '{}')", entry.title, entry.featureKey);
             }
             else if (!shouldBeVisible && entry.visible)
             {
@@ -201,7 +201,7 @@ public class RuneAlyticsPanel extends PluginPanel
                 {
                     tabbedPane.removeTabAt(idx);
                     entry.visible = false;
-                    log.info("Tab '{}' disabled (flag '{}')", entry.title, entry.featureKey);
+                    log.debug("Tab '{}' disabled (flag '{}')", entry.title, entry.featureKey);
                 }
             }
         }

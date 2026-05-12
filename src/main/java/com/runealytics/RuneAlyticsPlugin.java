@@ -170,7 +170,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Override
     protected void startUp()
     {
-        log.info("RuneAlytics starting");
+        log.debug("RuneAlytics starting");
         logConfiguration();
 
         mainPanel = injector.getInstance(RuneAlyticsPanel.class);
@@ -194,13 +194,13 @@ public class RuneAlyticsPlugin extends Plugin
         lootManager.setPanel(lootPanel);
         lootManager.initialize();
 
-        log.info("RuneAlytics started");
+        log.debug("RuneAlytics started");
     }
 
     @Override
     protected void shutDown()
     {
-        log.info("RuneAlytics shutting down");
+        log.debug("RuneAlytics shutting down");
         lootManager.shutdown();
         if (navButton != null) clientToolbar.removeNavigation(navButton);
         state.reset();
@@ -307,7 +307,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (!config.enableLootTracking()) return;
 
         int gid = event.getGroupId();
-        log.info("WidgetLoaded: groupId={}", gid);
+        log.debug("WidgetLoaded: groupId={}", gid);
 
         // ── Standard container reads ──────────────────────────────────────────
         if (gid == WIDGET_BARROWS)
@@ -515,7 +515,7 @@ public class RuneAlyticsPlugin extends Plugin
             clientThread.invokeLater(() -> {
                 inventorySnapshot     = getCurrentInventory();
                 waitingForTemporossLoot = true;
-                log.info("Tempoross: inventory snapshot taken ({} items)",
+                log.debug("Tempoross: inventory snapshot taken ({} items)",
                         inventorySnapshot.size());
             });
             lastChestSource = "Tempoross";
@@ -541,7 +541,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (detected != null && lastChestSource == null)
         {
             lastChestSource = detected;
-            log.info("Chat: chest source set to '{}'", detected);
+            log.debug("Chat: chest source set to '{}'", detected);
         }
     }
 
@@ -569,7 +569,7 @@ public class RuneAlyticsPlugin extends Plugin
     public void onGameStateChanged(GameStateChanged event)
     {
         GameState gs = event.getGameState();
-        log.info("GameState: {}", gs);
+        log.debug("GameState: {}", gs);
 
         if (gs == GameState.LOGIN_SCREEN)
         {
@@ -659,7 +659,7 @@ public class RuneAlyticsPlugin extends Plugin
     {
         if (event.getPlayer() != client.getLocalPlayer()) return;
 
-        log.info("Local player spawned");
+        log.debug("Local player spawned");
 
         if (config.enableAutoVerification() && !state.isVerified())
         {
@@ -670,7 +670,7 @@ public class RuneAlyticsPlugin extends Plugin
         executorService.schedule(() -> {
             if (state.isVerified())
             {
-                log.info("Post-login: loading local loot data");
+                log.debug("Post-login: loading local loot data");
                 lootManager.loadFromStorage();
             }
             else
@@ -823,14 +823,14 @@ public class RuneAlyticsPlugin extends Plugin
     /** Logs the active configuration at startup for easy debug inspection. */
     private void logConfiguration()
     {
-        log.info("=== RUNEALYTICS CONFIG ===");
-        log.info("Loot tracking : {}", config.enableLootTracking());
-        log.info("Track all NPCs: {}", config.trackAllNpcs());
-        log.info("Min loot value: {}", config.minimumLootValue());
-        log.info("Sync to server: {}", config.syncLootToServer());
-        log.info("Auto-verify   : {}", config.enableAutoVerification());
-        log.info("API URL       : {}", config.apiUrl());
-        log.info("=========================");
+        log.debug("=== RUNEALYTICS CONFIG ===");
+        log.debug("Loot tracking : {}", config.enableLootTracking());
+        log.debug("Track all NPCs: {}", config.trackAllNpcs());
+        log.debug("Min loot value: {}", config.minimumLootValue());
+        log.debug("Sync to server: {}", config.syncLootToServer());
+        log.debug("Auto-verify   : {}", config.enableAutoVerification());
+        log.debug("API URL       : {}", config.apiUrl());
+        log.debug("=========================");
     }
 
     /**

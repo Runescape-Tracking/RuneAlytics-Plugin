@@ -69,14 +69,14 @@ public class BankDataManager
             int inventoryCount = bankData.getAsJsonArray("inventory").size();
             int equipmentCount = bankData.getAsJsonArray("equipment").size();
 
-            log.info("Syncing wealth snapshot for {}: bank={} inv={} equip={} items",
+            log.debug("Syncing wealth snapshot for {}: bank={} inv={} equip={} items",
                     username, bankCount, inventoryCount, equipmentCount);
 
             boolean success = apiClient.syncBankData(token, bankData);
 
             if (success)
             {
-                log.info("Wealth snapshot synced successfully for {}", username);
+                log.debug("Wealth snapshot synced successfully for {}", username);
             }
             else
             {

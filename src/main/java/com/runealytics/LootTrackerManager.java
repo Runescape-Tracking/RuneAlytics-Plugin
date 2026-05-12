@@ -299,14 +299,14 @@ public class LootTrackerManager
      */
     public void initialize()
     {
-        log.info("LootTrackerManager: initialising");
+        log.debug("LootTrackerManager: initialising");
         hasLoadedData = false;
     }
 
     /** Called during plugin shutDown(). Persists in-memory data to disk. */
     public void shutdown()
     {
-        log.info("LootTrackerManager: saving on shutdown");
+        log.debug("LootTrackerManager: saving on shutdown");
         storageManager.saveData();
     }
 
@@ -337,7 +337,7 @@ public class LootTrackerManager
             return;
 
         // Always log at INFO so new NPC IDs can be found in logs
-        log.info("NPC loot: '{}' id={} cb={} items={}",
+        log.debug("NPC loot: '{}' id={} cb={} items={}",
                 npc.getName(), npc.getId(), npc.getCombatLevel(), items.size());
 
         if (!state.isVerified())
@@ -401,7 +401,7 @@ public class LootTrackerManager
         lastPlayerLootTime.put(name, now);
 
         int npcId = BOSS_NAME_TO_ID.getOrDefault(name, 0);
-        log.info("Player loot: '{}' (id={}) items={}", name, npcId, items.size());
+        log.debug("Player loot: '{}' (id={}) items={}", name, npcId, items.size());
 
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
         if (drops.isEmpty()) return;
@@ -452,7 +452,7 @@ public class LootTrackerManager
                 return;
             }
 
-            log.info("Container read '{}': {} items from container {}",
+            log.debug("Container read '{}': {} items from container {}",
                     sourceName, items.size(), containerId);
             processPlayerLoot(sourceName, items);
 
@@ -499,7 +499,7 @@ public class LootTrackerManager
                 return;
             }
 
-            log.info("Widget loot '{}' (group {}): {} items", sourceName, groupId, items.size());
+            log.debug("Widget loot '{}' (group {}): {} items", sourceName, groupId, items.size());
             processPlayerLoot(sourceName, items);
 
         }), 300, java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -538,7 +538,7 @@ public class LootTrackerManager
                 return;
             }
 
-            log.info("Clue reward '{}': {} items", sourceName, items.size());
+            log.debug("Clue reward '{}': {} items", sourceName, items.size());
             processPlayerLoot(sourceName, items);
 
         }), 300, java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -571,7 +571,7 @@ public class LootTrackerManager
     public void processInventoryDiff(String sourceName, List<ItemStack> newItems)
     {
         if (newItems == null || newItems.isEmpty()) return;
-        log.info("Inventory diff '{}': {} new items", sourceName, newItems.size());
+        log.debug("Inventory diff '{}': {} new items", sourceName, newItems.size());
         processPlayerLoot(sourceName, newItems);
     }
 
@@ -591,7 +591,7 @@ public class LootTrackerManager
     public void processGroundItemBatch(NPC npc, List<ItemStack> items)
     {
         if (npc == null || items.isEmpty()) return;
-        log.info("Ground items from '{}' (id={}): {} items",
+        log.debug("Ground items from '{}' (id={}): {} items",
                 npc.getName(), npc.getId(), items.size());
         processNpcLoot(npc, items);
     }
@@ -657,7 +657,7 @@ public class LootTrackerManager
 
         notifyListeners(stats, killRecord);
 
-        log.info("Kill recorded: '{}' #{} – {} drops, {} gp",
+        log.debug("Kill recorded: '{}' #{} – {} drops, {} gp",
                 npcName, killNumber, drops.size(),
                 drops.stream().mapToLong(LootStorageData.DropRecord::getTotalValue).sum());
     }
@@ -719,7 +719,7 @@ public class LootTrackerManager
             {
                 storageManager.mergeServerData(serverData);
                 refreshLootDisplay();
-                log.info("Merged {} bosses from server", serverData.size());
+                log.debug("Merged {} bosses from server", serverData.size());
             }
         }
         catch (Exception e)
@@ -750,7 +750,7 @@ public class LootTrackerManager
             if (unsynced.isEmpty()) {  return; }
 
             int total = unsynced.values().stream().mapToInt(List::size).sum();
-            log.info("Uploading {} unsynced kills across {} bosses", total, unsynced.size());
+            log.debug("Uploading {} unsynced kills across {} bosses", total, unsynced.size());
 
             final int BATCH = 50;
             List<LootStorageData.KillRecord> all = new ArrayList<>();
@@ -853,7 +853,7 @@ public class LootTrackerManager
     public void loadFromStorage()
     {
         if (hasLoadedData) { log.debug("Data already loaded this session"); return; }
-        log.info("Loading local loot data");
+        log.debug("Loading local loot data");
         refreshLootDisplay();
         hasLoadedData = true;
     }
@@ -865,7 +865,7 @@ public class LootTrackerManager
      */
     public void loadLocalDataForUser(String username)
     {
-        log.info("Loading local data for '{}'", username);
+        log.debug("Loading local data for '{}'", username);
         storageManager.loadLootData(username);
         clientThread.invokeLater(this::refreshLootDisplay);
     }

@@ -47,7 +47,7 @@ public class LootStorageManager
         File file = getStorageFile(username);
         if (!file.exists())
         {
-            log.info("No existing loot data file for {}", username);
+            log.debug("No existing loot data file for {}", username);
             currentData = new LootStorageData();
             currentData.setUsername(username);
             return currentData;
@@ -61,7 +61,7 @@ public class LootStorageManager
                 currentData = new LootStorageData();
                 currentData.setUsername(username);
             }
-            log.info("Loaded loot data for {} - {} bosses, {} total kills",
+            log.debug("Loaded loot data for {} - {} bosses, {} total kills",
                     username,
                     currentData.getBossKills().size(),
                     currentData.getBossKills().values().stream()
@@ -97,7 +97,7 @@ public class LootStorageManager
     public void setCurrentUsername(String username)
     {
         this.currentUsername = username;
-        log.info("Set current username to: {}", username);
+        log.debug("Set current username to: {}", username);
     }
 
     /**
@@ -115,7 +115,7 @@ public class LootStorageManager
 
         if (!file.exists())
         {
-            log.info("No stored loot data found for {}", currentUsername);
+            log.debug("No stored loot data found for {}", currentUsername);
             return new LootStorageData();
         }
 
@@ -130,7 +130,7 @@ public class LootStorageManager
                 return new LootStorageData();
             }
 
-            log.info("Loaded loot data for {} - {} bosses, {} total kills",
+            log.debug("Loaded loot data for {} - {} bosses, {} total kills",
                     currentUsername,
                     data.getBossKills().size(),
                     data.getBossKills().values().stream()
@@ -157,7 +157,7 @@ public class LootStorageManager
         {
             if (dir.mkdirs())
             {
-                log.info("Created loot storage directory: {}", dir.getAbsolutePath());
+                log.debug("Created loot storage directory: {}", dir.getAbsolutePath());
             }
             else
             {
@@ -203,7 +203,7 @@ public class LootStorageManager
                 gson.toJson(currentData, writer);
             }
 
-            log.info("Saved loot data for {} - {} bosses", username, currentData.getBossKills().size());
+            log.debug("Saved loot data for {} - {} bosses", username, currentData.getBossKills().size());
         }
         catch (Exception e)
         {
@@ -306,7 +306,7 @@ public class LootStorageManager
         if (syncedCount > 0)
         {
             saveData();
-            log.info("Marked {} kills as synced for {}", syncedCount, npcName);
+            log.debug("Marked {} kills as synced for {}", syncedCount, npcName);
         }
     }
 
@@ -389,20 +389,20 @@ public class LootStorageManager
                 // CRITICAL: Client has equal or MORE kills - DO NOT TOUCH CLIENT DATA
                 if (localBoss.getKillCount() >= serverBoss.getKillCount())
                 {
-                    log.info("❌ SKIPPING SERVER DATA: {} - Client KC {} >= Server KC {}",
+                    log.debug("❌ SKIPPING SERVER DATA: {} - Client KC {} >= Server KC {}",
                             npcName, localBoss.getKillCount(), serverBoss.getKillCount());
                     bossesSkipped++;
                     continue; // Skip this boss entirely - client has fresher data
                 }
 
                 // Server has MORE kills - merge the new ones
-                log.info("✅ MERGING: {} - Server KC {} > Client KC {}",
+                log.debug("✅ MERGING: {} - Server KC {} > Client KC {}",
                         npcName, serverBoss.getKillCount(), localBoss.getKillCount());
             }
             else
             {
                 // Boss doesn't exist locally - create new from server
-                log.info("➕ NEW BOSS from server: {} with {} kills", npcName, serverBoss.getKillCount());
+                log.debug("➕ NEW BOSS from server: {} with {} kills", npcName, serverBoss.getKillCount());
                 localBoss = new LootStorageData.BossKillData();
                 localBoss.setNpcName(npcName);
                 localBoss.setNpcId(serverBoss.getNpcId());
@@ -496,7 +496,7 @@ public class LootStorageManager
                 }
                 localBoss.setTotalLootValue(recalculatedValue);
 
-                log.info("Updated {} stats - KC: {} -> {}, Prestige: {} -> {}, Value: {} -> {}",
+                log.debug("Updated {} stats - KC: {} -> {}, Prestige: {} -> {}, Value: {} -> {}",
                         npcName,
                         originalKillCount, localBoss.getKillCount(),
                         originalPrestige, localBoss.getPrestige(),
@@ -508,12 +508,12 @@ public class LootStorageManager
         {
             currentData.setLastSyncTimestamp(System.currentTimeMillis());
             saveData();
-            log.info("Merge complete: Added {} kills, {} drops from server ({} bosses skipped - client data equal/newer)",
+            log.debug("Merge complete: Added {} kills, {} drops from server ({} bosses skipped - client data equal/newer)",
                     killsAdded, dropsAdded, bossesSkipped);
         }
         else
         {
-            log.info("Merge complete: No new data from server ({} bosses skipped - client data equal/newer)",
+            log.debug("Merge complete: No new data from server ({} bosses skipped - client data equal/newer)",
                     bossesSkipped);
         }
     }
@@ -542,7 +542,7 @@ public class LootStorageManager
         currentData.setUsername(username);
         saveData();
 
-        log.info("Cleared all loot data for {}", username);
+        log.debug("Cleared all loot data for {}", username);
     }
 
     /**

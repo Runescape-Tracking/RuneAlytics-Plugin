@@ -106,7 +106,7 @@ public class RunealyticsApiClient
             Type mapType = new TypeToken<Map<String, Boolean>>(){}.getType();
             Map<String, Boolean> flags = gson.fromJson(json.get("flags"), mapType);
 
-            log.info("Feature flags received for {}: {}", username, flags);
+            log.debug("Feature flags received for {}: {}", username, flags);
             return flags != null ? flags : new HashMap<>();
         }
         catch (IOException e)
@@ -133,7 +133,7 @@ public class RunealyticsApiClient
             payload.addProperty("osrs_rsn", osrsRsn);
         }
 
-        log.info("Checking verification for RSN: {} with code: {}", osrsRsn, token);
+        log.debug("Checking verification for RSN: {} with code: {}", osrsRsn, token);
 
         RequestBody body = RequestBody.create(RuneAlyticsHttp.JSON, gson.toJson(payload));
         Request request = new Request.Builder()
@@ -146,7 +146,7 @@ public class RunealyticsApiClient
         {
             String responseBody = response.body() != null ? response.body().string() : "";
 
-            log.info("Verification check response: HTTP {} - Body: {}", response.code(), responseBody);
+            log.debug("Verification check response: HTTP {} - Body: {}", response.code(), responseBody);
 
             if (!response.isSuccessful())
             {
@@ -186,7 +186,7 @@ public class RunealyticsApiClient
                     verified = result.get("is_verified").getAsBoolean();
                 }
 
-                log.info("Token verification result for {}: verified={}", osrsRsn, verified);
+                log.debug("Token verification result for {}: verified={}", osrsRsn, verified);
 
                 return verified;
             }
@@ -226,7 +226,7 @@ public class RunealyticsApiClient
 
             if (success)
             {
-                log.info("Account {} auto-verified successfully", username);
+                log.debug("Account {} auto-verified successfully", username);
             }
 
             return success;
