@@ -1179,6 +1179,8 @@ public class RuneAlyticsPlugin extends Plugin
             state.setVerified(true);
             state.setVerifiedUsername(rsn);
             state.setVerificationCode(token);
+            // Mirror into the config field so it always reflects the active account
+            config.authToken(token);
             log.info("Account '{}' is linked (server confirmed)", rsn);
         }
         else
@@ -1186,6 +1188,7 @@ public class RuneAlyticsPlugin extends Plugin
             state.setVerified(false);
             state.setVerifiedUsername(null);
             state.setVerificationCode(null);
+            config.authToken("");
             log.info("Account '{}' is not linked", rsn);
         }
 

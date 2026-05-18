@@ -258,6 +258,8 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                 {
                     // Store token keyed to this RSN — completely separate from every other account
                     saveAccountToken(rsn, code);
+                    // Mirror into the global config field so it always reflects the active account
+                    config.authToken(code);
 
                     runeAlyticsState.setVerified(true);
                     runeAlyticsState.setVerifiedUsername(rsn);
@@ -273,6 +275,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                 {
                     // Clear any stored token for this account on failure
                     if (!rsn.isEmpty()) clearAccountToken(rsn);
+                    config.authToken("");
 
                     runeAlyticsState.setVerified(false);
                     runeAlyticsState.setVerifiedUsername(null);
