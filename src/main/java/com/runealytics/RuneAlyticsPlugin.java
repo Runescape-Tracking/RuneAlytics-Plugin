@@ -898,6 +898,9 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGGED_IN)
         {
             state.setLoggedIn(true);
+            // Refresh verification panel immediately so the button enables
+            SwingUtilities.invokeLater(() ->
+                    injector.getInstance(RuneAlyticsVerificationPanel.class).refreshLoginState());
 
             String username = client.getLocalPlayer() != null
                     ? client.getLocalPlayer().getName()
@@ -955,8 +958,8 @@ public class RuneAlyticsPlugin extends Plugin
 
         log.info("Local player spawned");
 
-        if (config.enableAutoVerification() && !state.isVerified())
-            checkVerificationStatus();
+        // Always check per-account token and refresh the verification UI on login
+        checkVerificationStatus();
 
         executorService.schedule(() -> {
             // Load local loot data regardless of verification — tracking always works locally.
