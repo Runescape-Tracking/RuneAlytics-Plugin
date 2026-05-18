@@ -1130,32 +1130,69 @@ public class RuneAlyticsPlugin extends Plugin
     private void checkVerificationStatus()
     {
         if (client.getLocalPlayer() == null) return;
-        String rsn = client.getLocalPlayer().getName();
-        if (rsn == null) return;
+        String rawRsn = client.getLocalPlayer().getName();
+        if (rawRsn == null) return;
 
-        // Look up this account's token by RSN — completely isolated from other accounts
+        // RSN is stored/matched in lowercase to align with server normalisation
+        final String rsn = rawRsn.trim().toLowerCase();
+
         RuneAlyticsVerificationPanel vp = injector.getInstance(RuneAlyticsVerificationPanel.class);
         String token = vp.loadAccountToken(rsn);
 
-        final boolean verified = (token != null);
+        if (token == null)
+        {
+            // No local token — definitely not verified
+            applyVerificationState(false, rsn, null, vp);
+            return;
+        }
+
+        // Local token exists — confirm it is still valid on the server before trusting it
+        executorService.execute(() -> {
+            boolean serverConfirmed = false;
+            try
+            {
+                serverConfirmed = apiClient.verifyToken(token, rsn);
+            }
+            catch (Exception e)
+            {
+                // Network failure: keep existing state rather than clearing a valid token
+                log.warn("Could not reach server to validate stored token for '{}': {}", rsn, e.getMessage());
+                serverConfirmed = true; // optimistic — don't log out on connectivity issues
+            }
+
+            final boolean verified = serverConfirmed;
+            if (!verified)
+            {
+                log.info("Stored token for '{}' rejected by server — clearing", rsn);
+                vp.clearAccountToken(rsn);
+            }
+
+            applyVerificationState(verified, rsn, verified ? token : null, vp);
+        });
+    }
+
+    private void applyVerificationState(boolean verified, String rsn, String token,
+                                        RuneAlyticsVerificationPanel vp)
+    {
         if (verified)
         {
             state.setVerified(true);
             state.setVerifiedUsername(rsn);
             state.setVerificationCode(token);
-            log.info("Account '{}' is linked (stored token found)", rsn);
+            log.info("Account '{}' is linked (server confirmed)", rsn);
         }
         else
         {
             state.setVerified(false);
             state.setVerifiedUsername(null);
             state.setVerificationCode(null);
-            log.info("Account '{}' is not linked (no stored token)", rsn);
+            log.info("Account '{}' is not linked", rsn);
         }
 
         SwingUtilities.invokeLater(() -> {
             RuneAlyticsSettingsPanel sp = injector.getInstance(RuneAlyticsSettingsPanel.class);
             sp.updateVerificationStatus(verified, verified ? rsn : null);
+            vp.refreshLoginState();
         });
     }
 

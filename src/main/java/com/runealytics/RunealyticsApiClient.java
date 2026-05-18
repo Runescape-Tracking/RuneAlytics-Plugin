@@ -153,63 +153,34 @@ public class RunealyticsApiClient
     {
         if (token == null || token.isEmpty())
         {
-            log.debug("No token provided for verification");
+            log.debug("No token provided for verification check");
             return false;
         }
 
-        JsonObject payload = new JsonObject();
-        payload.addProperty("verification_code", token);
-        if (osrsRsn != null && !osrsRsn.isEmpty())
-            payload.addProperty("osrs_rsn", osrsRsn);
+        // Normalise to match server expectations: code uppercase, RSN lowercase trimmed
+        String normCode = token.trim().toUpperCase();
+        String normRsn  = (osrsRsn != null) ? osrsRsn.trim().toLowerCase() : "";
 
-        log.info("Checking verification for RSN: {} with code: {}", osrsRsn, token);
+        JsonObject payload = new JsonObject();
+        payload.addProperty("verification_code", normCode);
+        if (!normRsn.isEmpty())
+            payload.addProperty("osrs_rsn", normRsn);
+
+        log.info("[VerifyCheck] POST /verify-runelite rsn={}", normRsn);
 
         RequestBody body    = RequestBody.create(JSON, gson.toJson(payload));
         Request     request = new Request.Builder()
-                .url(config.apiUrl() + "/check-verification")
+                .url(config.apiUrl() + "/verify-runelite")
                 .post(body)
                 .addHeader("Content-Type", "application/json")
+                .addHeader("Accept",       "application/json")
                 .build();
 
         try (Response response = httpClient.newCall(request).execute())
         {
             String responseBody = response.body() != null ? response.body().string() : "";
-            log.info("Verification check response: HTTP {} - Body: {}", response.code(), responseBody);
-
-            if (!response.isSuccessful())
-            {
-                log.warn("Verification check failed: HTTP {} - {}", response.code(), responseBody);
-                return false;
-            }
-
-            if (responseBody.isEmpty())
-            {
-                log.warn("Empty response from verification check");
-                return false;
-            }
-
-            try
-            {
-                JsonObject result = gson.fromJson(responseBody, JsonObject.class);
-                if (result == null)
-                {
-                    log.warn("Could not parse verification response");
-                    return false;
-                }
-
-                boolean verified = false;
-                if      (result.has("verified"))    verified = result.get("verified").getAsBoolean();
-                else if (result.has("success"))     verified = result.get("success").getAsBoolean();
-                else if (result.has("is_verified")) verified = result.get("is_verified").getAsBoolean();
-
-                log.info("Token verification result for {}: verified={}", osrsRsn, verified);
-                return verified;
-            }
-            catch (Exception e)
-            {
-                log.error("Error parsing verification response: {}", responseBody, e);
-                return false;
-            }
+            log.info("[VerifyCheck] HTTP {} body={}", response.code(), responseBody);
+            return response.isSuccessful();
         }
     }
 
