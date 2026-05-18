@@ -67,6 +67,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private JButton           sortButton;
     private JButton           clearButton;
     private JButton           syncButton;
+    private JLabel            syncStatusLabel;
+    private javax.swing.Timer syncResetTimer;
     private JButton           filterAllButton;
     private JButton           filterCombatButton;
     private JComboBox<String> skillsCombo;
@@ -319,6 +321,17 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         btnRow.add(leftBtns,   BorderLayout.WEST);
         btnRow.add(syncButton, BorderLayout.EAST);
         header.add(btnRow);
+
+        // ── Sync status line (hidden until a sync completes / fails) ─────────
+        syncStatusLabel = new JLabel(" ");
+        syncStatusLabel.setFont(new Font("Calibri", Font.BOLD, 10));
+        syncStatusLabel.setForeground(new Color(0, 0, 0, 0)); // fully transparent initially
+        syncStatusLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+        syncStatusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        syncStatusLabel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 14));
+        syncStatusLabel.setBorder(new EmptyBorder(1, 0, 0, 0));
+        header.add(syncStatusLabel);
+
         return header;
     }
 
@@ -498,9 +511,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         {
             long mins = remaining / 60_000;
             long secs = (remaining % 60_000) / 1_000;
-            JOptionPane.showMessageDialog(this,
-                    String.format("Wait %d:%02d before syncing again.", mins, secs),
-                    "Sync Cooldown", JOptionPane.INFORMATION_MESSAGE);
+            if (syncResetTimer != null) syncResetTimer.stop();
+            syncStatusLabel.setText(String.format("⏳ Wait %d:%02d", mins, secs));
+            syncStatusLabel.setForeground(new Color(200, 160, 60));
+            syncResetTimer = new javax.swing.Timer(2_500, e -> resetSyncButton());
+            syncResetTimer.setRepeats(false);
+            syncResetTimer.start();
             return;
         }
 
@@ -514,23 +530,63 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
         lastSyncTime = System.currentTimeMillis();
         syncButton.setEnabled(false);
-        syncButton.setText("…");
+        syncButton.setText("⟳ Sync…");
+        syncButton.setBackground(new Color(30, 50, 80));
+        syncButton.setBorder(BorderFactory.createLineBorder(new Color(80, 120, 180), 1));
+        syncStatusLabel.setText("Syncing…");
+        syncStatusLabel.setForeground(new Color(100, 160, 220));
         lootManager.performManualSync(username);
     }
 
     public void showSyncCompleted()
     {
-        syncButton.setEnabled(true);
-        syncButton.setText("Sync");
-        invalidateFingerprint();
-        JOptionPane.showMessageDialog(this, "Loot data synced successfully!", "Sync Complete", JOptionPane.INFORMATION_MESSAGE);
+        SwingUtilities.invokeLater(() -> {
+            invalidateFingerprint();
+            flashSyncButton(true);
+        });
     }
 
     public void showSyncFailed(String error)
     {
+        SwingUtilities.invokeLater(() -> flashSyncButton(false));
+    }
+
+    /**
+     * Animates the sync button and status label to reflect the outcome.
+     * Reverts automatically after 2.5 seconds — no modal dialog.
+     *
+     * @param success {@code true} for green "✓ Synced", {@code false} for red "✗ Failed"
+     */
+    private void flashSyncButton(boolean success)
+    {
+        if (syncResetTimer != null) syncResetTimer.stop();
+
+        Color  btnColor   = success ? new Color(30,  90, 40)  : new Color(100, 30, 30);
+        Color  borderCol  = success ? new Color(60, 160, 70)  : new Color(180, 50, 50);
+        Color  labelColor = success ? new Color(80, 200, 100) : new Color(220, 80, 80);
+        String btnText    = success ? "✓ Synced"              : "✗ Failed";
+        String statusText = success ? "✓ Synced to server"    : "✗ Sync failed";
+
         syncButton.setEnabled(true);
+        syncButton.setText(btnText);
+        syncButton.setBackground(btnColor);
+        syncButton.setBorder(BorderFactory.createLineBorder(borderCol, 1));
+
+        syncStatusLabel.setText(statusText);
+        syncStatusLabel.setForeground(labelColor);
+
+        syncResetTimer = new javax.swing.Timer(2_500, e -> resetSyncButton());
+        syncResetTimer.setRepeats(false);
+        syncResetTimer.start();
+    }
+
+    private void resetSyncButton()
+    {
         syncButton.setText("Sync");
-        JOptionPane.showMessageDialog(this, "Sync failed: " + error, "Sync Failed", JOptionPane.ERROR_MESSAGE);
+        syncButton.setBackground(new Color(40, 60, 90));
+        syncButton.setBorder(BorderFactory.createLineBorder(new Color(60, 90, 130), 1));
+        syncStatusLabel.setText(" ");
+        syncStatusLabel.setForeground(new Color(0, 0, 0, 0));
     }
 
     @Override
