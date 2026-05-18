@@ -133,6 +133,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         refreshDebounce.setRepeats(false);
 
         lootManager.addListener(this);
+        lootManager.setPanel(this);
         buildUi();
         SwingUtilities.invokeLater(this::refreshDisplay);
     }
