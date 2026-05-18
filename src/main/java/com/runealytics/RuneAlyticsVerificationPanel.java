@@ -8,6 +8,8 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -27,7 +29,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
     private final RunealyticsConfig        config;
     private final ScheduledExecutorService executorService;
     private final ConfigManager            configManager;
-
+    private static final Logger log = LoggerFactory.getLogger(RunealyticsApiClient.class);
     private final JTextField codeField       = RuneAlyticsUi.inputField();
     private final JButton    verifyButton    = RuneAlyticsUi.primaryButton("Verify Account");
     private final JPanel     formRow         = RuneAlyticsUi.formRow(codeField, verifyButton);

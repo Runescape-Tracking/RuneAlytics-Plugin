@@ -34,8 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static com.runealytics.RuneAlyticsPanel.FEATURE_LOOT;
-import static com.runealytics.RuneAlyticsPanel.FEATURE_MATCHES;
+import static com.runealytics.RuneAlyticsPanel.*;
 
 @Slf4j
 @PluginDescriptor(
