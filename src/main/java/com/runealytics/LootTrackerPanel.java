@@ -540,15 +540,23 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     public void showSyncCompleted()
     {
-        SwingUtilities.invokeLater(() -> {
+        if (SwingUtilities.isEventDispatchThread())
+        {
             invalidateFingerprint();
             flashSyncButton(true);
-        });
+        }
+        else
+        {
+            SwingUtilities.invokeLater(() -> { invalidateFingerprint(); flashSyncButton(true); });
+        }
     }
 
     public void showSyncFailed(String error)
     {
-        SwingUtilities.invokeLater(() -> flashSyncButton(false));
+        if (SwingUtilities.isEventDispatchThread())
+            flashSyncButton(false);
+        else
+            SwingUtilities.invokeLater(() -> flashSyncButton(false));
     }
 
     /**

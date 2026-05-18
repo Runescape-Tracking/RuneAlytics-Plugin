@@ -1152,8 +1152,10 @@ public class LootTrackerManager
                 allowSync = true;
                 downloadKillHistoryFromServer();
                 uploadUnsyncedKills();
-                clientThread.invokeLater(this::refreshLootDisplay);
-                SwingUtilities.invokeLater(() -> { if (panel != null) panel.showSyncCompleted(); });
+                SwingUtilities.invokeLater(() -> {
+                    if (panel != null) panel.showSyncCompleted();
+                    else log.warn("performManualSync: panel is null, cannot show sync completed");
+                });
             }
             catch (Exception e)
             {
