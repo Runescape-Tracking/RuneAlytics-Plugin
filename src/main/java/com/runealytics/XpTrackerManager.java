@@ -6,7 +6,6 @@ import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -169,12 +168,14 @@ public class XpTrackerManager
         // Drain: remove each skill from the live map so concurrent writes during
         // drain go into a fresh bucket (they will trigger a new window via
         // compareAndSet above because windowOpen is already false).
-        Map<Skill, Integer> toSend = new EnumMap<>(Skill.class);
+        // Convert Skill enum keys to lowercase name strings so RunealyticsApiClient
+        // has no dependency on the RuneLite API Skill type.
+        Map<String, Integer> toSend = new HashMap<>();
         for (Skill skill : Skill.values())
         {
             Integer gained = xpBuffer.remove(skill);
             if (gained != null && gained > 0)
-                toSend.put(skill, gained);
+                toSend.put(skill.getName().toLowerCase(), gained);
         }
 
         if (toSend.isEmpty()) return;
@@ -182,7 +183,7 @@ public class XpTrackerManager
         log.info("[XP] Sending batch: {} skill(s) — {}",
                 toSend.size(),
                 toSend.entrySet().stream()
-                        .map(e -> e.getKey().getName() + "+" + e.getValue())
+                        .map(e -> e.getKey() + "+" + e.getValue())
                         .reduce((a, b) -> a + ", " + b)
                         .orElse(""));
 
