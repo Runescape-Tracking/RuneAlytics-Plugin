@@ -421,12 +421,6 @@ public class LootTrackerManager
         log.info("NPC loot: '{}' id={} cb={} items={}",
                 npc.getName(), npc.getId(), npc.getCombatLevel(), items.size());
 
-        if (!state.isVerified())
-        {
-            log.debug("processNpcLoot: not verified – skipping");
-            return;
-        }
-
         String name = normalizeBossName(npc.getName());
         boolean isBoss = isBoss(npc.getId(), name);
 
@@ -460,9 +454,9 @@ public class LootTrackerManager
      */
     public void processPlayerLoot(String source, List<ItemStack> items)
     {
-        if (items == null || items.isEmpty() || !state.isVerified())
+        if (items == null || items.isEmpty())
         {
-            log.debug("processPlayerLoot: empty/unverified – source='{}'", source);
+            log.debug("processPlayerLoot: empty items – source='{}'", source);
             return;
         }
 
@@ -511,12 +505,6 @@ public class LootTrackerManager
     {
         if (!config.enableLootTracking() || !config.enablePickpocketTracking())
             return;
-
-        if (!state.isVerified())
-        {
-            log.debug("processPickpocketLoot: not verified – skipping");
-            return;
-        }
 
         if (items == null || items.isEmpty()) return;
 
@@ -568,7 +556,7 @@ public class LootTrackerManager
 
     public void processSkillLoot(String skill, List<ItemStack> items)
     {
-        if (!config.enableLootTracking() || !state.isVerified()) return;
+        if (!config.enableLootTracking()) return;
         if (items == null || items.isEmpty()) return;
 
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
@@ -805,9 +793,9 @@ public class LootTrackerManager
      */
     public void processPlayerLootWithGameKC(String source, List<ItemStack> items, int gameKC)
     {
-        if (items == null || items.isEmpty() || !state.isVerified())
+        if (items == null || items.isEmpty())
         {
-            log.debug("processPlayerLootWithGameKC: empty/unverified – source='{}'", source);
+            log.debug("processPlayerLootWithGameKC: empty items – source='{}'", source);
             return;
         }
 

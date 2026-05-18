@@ -878,15 +878,9 @@ public class RuneAlyticsPlugin extends Plugin
             checkVerificationStatus();
 
         executorService.schedule(() -> {
-            if (state.isVerified())
-            {
-                log.info("Post-login: loading local loot data");
-                lootManager.loadFromStorage();
-            }
-            else
-            {
-                log.warn("Not verified – skipping data load");
-            }
+            // Load local loot data regardless of verification — tracking always works locally.
+            log.info("Post-login: loading local loot data (verified={})", state.isVerified());
+            lootManager.loadFromStorage();
         }, 2, TimeUnit.SECONDS);
 
         executorService.schedule(
@@ -912,7 +906,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onStatChanged(StatChanged event)
     {
-        if (!config.enableXpTracking() || !state.isVerified()) return;
+        if (!config.enableXpTracking()) return;
 
         Skill skill = event.getSkill();
         if (skill == Skill.OVERALL) return;

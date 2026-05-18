@@ -264,14 +264,15 @@ public class RuneAlyticsPanel extends PluginPanel
 
     /**
      * Called when the player is logged in but not yet verified (or becomes
-     * unverified).  Shows only the Settings / Verification tab.
+     * unverified).  Loot Tracker is always shown for local tracking; only the
+     * Match Finder requires verification and remains hidden.
      */
     public void showVerificationOnly()
     {
         Map<String, Boolean> flags = new HashMap<>();
         flags.put(FEATURE_VERIFICATION, true);
-        flags.put(FEATURE_LOOT,         false);
-        flags.put(FEATURE_MATCHES,      false);
+        flags.put(FEATURE_LOOT,         true);   // local tracking always available
+        flags.put(FEATURE_MATCHES,      false);  // match finder requires verification
         applyFeatureFlags(flags);
     }
 
