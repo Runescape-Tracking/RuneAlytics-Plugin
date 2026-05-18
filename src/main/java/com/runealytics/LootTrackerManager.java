@@ -580,6 +580,55 @@ public class LootTrackerManager
     }
 
     /**
+     * Appends additional drops to the most recent kill record for {@code npcName}.
+     *
+     * <p>Intended for Ring of Wealth coins that bypass {@code ItemSpawned} and
+     * would otherwise be lost.  Both the in-memory {@link BossKillStats} and the
+     * persistent {@link LootStorageManager} are updated atomically.</p>
+     *
+     * @param npcName normalised boss name (already through {@link #normalizeBossName})
+     * @param items   items to append — typically just coins from the RoW pickup
+     */
+    public void appendDropsToLastKill(String npcName, List<ItemStack> items)
+    {
+        if (items == null || items.isEmpty()) return;
+
+        BossKillStats stats = bossKillStats.get(npcName);
+        if (stats == null || stats.getKillHistory().isEmpty())
+        {
+            log.debug("appendDropsToLastKill: no existing kill for '{}' – skipping", npcName);
+            return;
+        }
+
+        List<LootStorageData.DropRecord> newDrops = convertToDropRecords(items);
+        if (newDrops.isEmpty()) return;
+
+        // Update in-memory kill record
+        LootStorageData.KillRecord lastKill =
+                stats.getKillHistory().get(stats.getKillHistory().size() - 1);
+        lastKill.getDrops().addAll(newDrops);
+        lastKill.setSyncedToServer(false);
+
+        // Update in-memory aggregated stats
+        long addedValue = 0;
+        for (LootStorageData.DropRecord dr : newDrops)
+        {
+            addedValue += dr.getTotalValue();
+            if (dr.getTotalValue() > stats.getHighestDrop())
+                stats.setHighestDrop(dr.getTotalValue());
+        }
+        stats.setTotalLootValue(stats.getTotalLootValue() + addedValue);
+
+        // Persist and re-sync
+        storageManager.appendDropsToLastKill(npcName, newDrops);
+
+        notifyListeners(stats, lastKill);
+
+        log.info("appendDropsToLastKill: {} drop(s) added to '{}' last kill (+{} gp)",
+                newDrops.size(), npcName, addedValue);
+    }
+
+    /**
      * Maps a raw NPC / stall name (HTML-stripped, as received from the menu target)
      * to a canonical display name used as the storage key.
      *

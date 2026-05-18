@@ -247,7 +247,7 @@ public class RuneAlyticsPanel extends PluginPanel
     public void showLoggedOutVerified()
     {
         Map<String, Boolean> flags = new HashMap<>();
-        flags.put(FEATURE_VERIFICATION, false);
+        flags.put(FEATURE_VERIFICATION, true);   // always accessible
         flags.put(FEATURE_LOOT,         true);
         flags.put(FEATURE_MATCHES,      false);
         applyFeatureFlags(flags);
@@ -255,7 +255,8 @@ public class RuneAlyticsPanel extends PluginPanel
 
     /**
      * Called when an <b>unverified</b> player reaches the login screen or logs out.
-     * Shows only the Settings / Verification tab so they can link their account.
+     * Shows the Loot Tracker and Verification tabs so they can link their account
+     * while still viewing local data.
      */
     public void showLoggedOutState()
     {
@@ -279,9 +280,8 @@ public class RuneAlyticsPanel extends PluginPanel
     /**
      * Called after feature flags are fetched for a verified account.
      *
-     * <p>Hides the Settings / Verification tab and shows Loot Tracker / Match
-     * Finder per the server response.  Re-enabling a tab fires its registered
-     * {@link #onTabShownCallbacks on-shown callback} so the panel reloads data.
+     * <p>Verification tab stays visible so the player can always access settings.
+     * Loot Tracker / Match Finder visibility is server-controlled.</p>
      *
      * @param lootEnabled  whether the Loot Tracker tab should be visible
      * @param matchEnabled whether the Match Finder tab should be visible
@@ -289,9 +289,9 @@ public class RuneAlyticsPanel extends PluginPanel
     public void showMainFeatures(boolean lootEnabled, boolean matchEnabled)
     {
         Map<String, Boolean> flags = new HashMap<>();
-        flags.put(FEATURE_VERIFICATION, false);
+        flags.put(FEATURE_VERIFICATION, true);   // always accessible
         flags.put(FEATURE_LOOT,         lootEnabled);
-        flags.put(FEATURE_MATCHES, matchEnabled);
+        flags.put(FEATURE_MATCHES,      matchEnabled);
         applyFeatureFlags(flags);
     }
 

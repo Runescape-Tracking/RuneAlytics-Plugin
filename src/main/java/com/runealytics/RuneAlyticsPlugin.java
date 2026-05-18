@@ -165,6 +165,18 @@ public class RuneAlyticsPlugin extends Plugin
     private NPC             lastKilledBoss           = null;
     private Instant         lastKillTime             = null;
 
+    // ── Ring of Wealth coin auto-pickup detection ─────────────────────────────
+    /** Item ID for coins — used to identify RoW auto-collected drops. */
+    private static final int ITEM_ID_COINS = 995;
+    /** How long (ms) we keep the RoW inventory snapshot after an NPC kill. */
+    private static final long ROW_WINDOW_MS = 4_000;
+    /** Inventory snapshot taken at NPC kill to diff against after RoW message. */
+    private List<ItemStack> rowInventorySnapshot = null;
+    /** The boss NPC whose kill opened the current RoW snapshot window. */
+    private NPC             rowSnapshotBoss      = null;
+    /** Absolute expiry time (ms) for the RoW snapshot window. */
+    private long            rowSnapshotExpiry    = 0L;
+
     private final List<ItemStack>  groundItemBuffer         = new ArrayList<>();
     private final AtomicBoolean    groundItemFlushScheduled = new AtomicBoolean(false);
 
@@ -280,6 +292,11 @@ public class RuneAlyticsPlugin extends Plugin
         groundItemBuffer.clear();
         groundItemFlushScheduled.set(false);
 
+        // Clear Ring of Wealth snapshot
+        rowInventorySnapshot = null;
+        rowSnapshotBoss      = null;
+        rowSnapshotExpiry    = 0L;
+
         // Clear pickpocket state
         pendingPickpocketNpc        = null;
         pickpocketInventorySnapshot = null;
@@ -306,6 +323,14 @@ public class RuneAlyticsPlugin extends Plugin
 
         lastKilledBoss = npc;
         lastKillTime   = Instant.now();
+
+        // Snapshot inventory immediately so we can diff it if Ring of Wealth
+        // auto-collects coins (those never fire ItemSpawned).
+        clientThread.invokeLater(() -> {
+            rowInventorySnapshot = getCurrentInventory();
+            rowSnapshotBoss      = npc;
+            rowSnapshotExpiry    = System.currentTimeMillis() + ROW_WINDOW_MS;
+        });
 
         Collection<net.runelite.client.game.ItemStack> rlItems = event.getItems();
         if (rlItems == null || rlItems.isEmpty()) return;
@@ -722,6 +747,40 @@ public class RuneAlyticsPlugin extends Plugin
 
             log.info("The Whisperer: KC detected (game KC={}) – ground-item collection window opened",
                     whispererParsedKC);
+            return;
+        }
+
+        // ── Ring of Wealth auto-pickup ────────────────────────────────────────
+        // Game message: "Your ring of wealth has automatically picked up the coins."
+        // Coins bypass ItemSpawned entirely, so we diff inventory vs the snapshot
+        // taken at the NPC kill and append the gain to the existing kill record.
+        if (lower.contains("ring of wealth") && lower.contains("automatically picked up"))
+        {
+            if (rowInventorySnapshot != null && rowSnapshotBoss != null
+                    && System.currentTimeMillis() < rowSnapshotExpiry)
+            {
+                final NPC           boss = rowSnapshotBoss;
+                final List<ItemStack> snap = rowInventorySnapshot;
+                rowInventorySnapshot = null;
+                rowSnapshotBoss      = null;
+
+                clientThread.invokeLater(() -> {
+                    List<ItemStack> current = getCurrentInventory();
+                    List<ItemStack> gained  = diffInventory(snap, current);
+                    List<ItemStack> coins   = new ArrayList<>();
+                    for (ItemStack is : gained)
+                    {
+                        if (is.getId() == ITEM_ID_COINS) coins.add(is);
+                    }
+                    if (!coins.isEmpty())
+                    {
+                        String bossName = lootManager.normalizeBossName(boss.getName());
+                        lootManager.appendDropsToLastKill(bossName, coins);
+                        log.info("Ring of Wealth: {} coins appended to '{}'",
+                                coins.get(0).getQuantity(), bossName);
+                    }
+                });
+            }
             return;
         }
 

@@ -297,6 +297,54 @@ public class LootStorageManager
     }
 
     /**
+     * Appends extra drops to the most recent kill record for {@code npcName}.
+     *
+     * <p>Used exclusively for Ring of Wealth auto-collected coins that bypass
+     * {@code ItemSpawned} and would otherwise be silently lost.</p>
+     *
+     * @param npcName normalised boss name matching the existing storage key
+     * @param drops   additional drops to merge into the last kill
+     */
+    public void appendDropsToLastKill(String npcName, List<LootStorageData.DropRecord> drops)
+    {
+        if (currentData == null || drops == null || drops.isEmpty()) return;
+
+        LootStorageData.BossKillData bossData = currentData.getBossKills().get(npcName);
+        if (bossData == null || bossData.getKills().isEmpty()) return;
+
+        LootStorageData.KillRecord lastKill =
+                bossData.getKills().get(bossData.getKills().size() - 1);
+
+        lastKill.getDrops().addAll(drops);
+        lastKill.setSyncedToServer(false);
+
+        // Update aggregated stats for the new drops
+        for (LootStorageData.DropRecord drop : drops)
+        {
+            LootStorageData.AggregatedDrop agg = bossData.getAggregatedDrops()
+                    .computeIfAbsent(drop.getItemId(), k -> {
+                        LootStorageData.AggregatedDrop a = new LootStorageData.AggregatedDrop();
+                        a.setItemId(drop.getItemId());
+                        a.setItemName(drop.getItemName());
+                        a.setTotalQuantity(0);
+                        a.setDropCount(0);
+                        a.setTotalValue(0);
+                        a.setGePrice(drop.getGePrice());
+                        a.setHighAlch(drop.getHighAlch());
+                        return a;
+                    });
+
+            agg.setTotalQuantity(agg.getTotalQuantity() + drop.getQuantity());
+            agg.setDropCount(agg.getDropCount() + 1);
+            agg.setTotalValue(agg.getTotalValue() + drop.getTotalValue());
+            bossData.setTotalLootValue(bossData.getTotalLootValue() + drop.getTotalValue());
+        }
+
+        scheduleSave();
+        log.debug("Appended {} RoW drop(s) to last '{}' kill", drops.size(), npcName);
+    }
+
+    /**
      * Mark kills as synced to server
      */
     public void markKillsSynced(String npcName, long fromTimestamp, long toTimestamp)
