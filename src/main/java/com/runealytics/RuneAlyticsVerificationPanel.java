@@ -3,6 +3,7 @@ package com.runealytics;
 import com.google.gson.JsonObject;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.client.config.ConfigManager;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -17,37 +18,42 @@ import java.util.concurrent.ScheduledExecutorService;
 @Singleton
 public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 {
-    private static final String VERIFY_PATH = "/verify-runelite";
+    private static final String VERIFY_PATH    = "/verify-runelite";
+    private static final String CONFIG_GROUP   = "runealytics";
+    private static final String TOKEN_KEY      = "authToken";
 
-    private final OkHttpClient httpClient;
-    private final Client client;
-    private final RuneAlyticsState runeAlyticsState;
-    private final RunealyticsConfig config;
+    private final OkHttpClient           httpClient;
+    private final Client                 client;
+    private final RuneAlyticsState       runeAlyticsState;
+    private final RunealyticsConfig      config;
     private final ScheduledExecutorService executorService;
+    private final ConfigManager          configManager;
 
-    private final JTextField codeField = RuneAlyticsUi.inputField();
-    private final JButton verifyButton = RuneAlyticsUi.primaryButton("Verify Account");
-    private final JPanel formRow = RuneAlyticsUi.formRow(codeField, verifyButton);
-    private final JLabel statusLabel = RuneAlyticsUi.statusLabel();
-    private final JTextArea apiResponseArea = RuneAlyticsUi.apiResponseArea();
+    private final JTextField codeField      = RuneAlyticsUi.inputField();
+    private final JButton    verifyButton   = RuneAlyticsUi.primaryButton("Verify Account");
+    private final JPanel     formRow        = RuneAlyticsUi.formRow(codeField, verifyButton);
+    private final JLabel     statusLabel    = RuneAlyticsUi.statusLabel();
+    private final JTextArea  apiResponseArea = RuneAlyticsUi.apiResponseArea();
 
     private boolean verifying = false;
     private Runnable verificationStatusListener;
 
     @Inject
     public RuneAlyticsVerificationPanel(
-            OkHttpClient httpClient,
-            Client client,
-            RuneAlyticsState runeAlyticsState,
-            RunealyticsConfig config,
-            ScheduledExecutorService executorService
+            OkHttpClient           httpClient,
+            Client                 client,
+            RuneAlyticsState       runeAlyticsState,
+            RunealyticsConfig      config,
+            ScheduledExecutorService executorService,
+            ConfigManager          configManager
     )
     {
-        this.httpClient = httpClient;
-        this.client = client;
+        this.httpClient      = httpClient;
+        this.client          = client;
         this.runeAlyticsState = runeAlyticsState;
-        this.config = config;
+        this.config          = config;
         this.executorService = executorService;
+        this.configManager   = configManager;
 
         buildUi();
         wireEvents();
@@ -102,9 +108,6 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
     private void updateUi()
     {
         final boolean loggedIn = runeAlyticsState.isLoggedIn();
-        final boolean isVerified = runeAlyticsState.isVerified();
-
-        formRow.setVisible(!isVerified);
 
         if (!loggedIn)
         {
@@ -120,15 +123,18 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
             return;
         }
 
-        if (isVerified)
-        {
-            setControlsEnabled(false);
-            statusLabel.setText("Your account has been successfully verified!");
-            return;
-        }
-
+        // Button is always enabled when logged in — users can re-link at any time
         setControlsEnabled(true);
-        statusLabel.setText("Enter the link code from RuneAlytics.com.");
+
+        if (runeAlyticsState.isVerified())
+        {
+            String rsn = runeAlyticsState.getVerifiedUsername();
+            statusLabel.setText("Linked" + (rsn != null ? " as " + rsn : "") + ". Enter a new code to re-link.");
+        }
+        else
+        {
+            statusLabel.setText("Enter the link code from RuneAlytics.com.");
+        }
     }
 
     private void setControlsEnabled(boolean enabled)
@@ -140,17 +146,10 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 
     private void verifyAccount()
     {
-        if (runeAlyticsState.isVerified())
-        {
-            statusLabel.setText("Your account is already verified.");
-            return;
-        }
-
         if (!runeAlyticsState.isLoggedIn()
                 || client.getGameState() != GameState.LOGGED_IN
                 || client.getLocalPlayer() == null)
         {
-            runeAlyticsState.setVerified(false);
             verifying = false;
             updateUi();
             return;
@@ -167,13 +166,15 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
         verifying = true;
         updateUi();
 
+        final String rsn = client.getLocalPlayer().getName() != null
+                ? client.getLocalPlayer().getName()
+                : "";
+
         executorService.submit(() -> {
             boolean success = false;
-            String serverMessage = null;
-            String rawResponse = null;
-            String errorMessage = null;
-
-            String rsn = client.getLocalPlayer() != null ? client.getLocalPlayer().getName() : "";
+            String  serverMessage = null;
+            String  rawResponse   = null;
+            String  errorMessage  = null;
 
             try
             {
@@ -181,20 +182,20 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                 payload.addProperty("verification_code", code);
                 payload.addProperty("osrs_rsn", rsn);
 
-                RequestBody body = RequestBody.create(RuneAlyticsHttp.JSON, payload.toString());
-                Request request = new Request.Builder()
+                RequestBody body    = RequestBody.create(RuneAlyticsHttp.JSON, payload.toString());
+                Request     request = new Request.Builder()
                         .url(config.apiUrl() + VERIFY_PATH)
                         .post(body)
                         .build();
 
                 try (Response response = httpClient.newCall(request).execute())
                 {
-                    rawResponse = response.body() != null ? response.body().string() : "";
+                    rawResponse   = response.body() != null ? response.body().string() : "";
                     serverMessage = RuneAlyticsJson.extractMessage(rawResponse);
 
-                    if (response.isSuccessful())
-                        success = true;
-                    else
+                    // Only the HTTP status matters — success = 2xx, failure = anything else
+                    success = response.isSuccessful();
+                    if (!success)
                         errorMessage = (serverMessage != null && !serverMessage.isEmpty())
                                 ? serverMessage
                                 : "HTTP " + response.code();
@@ -205,27 +206,24 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                 errorMessage = ex.getMessage();
             }
 
-            final boolean finalSuccess = success;
-            final String finalServerMessage = serverMessage;
-            final String finalErrorMessage = errorMessage;
-            final String finalRawResponse = rawResponse != null ? rawResponse : "";
-            final String finalRsn = rsn;
+            final boolean finalSuccess      = success;
+            final String  finalServerMessage = serverMessage;
+            final String  finalErrorMessage  = errorMessage;
+            final String  finalRawResponse   = rawResponse != null ? rawResponse : "";
 
             SwingUtilities.invokeLater(() -> {
                 verifying = false;
 
                 if (finalSuccess)
                 {
+                    // Store the auth code the user entered, keyed to this RS account
+                    configManager.setRSProfileConfiguration(CONFIG_GROUP, TOKEN_KEY, code);
+
                     runeAlyticsState.setVerified(true);
-                    runeAlyticsState.setVerifiedUsername(finalRsn);
+                    runeAlyticsState.setVerifiedUsername(rsn);
+                    runeAlyticsState.setVerificationCode(code);
 
-                    String verificationCode = RuneAlyticsJson.extractStringField(finalRawResponse, "verification_code");
-                    runeAlyticsState.setVerificationCode(verificationCode);
-
-                    if (verificationCode != null && !verificationCode.isEmpty())
-                        config.authToken(verificationCode);
-
-                    String displayMessage = finalServerMessage != null && !finalServerMessage.isEmpty()
+                    String displayMessage = (finalServerMessage != null && !finalServerMessage.isEmpty())
                             ? finalServerMessage
                             : "Verification completed successfully.";
 
@@ -235,10 +233,12 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                 }
                 else
                 {
+                    // Clear per-account token on failure
+                    configManager.unsetRSProfileConfiguration(CONFIG_GROUP, TOKEN_KEY);
+
                     runeAlyticsState.setVerified(false);
                     runeAlyticsState.setVerifiedUsername(null);
                     runeAlyticsState.setVerificationCode(null);
-                    config.authToken("");
 
                     String displayMessage;
                     if (finalServerMessage != null && !finalServerMessage.isEmpty())
@@ -250,7 +250,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
 
                     statusLabel.setText(displayMessage);
                     apiResponseArea.setText(finalRawResponse.isEmpty() ? displayMessage
-                            : "Error message: " + displayMessage + "\n\nRaw response:\n" + finalRawResponse);
+                            : "Error: " + displayMessage + "\n\nRaw response:\n" + finalRawResponse);
                 }
 
                 notifyVerificationStatusChange();
@@ -265,13 +265,9 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
             verificationStatusListener.run();
     }
 
-    /**
-     * Implement abstract method from RuneAlyticsPanelBase
-     */
     @Override
     public void onDataRefresh()
     {
-        // Refresh the panel when underlying data changes
         SwingUtilities.invokeLater(this::updateUi);
     }
 }

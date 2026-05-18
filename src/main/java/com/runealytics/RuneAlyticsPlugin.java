@@ -1127,26 +1127,44 @@ public class RuneAlyticsPlugin extends Plugin
     private void checkVerificationStatus()
     {
         if (client.getLocalPlayer() == null) return;
-        String rsn   = client.getLocalPlayer().getName();
-        String token = config.authToken();
-        if (rsn == null || token == null || token.isEmpty()) return;
+        String rsn = client.getLocalPlayer().getName();
+        if (rsn == null) return;
 
+        // Read this account's token from the per-RS-profile config (not the global authToken)
+        String token = configManager.getRSProfileConfiguration("runealytics", "authToken");
+        if (token == null || token.isEmpty())
+        {
+            // No token stored for this account — not linked yet
+            state.setVerified(false);
+            state.setVerifiedUsername(null);
+            state.setVerificationCode(null);
+            SwingUtilities.invokeLater(() -> {
+                RuneAlyticsSettingsPanel sp = injector.getInstance(RuneAlyticsSettingsPanel.class);
+                sp.updateVerificationStatus(false, null);
+            });
+            return;
+        }
+
+        final String finalToken = token;
         executorService.submit(() -> {
             try
             {
                 RunealyticsApiClient api = injector.getInstance(RunealyticsApiClient.class);
-                boolean verified = api.verifyToken(token, rsn);
+                boolean verified = api.verifyToken(finalToken, rsn);
 
                 if (verified)
                 {
                     state.setVerified(true);
                     state.setVerifiedUsername(rsn);
-                    state.setVerificationCode(token);
+                    state.setVerificationCode(finalToken);
                 }
                 else
                 {
+                    // Token invalid for this account — clear it so the user can re-link
+                    configManager.unsetRSProfileConfiguration("runealytics", "authToken");
                     state.setVerified(false);
                     state.setVerifiedUsername(null);
+                    state.setVerificationCode(null);
                 }
 
                 SwingUtilities.invokeLater(() -> {

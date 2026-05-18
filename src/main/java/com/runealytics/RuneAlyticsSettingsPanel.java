@@ -57,7 +57,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private void buildTabs()
     {
-        boolean shouldShowVerification = true; // always visible so users can re-verify or check status
+        // Show the Verification sub-tab unless this specific account is already linked
+        boolean shouldShowVerification = !runeAlyticsState.isVerified();
 
         if (tabGroup != null)
         {
@@ -211,7 +212,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private void syncTabs()
     {
-        if (tabGroup == null)
+        boolean shouldShow = !runeAlyticsState.isVerified();
+        if (tabGroup == null || verificationTabVisible != shouldShow)
         {
             buildTabs();
         }

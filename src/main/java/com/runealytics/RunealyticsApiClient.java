@@ -54,7 +54,7 @@ public class RunealyticsApiClient
      */
     public void syncXpBatch(Map<String, Integer> xpGains)
     {
-        String token    = config.authToken();
+        String token    = state.getVerificationCode();
         String username = state.getVerifiedUsername();
 
         if (token == null || username == null || xpGains.isEmpty()) return;
