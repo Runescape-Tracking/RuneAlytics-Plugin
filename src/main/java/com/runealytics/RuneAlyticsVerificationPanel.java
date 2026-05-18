@@ -176,10 +176,16 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
             return;
         }
 
-        String code = codeField.getText().trim();
+        String code = codeField.getText().trim().toUpperCase();
         if (code.isEmpty())
         {
             statusLabel.setText("Enter the code from RuneAlytics.com.");
+            apiResponseArea.setText("");
+            return;
+        }
+        if (code.length() != 6)
+        {
+            statusLabel.setText("Code must be exactly 6 characters.");
             apiResponseArea.setText("");
             return;
         }
@@ -188,7 +194,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
         updateUi();
 
         final String rsn = client.getLocalPlayer().getName() != null
-                ? client.getLocalPlayer().getName() : "";
+                ? client.getLocalPlayer().getName().trim().toLowerCase() : "";
 
         executorService.submit(() -> {
             boolean success      = false;
