@@ -941,6 +941,9 @@ public class LootTrackerManager
      * This prevents HTTP 500 errors caused by massive payloads.
      */
     public void syncAllLocalLoot() {
+        String username = state.getVerifiedUsername();
+        if (username == null || username.isEmpty() || !state.canSync()) return;
+
         // 1. Retrieve the storage data
         LootStorageData data = storageManager.getCurrentData();
         if (data == null) {

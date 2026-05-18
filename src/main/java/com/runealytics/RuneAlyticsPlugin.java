@@ -131,6 +131,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private ScheduledExecutorService executorService;
     @Inject private XpTrackerManager         xpTrackerManager;
     @Inject private RunealyticsApiClient     apiClient;
+    @Inject private BankDataManager          bankDataManager;
 
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
@@ -237,11 +238,13 @@ public class RuneAlyticsPlugin extends Plugin
                 // Initialize heavy components
                 LootTrackerPanel lootPanel = injector.getInstance(LootTrackerPanel.class);
                 MatchmakingPanel matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
+                RuneAlyticsSettingsPanel settingsPanel = injector.getInstance(RuneAlyticsSettingsPanel.class);
 
                 SwingUtilities.invokeLater(() ->
                 {
                     mainPanel.addTab("Loot Tracker", FEATURE_LOOT, lootPanel);
                     mainPanel.addTab("Match Finder", FEATURE_MATCHES, matchmakingPanel);
+                    mainPanel.addTab("Settings", FEATURE_VERIFICATION, settingsPanel);
 
                     navButton = NavigationButton.builder()
                             .tooltip("RuneAlytics")
@@ -499,6 +502,23 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onItemContainerChanged(ItemContainerChanged event)
     {
+        // ── Bank sync ─────────────────────────────────────────────────────────
+        if (event.getContainerId() == InventoryID.BANK.getId()
+                && config.enableBankSync()
+                && state.isLoggedIn()
+                && state.isVerified())
+        {
+            final String token    = config.authToken();
+            final String username = state.getVerifiedUsername();
+            executorService.execute(() ->
+                    bankDataManager.syncBankData(
+                            token, username,
+                            event.getItemContainer(),
+                            client.getItemContainer(InventoryID.INVENTORY),
+                            client.getItemContainer(InventoryID.EQUIPMENT)));
+            return;
+        }
+
         if (!config.enableLootTracking()) return;
         if (event.getContainerId() != InventoryID.INVENTORY.getId()) return;
 
@@ -527,30 +547,7 @@ public class RuneAlyticsPlugin extends Plugin
                 }
             }
 
-            if (!config.enablePickpocketTracking()) return;
-            if (pendingPickpocketNpc == null || pickpocketInventorySnapshot == null) return;
-            if (System.currentTimeMillis() > pickpocketWindowExpiry)
-            {
-                log.debug("Pickpocket window expired for '{}'", pendingPickpocketNpc);
-                pendingPickpocketNpc        = null;
-                pickpocketInventorySnapshot = null;
-                return;
-            }
-
-            List<ItemStack> current = getCurrentInventory();
-            List<ItemStack> gained  = diffInventory(pickpocketInventorySnapshot, current);
-
-            if (!gained.isEmpty())
-            {
-                String npc = pendingPickpocketNpc;
-                List<ItemStack> loot = new ArrayList<>(gained);
-
-                log.debug("Pickpocket diff: '{}' gained {} item type(s)", npc, loot.size());
-                lootManager.processPickpocketLoot(npc, loot);
-
-                pickpocketInventorySnapshot = current;
-            }
-
+            // ── Skilling loot (runs regardless of pickpocket state) ───────────
             if (!skillingSnapshot.isEmpty() && config.enableLootTracking())
             {
                 List<ItemStack> inv = getCurrentInventory();
@@ -573,6 +570,31 @@ public class RuneAlyticsPlugin extends Plugin
                         skillingSnapshot.put(skill, inv);
                     }
                 }
+            }
+
+            // ── Pickpocket loot ───────────────────────────────────────────────
+            if (!config.enablePickpocketTracking()) return;
+            if (pendingPickpocketNpc == null || pickpocketInventorySnapshot == null) return;
+            if (System.currentTimeMillis() > pickpocketWindowExpiry)
+            {
+                log.debug("Pickpocket window expired for '{}'", pendingPickpocketNpc);
+                pendingPickpocketNpc        = null;
+                pickpocketInventorySnapshot = null;
+                return;
+            }
+
+            List<ItemStack> current = getCurrentInventory();
+            List<ItemStack> gained  = diffInventory(pickpocketInventorySnapshot, current);
+
+            if (!gained.isEmpty())
+            {
+                String npc = pendingPickpocketNpc;
+                List<ItemStack> loot = new ArrayList<>(gained);
+
+                log.debug("Pickpocket diff: '{}' gained {} item type(s)", npc, loot.size());
+                lootManager.processPickpocketLoot(npc, loot);
+
+                pickpocketInventorySnapshot = current;
             }
         });
     }

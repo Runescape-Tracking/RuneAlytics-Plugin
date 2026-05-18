@@ -57,7 +57,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private void buildTabs()
     {
-        boolean shouldShowVerification = !runeAlyticsState.isVerified();
+        boolean shouldShowVerification = true; // always visible so users can re-verify or check status
 
         if (tabGroup != null)
         {
@@ -211,8 +211,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private void syncTabs()
     {
-        boolean shouldShowVerification = !runeAlyticsState.isVerified();
-        if (tabGroup == null || verificationTabVisible != shouldShowVerification)
+        if (tabGroup == null)
         {
             buildTabs();
         }
