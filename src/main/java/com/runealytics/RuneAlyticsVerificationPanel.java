@@ -202,36 +202,51 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                 payload.addProperty("verification_code", code);
                 payload.addProperty("osrs_rsn", rsn);
 
-                RequestBody body    = RequestBody.create(RuneAlyticsHttp.JSON, payload.toString());
+                String payloadJson = payload.toString();
+                String fullUrl     = config.apiUrl() + VERIFY_PATH;
+
+                log.info("[Verify] POST {} | payload={}", fullUrl, payloadJson);
+
+                RequestBody body    = RequestBody.create(RuneAlyticsHttp.JSON, payloadJson);
                 Request     request = new Request.Builder()
-                        .url(config.apiUrl() + VERIFY_PATH)
+                        .url(fullUrl)
                         .post(body)
+                        .addHeader("Content-Type", "application/json")
+                        .addHeader("Accept",       "application/json")
                         .build();
 
                 try (Response response = httpClient.newCall(request).execute())
                 {
+                    int    code2      = response.code();
                     rawResponse   = response.body() != null ? response.body().string() : "";
                     serverMessage = RuneAlyticsJson.extractMessage(rawResponse);
+
+                    log.info("[Verify] Response HTTP {} | body={}", code2, rawResponse);
 
                     // Only HTTP status matters — 2xx = success
                     success = response.isSuccessful();
                     if (!success)
                         errorMessage = (serverMessage != null && !serverMessage.isEmpty())
-                                ? serverMessage : "HTTP " + response.code();
+                                ? serverMessage : "HTTP " + code2;
                 }
             }
             catch (IOException ex)
             {
                 errorMessage = ex.getMessage();
+                log.error("[Verify] Request failed: {}", ex.getMessage());
             }
 
             final boolean finalSuccess       = success;
             final String  finalServerMessage = serverMessage;
             final String  finalErrorMessage  = errorMessage;
             final String  finalRawResponse   = rawResponse != null ? rawResponse : "";
+            final String  sentPayload        = "{\"verification_code\":\"" + code + "\",\"osrs_rsn\":\"" + rsn + "\"}";
 
             SwingUtilities.invokeLater(() -> {
                 verifying = false;
+
+                String debugHeader = "POST " + config.apiUrl() + VERIFY_PATH
+                        + "\nPayload: " + sentPayload + "\n\n";
 
                 if (finalSuccess)
                 {
@@ -245,8 +260,8 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                     String msg = (finalServerMessage != null && !finalServerMessage.isEmpty())
                             ? finalServerMessage : "Verification completed successfully.";
                     statusLabel.setText(msg);
-                    apiResponseArea.setText(finalRawResponse.isEmpty() ? msg
-                            : "Message: " + msg + "\n\nRaw response:\n" + finalRawResponse);
+                    apiResponseArea.setText(debugHeader + "✓ " + msg
+                            + (finalRawResponse.isEmpty() ? "" : "\n\nServer response:\n" + finalRawResponse));
                 }
                 else
                 {
@@ -266,8 +281,8 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                         msg = "Verification failed. Check the code and try again.";
 
                     statusLabel.setText(msg);
-                    apiResponseArea.setText(finalRawResponse.isEmpty() ? msg
-                            : "Error: " + msg + "\n\nRaw response:\n" + finalRawResponse);
+                    apiResponseArea.setText(debugHeader + "✗ " + msg
+                            + (finalRawResponse.isEmpty() ? "" : "\n\nServer response:\n" + finalRawResponse));
                 }
 
                 notifyVerificationStatusChange();
