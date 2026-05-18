@@ -508,7 +508,7 @@ public class RuneAlyticsPlugin extends Plugin
                 && state.isLoggedIn()
                 && state.isVerified())
         {
-            final String token    = config.authToken();
+            final String token    = state.getVerificationCode();
             final String username = state.getVerifiedUsername();
             executorService.execute(() ->
                     bankDataManager.syncBankData(
@@ -1130,52 +1130,29 @@ public class RuneAlyticsPlugin extends Plugin
         String rsn = client.getLocalPlayer().getName();
         if (rsn == null) return;
 
-        // Read this account's token from the per-RS-profile config (not the global authToken)
-        String token = configManager.getRSProfileConfiguration("runealytics", "authToken");
-        if (token == null || token.isEmpty())
+        // Look up this account's token by RSN — completely isolated from other accounts
+        RuneAlyticsVerificationPanel vp = injector.getInstance(RuneAlyticsVerificationPanel.class);
+        String token = vp.loadAccountToken(rsn);
+
+        final boolean verified = (token != null);
+        if (verified)
         {
-            // No token stored for this account — not linked yet
+            state.setVerified(true);
+            state.setVerifiedUsername(rsn);
+            state.setVerificationCode(token);
+            log.info("Account '{}' is linked (stored token found)", rsn);
+        }
+        else
+        {
             state.setVerified(false);
             state.setVerifiedUsername(null);
             state.setVerificationCode(null);
-            SwingUtilities.invokeLater(() -> {
-                RuneAlyticsSettingsPanel sp = injector.getInstance(RuneAlyticsSettingsPanel.class);
-                sp.updateVerificationStatus(false, null);
-            });
-            return;
+            log.info("Account '{}' is not linked (no stored token)", rsn);
         }
 
-        final String finalToken = token;
-        executorService.submit(() -> {
-            try
-            {
-                RunealyticsApiClient api = injector.getInstance(RunealyticsApiClient.class);
-                boolean verified = api.verifyToken(finalToken, rsn);
-
-                if (verified)
-                {
-                    state.setVerified(true);
-                    state.setVerifiedUsername(rsn);
-                    state.setVerificationCode(finalToken);
-                }
-                else
-                {
-                    // Token invalid for this account — clear it so the user can re-link
-                    configManager.unsetRSProfileConfiguration("runealytics", "authToken");
-                    state.setVerified(false);
-                    state.setVerifiedUsername(null);
-                    state.setVerificationCode(null);
-                }
-
-                SwingUtilities.invokeLater(() -> {
-                    RuneAlyticsSettingsPanel sp = injector.getInstance(RuneAlyticsSettingsPanel.class);
-                    sp.updateVerificationStatus(verified, verified ? rsn : null);
-                });
-            }
-            catch (Exception e)
-            {
-                log.error("Auto-verification error for '{}'", rsn, e);
-            }
+        SwingUtilities.invokeLater(() -> {
+            RuneAlyticsSettingsPanel sp = injector.getInstance(RuneAlyticsSettingsPanel.class);
+            sp.updateVerificationStatus(verified, verified ? rsn : null);
         });
     }
 

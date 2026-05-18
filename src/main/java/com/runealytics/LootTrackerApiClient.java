@@ -68,7 +68,7 @@ public class LootTrackerApiClient
         Request request = new Request.Builder()
                 .url(config.apiUrl() + LOOT_BULK_SYNC_PATH)
                 .post(RequestBody.create(JSON, gson.toJson(payload)))
-                .addHeader("Authorization", "Bearer " + config.authToken())
+                .addHeader("Authorization", "Bearer " + state.getVerificationCode())
                 .build();
 
         try (Response response = httpClient.newCall(request).execute()) {
@@ -84,7 +84,7 @@ public class LootTrackerApiClient
      */
     public void syncKillData(JsonObject payload) throws IOException
     {
-        String token = config.authToken();
+        String token = state.getVerificationCode();
 
         if (token == null || token.isEmpty())
         {
@@ -128,7 +128,7 @@ public class LootTrackerApiClient
      */
     public void syncPrestige(JsonObject payload) throws IOException
     {
-        String token = config.authToken();
+        String token = state.getVerificationCode();
 
         if (token == null || token.isEmpty())
         {
@@ -477,7 +477,7 @@ public class LootTrackerApiClient
      */
     public void syncXpBatch(Map<Skill, Integer> xpGains)
     {
-        String token = config.authToken();
+        String token = state.getVerificationCode();
         String username = state.getVerifiedUsername();
 
         if (token == null || username == null || xpGains.isEmpty()) return;
@@ -589,7 +589,7 @@ public class LootTrackerApiClient
                 .url(config.apiUrl() + LOOT_BULK_SYNC_PATH)
                 .post(body)
                 .addHeader("Content-Type", "application/json")
-                .addHeader("Authorization", "Bearer " + config.authToken()) // Recommended: include your auth token
+                .addHeader("Authorization", "Bearer " + state.getVerificationCode()) // Recommended: include your auth token
                 .build();
 
         try (Response response = httpClient.newCall(request).execute())
