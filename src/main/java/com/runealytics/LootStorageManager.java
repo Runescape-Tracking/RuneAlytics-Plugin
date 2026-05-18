@@ -420,8 +420,7 @@ public class LootStorageManager
      */
     public void mergeServerData(Map<String, LootStorageData.BossKillData> serverData)
     {
-        log.warn("⚠️ mergeServerData() called - this should ONLY happen during manual sync!");
-        log.warn("⚠️ Call stack: ", new Exception("Trace sync caller"));
+        log.debug("mergeServerData() called during manual sync");
 
         // CRITICAL: Always reload from disk to ensure we have the latest client data
         currentData = loadData();
