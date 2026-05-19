@@ -57,7 +57,21 @@ public class RunealyticsApiClient
         String token    = state.getVerificationCode();
         String username = state.getVerifiedUsername();
 
-        if (token == null || username == null || xpGains.isEmpty()) return;
+        if (token == null || token.isEmpty())
+        {
+            log.warn("[XP Batch] Skipping — no verification token in state");
+            return;
+        }
+        if (username == null || username.isEmpty())
+        {
+            log.warn("[XP Batch] Skipping — no username in state");
+            return;
+        }
+        if (xpGains.isEmpty())
+        {
+            log.debug("[XP Batch] Skipping — empty gains map");
+            return;
+        }
 
         JsonObject skillsObj = new JsonObject();
         xpGains.forEach(skillsObj::addProperty);
@@ -67,11 +81,18 @@ public class RunealyticsApiClient
         payload.add("xp_gains",          skillsObj);
         payload.addProperty("timestamp", System.currentTimeMillis() / 1000);
 
-        RequestBody body    = RequestBody.create(JSON, gson.toJson(payload));
+        String payloadJson = gson.toJson(payload);
+        String url         = config.apiUrl() + "/xp/batch";
+
+        log.info("[XP Batch] POST {} | skills={} payload={}", url, xpGains.size(), payloadJson);
+
+        RequestBody body    = RequestBody.create(JSON, payloadJson);
         Request     request = new Request.Builder()
-                .url(config.apiUrl() + "/xp/batch")
+                .url(url)
                 .post(body)
                 .addHeader("Authorization", "Bearer " + token)
+                .addHeader("Content-Type",  "application/json")
+                .addHeader("Accept",        "application/json")
                 .build();
 
         httpClient.newCall(request).enqueue(new Callback()
@@ -80,14 +101,29 @@ public class RunealyticsApiClient
             @SuppressWarnings("NullableProblems")
             public void onFailure(Call call, IOException e)
             {
-                log.warn("Failed to sync XP batch: {}", e.getMessage());
+                log.warn("[XP Batch] Network failure: {}", e.getMessage());
             }
 
             @Override
             @SuppressWarnings("NullableProblems")
             public void onResponse(Call call, Response response)
             {
-                response.close();
+                try
+                {
+                    String body = response.body() != null ? response.body().string() : "";
+                    if (response.isSuccessful())
+                        log.info("[XP Batch] OK HTTP {} — {}", response.code(), body);
+                    else
+                        log.warn("[XP Batch] FAILED HTTP {} — {}", response.code(), body);
+                }
+                catch (IOException e)
+                {
+                    log.warn("[XP Batch] Could not read response body: {}", e.getMessage());
+                }
+                finally
+                {
+                    response.close();
+                }
             }
         });
     }
