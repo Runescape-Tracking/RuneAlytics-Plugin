@@ -990,7 +990,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onStatChanged(StatChanged event)
     {
-        if (!config.enableXpTracking()) return;
+        if (!config.enableXpTracking() || !state.isLoggedIn() || !state.isVerified()) return;
 
         Skill skill = event.getSkill();
         if (skill == Skill.OVERALL) return;
