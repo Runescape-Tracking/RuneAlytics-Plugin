@@ -130,6 +130,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
         if (!runeAlyticsState.isLoggedIn())
         {
             setControlsEnabled(false);
+            codeField.setText("");
             statusLabel.setText("Log into RuneScape first to link your account.");
             return;
         }
@@ -141,12 +142,23 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
             return;
         }
 
+        // Auto-populate the code field with the stored token for this account
+        // so the user never has to re-enter it after their first verification.
+        String rsn = runeAlyticsState.getVerifiedUsername();
+        if (rsn == null && client.getLocalPlayer() != null)
+            rsn = client.getLocalPlayer().getName().trim().toLowerCase();
+        if (rsn != null)
+        {
+            String stored = loadAccountToken(rsn);
+            if (stored != null && !stored.equals(codeField.getText().trim()))
+                codeField.setText(stored);
+        }
+
         // Button is ALWAYS enabled when logged in — users can re-link at any time
         setControlsEnabled(true);
 
         if (runeAlyticsState.isVerified())
         {
-            String rsn = runeAlyticsState.getVerifiedUsername();
             statusLabel.setText("Linked" + (rsn != null ? " as " + rsn : "")
                     + ". Enter a new code to re-link.");
         }
