@@ -771,6 +771,47 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
+        // ── Pet drop ─────────────────────────────────────────────────────────
+        // OSRS never includes pets in NpcLootReceived — they arrive silently in
+        // inventory (or bank) accompanied by one of these three game messages.
+        if (lower.contains("funny feeling like you're being followed")
+                || lower.contains("sneaking into your backpack"))
+        {
+            if (lastKilledBoss != null && lastKillTime != null)
+            {
+                long elapsedSec = ChronoUnit.SECONDS.between(lastKillTime, Instant.now());
+                if (elapsedSec < BOSS_CLEAR_TIMEOUT_SECONDS)
+                {
+                    final NPC           boss = lastKilledBoss;
+                    final List<ItemStack> snap = rowInventorySnapshot != null
+                            ? new ArrayList<>(rowInventorySnapshot) : Collections.emptyList();
+                    final boolean wentToBank = lower.contains("sneaking into your backpack");
+
+                    clientThread.invokeLater(() -> {
+                        ItemStack petItem = null;
+                        if (!wentToBank)
+                        {
+                            // Pet went to inventory — diff to find which item it is
+                            List<ItemStack> gained = diffInventory(snap, getCurrentInventory());
+                            // Pick the first gained item that isn't coins or a common consumable
+                            for (ItemStack is : gained)
+                            {
+                                if (is.getId() != ITEM_ID_COINS && is.getQuantity() == 1)
+                                {
+                                    petItem = is;
+                                    break;
+                                }
+                            }
+                        }
+                        String bossName = lootManager.normalizeBossName(boss.getName());
+                        lootManager.appendPetDrop(bossName, petItem);
+                        log.info("[Pet] drop detected for '{}' (wentToBank={})", bossName, wentToBank);
+                    });
+                }
+            }
+            return;
+        }
+
         // ── Ring of Wealth auto-pickup ────────────────────────────────────────
         // Game message: "Your ring of wealth has automatically picked up the coins."
         // Coins bypass ItemSpawned entirely, so we diff inventory vs the snapshot

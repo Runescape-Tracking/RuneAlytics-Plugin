@@ -931,7 +931,11 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 bossExpandedState.put(npcName, nowVisible);
                 container.revalidate();
                 container.repaint();
-                SwingUtilities.invokeLater(() -> { bossListPanel.revalidate(); bossListPanel.repaint(); });
+                SwingUtilities.invokeLater(() -> {
+                    card.setMaximumSize(new Dimension(Integer.MAX_VALUE, card.getPreferredSize().height));
+                    bossListPanel.revalidate();
+                    bossListPanel.repaint();
+                });
             }
         });
 
@@ -940,6 +944,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         card.add(container, BorderLayout.CENTER);
 
         bossCardMap.put(npcName, card);
+
+        // Prevent BoxLayout from stretching the card beyond its content height.
+        // getPreferredSize() walks the layout tree so it returns the exact height
+        // needed for the header + item grid + borders + padding — no layout pass needed.
+        card.setMaximumSize(new Dimension(Integer.MAX_VALUE, card.getPreferredSize().height));
+
         return card;
     }
 
@@ -952,7 +962,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
         JPanel grid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, ITEM_GAP, ITEM_GAP));
         grid.setBackground(new Color(28, 28, 28));
-        grid.setBorder(new EmptyBorder(4, 4, 4, 4));
+        grid.setBorder(new EmptyBorder(4, 4, 5, 4));
 
         if (visible.isEmpty())
         {
@@ -967,25 +977,60 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         for (BossKillStats.AggregatedDrop drop : visible)
         {
             boolean hidden  = lootManager.isDropHidden(npcName, drop.getItemId());
+            boolean isPet   = drop.isPet();
             String  tooltip = buildTooltip(drop);
             String  slotKey = npcName + "_" + drop.getItemId();
 
             JPanel slot = new JPanel(new BorderLayout());
             slot.setOpaque(true);
-            slot.setBackground(hidden ? new Color(50, 28, 28) : new Color(35, 35, 35));
-            slot.setBorder(BorderFactory.createLineBorder(new Color(58, 58, 58), 1));
+            if (isPet)
+                slot.setBackground(new Color(50, 40, 10));
+            else
+                slot.setBackground(hidden ? new Color(50, 28, 28) : new Color(35, 35, 35));
+
+            Color borderColor = isPet ? new Color(200, 160, 40)
+                    : hidden ? new Color(80, 40, 40) : new Color(58, 58, 58);
+            slot.setBorder(BorderFactory.createLineBorder(borderColor, isPet ? 2 : 1));
             slot.setPreferredSize(new Dimension(ITEM_SIZE, ITEM_SIZE));
             slot.setToolTipText(tooltip);
+
+            // Use layered pane so the ★ badge can float over the item icon
+            JLayeredPane layers = new JLayeredPane();
+            layers.setPreferredSize(new Dimension(ITEM_SIZE, ITEM_SIZE));
+            layers.setOpaque(false);
 
             JLabel iconLabel = new JLabel();
             iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
             iconLabel.setVerticalAlignment(SwingConstants.CENTER);
             iconLabel.setToolTipText(tooltip);
+            iconLabel.setBounds(0, 0, ITEM_SIZE, ITEM_SIZE);
 
-            itemManager.getImage(drop.getItemId(), drop.getTotalQuantity(), drop.getTotalQuantity() > 1)
-                    .addTo(iconLabel);
+            if (isPet && drop.getItemId() == LootTrackerManager.PET_ITEM_ID_UNKNOWN)
+            {
+                // No sprite available — show a placeholder star icon
+                iconLabel.setText("★");
+                iconLabel.setFont(iconLabel.getFont().deriveFont(java.awt.Font.BOLD, 20f));
+                iconLabel.setForeground(new Color(220, 180, 40));
+            }
+            else
+            {
+                itemManager.getImage(drop.getItemId(), drop.getTotalQuantity(), drop.getTotalQuantity() > 1)
+                        .addTo(iconLabel);
+            }
 
-            slot.add(iconLabel, BorderLayout.CENTER);
+            layers.add(iconLabel, JLayeredPane.DEFAULT_LAYER);
+
+            if (isPet)
+            {
+                JLabel badge = new JLabel("★");
+                badge.setFont(badge.getFont().deriveFont(java.awt.Font.BOLD, 9f));
+                badge.setForeground(new Color(220, 180, 40));
+                badge.setBounds(ITEM_SIZE - 12, ITEM_SIZE - 12, 12, 12);
+                layers.add(badge, JLayeredPane.PALETTE_LAYER);
+            }
+
+            slot.add(layers, BorderLayout.CENTER);
+            itemSlotMap.put(slotKey, iconLabel);
             itemSlotMap.put(slotKey, iconLabel);
 
             JPopupMenu menu = new JPopupMenu();
