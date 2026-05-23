@@ -87,6 +87,9 @@ public class LootStorageData
 
         @SerializedName("hidden")
         private boolean hidden;
+
+        @SerializedName("is_pet")
+        private boolean pet;
     }
 
     @Data
@@ -112,5 +115,8 @@ public class LootStorageData
 
         @SerializedName("high_alch")
         private int highAlch;
+
+        @SerializedName("is_pet")
+        private boolean pet;
     }
 }

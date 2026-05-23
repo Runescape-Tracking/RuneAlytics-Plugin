@@ -629,6 +629,62 @@ public class LootTrackerManager
     }
 
     /**
+     * Records a pet drop against the most recent kill for the given NPC.
+     *
+     * <p>If a specific item was identified in the inventory it is used; otherwise a
+     * generic "Pet" entry (itemId {@value #PET_ITEM_ID_UNKNOWN}) is appended so the
+     * drop is never silently lost.</p>
+     *
+     * @param npcName  normalised NPC name (storage key)
+     * @param petItem  the pet item found via inventory diff, or {@code null} if unknown
+     */
+    public void appendPetDrop(String npcName, ItemStack petItem)
+    {
+        BossKillStats stats = bossKillStats.get(npcName);
+        if (stats == null || stats.getKillHistory().isEmpty())
+        {
+            log.warn("[Pet] No existing kill record for '{}' – pet drop not recorded", npcName);
+            return;
+        }
+
+        LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
+        if (petItem != null)
+        {
+            net.runelite.client.game.ItemComposition comp =
+                    itemManager.getItemComposition(petItem.getId());
+            drop.setItemId   (petItem.getId());
+            drop.setItemName (comp.getName());
+            drop.setQuantity (1);
+            drop.setGePrice  (itemManager.getItemPrice(petItem.getId()));
+            drop.setHighAlch (comp.getHaPrice());
+            drop.setTotalValue(drop.getGePrice());
+        }
+        else
+        {
+            drop.setItemId   (PET_ITEM_ID_UNKNOWN);
+            drop.setItemName ("Pet");
+            drop.setQuantity (1);
+        }
+        drop.setPet(true);
+        drop.setHidden(false);
+
+        LootStorageData.KillRecord lastKill =
+                stats.getKillHistory().get(stats.getKillHistory().size() - 1);
+        lastKill.getDrops().add(0, drop); // index 0 so storage order also has pet first
+        lastKill.setSyncedToServer(false);
+
+        stats.setTotalLootValue(stats.getTotalLootValue() + drop.getTotalValue());
+
+        storageManager.appendDropsToLastKill(npcName, Collections.singletonList(drop));
+        notifyListeners(stats, lastKill);
+
+        log.info("[Pet] Recorded '{}' pet drop for '{}'", drop.getItemName(), npcName);
+    }
+
+    /** Sentinel item-ID used when the pet item cannot be determined from inventory diff. */
+    public static final int PET_ITEM_ID_UNKNOWN = -1;
+
+    /**
      * Maps a raw NPC / stall name (HTML-stripped, as received from the menu target)
      * to a canonical display name used as the storage key.
      *

@@ -91,6 +91,7 @@ public class BossKillStats
                 agg.totalQuantity += drop.getQuantity();
                 agg.totalValue    += drop.getTotalValue();
                 agg.dropCount++;
+                if (drop.isPet()) agg.pet = true;
             }
         }
 
@@ -108,7 +109,11 @@ public class BossKillStats
     public List<AggregatedDrop> getAggregatedDropsSorted()
     {
         List<AggregatedDrop> drops = getAggregatedDrops();
-        drops.sort((a, b) -> Long.compare(b.getTotalValue(), a.getTotalValue()));
+        drops.sort((a, b) -> {
+            // Pets always sort to slot #1 regardless of GE value
+            if (a.isPet() != b.isPet()) return a.isPet() ? -1 : 1;
+            return Long.compare(b.getTotalValue(), a.getTotalValue());
+        });
         return drops;
     }
 
