@@ -148,7 +148,14 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         bossListPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
         bossListPanel.setBorder(new EmptyBorder(PAD, PAD, PAD, PAD));
 
-        scrollPane = new JScrollPane(bossListPanel);
+        // Wrapping bossListPanel at NORTH of a BorderLayout panel means it always
+        // takes only its natural (preferred) height — the viewport fills the rest
+        // with empty space. This avoids BoxLayout stretching cards to fill the pane.
+        JPanel scrollContent = new JPanel(new BorderLayout());
+        scrollContent.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        scrollContent.add(bossListPanel, BorderLayout.NORTH);
+
+        scrollPane = new JScrollPane(scrollContent);
         scrollPane.setBorder(null);
         scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
         scrollPane.getViewport().setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -782,7 +789,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                                 bossListPanel.add(buildBossCard(stats));
                                 bossListPanel.add(Box.createVerticalStrut(5));
                             }
-                            bossListPanel.add(Box.createVerticalGlue());
                             totalKillsLabel.setText(formatNumber(totalKills) + " kills");
                             totalValueLabel.setText(formatGp(totalVal));
                         }
@@ -932,7 +938,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 container.revalidate();
                 container.repaint();
                 SwingUtilities.invokeLater(() -> {
-                    card.setMaximumSize(new Dimension(Integer.MAX_VALUE, card.getPreferredSize().height));
                     bossListPanel.revalidate();
                     bossListPanel.repaint();
                 });
@@ -944,12 +949,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         card.add(container, BorderLayout.CENTER);
 
         bossCardMap.put(npcName, card);
-
-        // Prevent BoxLayout from stretching the card beyond its content height.
-        // getPreferredSize() walks the layout tree so it returns the exact height
-        // needed for the header + item grid + borders + padding — no layout pass needed.
-        card.setMaximumSize(new Dimension(Integer.MAX_VALUE, card.getPreferredSize().height));
-
         return card;
     }
 
