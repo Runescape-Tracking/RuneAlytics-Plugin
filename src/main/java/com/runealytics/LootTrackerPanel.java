@@ -931,7 +931,11 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 bossExpandedState.put(npcName, nowVisible);
                 container.revalidate();
                 container.repaint();
-                SwingUtilities.invokeLater(() -> { bossListPanel.revalidate(); bossListPanel.repaint(); });
+                SwingUtilities.invokeLater(() -> {
+                    card.setMaximumSize(new Dimension(Integer.MAX_VALUE, card.getPreferredSize().height));
+                    bossListPanel.revalidate();
+                    bossListPanel.repaint();
+                });
             }
         });
 
@@ -940,6 +944,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         card.add(container, BorderLayout.CENTER);
 
         bossCardMap.put(npcName, card);
+
+        // Prevent BoxLayout from stretching the card beyond its content height.
+        // getPreferredSize() walks the layout tree so it returns the exact height
+        // needed for the header + item grid + borders + padding — no layout pass needed.
+        card.setMaximumSize(new Dimension(Integer.MAX_VALUE, card.getPreferredSize().height));
+
         return card;
     }
 
@@ -952,7 +962,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
         JPanel grid = new JPanel(new GridLayout(0, ITEMS_PER_ROW, ITEM_GAP, ITEM_GAP));
         grid.setBackground(new Color(28, 28, 28));
-        grid.setBorder(new EmptyBorder(4, 4, 4, 4));
+        grid.setBorder(new EmptyBorder(4, 4, 5, 4));
 
         if (visible.isEmpty())
         {
