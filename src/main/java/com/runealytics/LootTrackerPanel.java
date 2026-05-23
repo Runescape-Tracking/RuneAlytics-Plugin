@@ -782,6 +782,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                                 bossListPanel.add(buildBossCard(stats));
                                 bossListPanel.add(Box.createVerticalStrut(5));
                             }
+                            bossListPanel.add(Box.createVerticalGlue());
                             totalKillsLabel.setText(formatNumber(totalKills) + " kills");
                             totalValueLabel.setText(formatGp(totalVal));
                         }
