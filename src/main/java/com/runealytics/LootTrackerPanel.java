@@ -606,12 +606,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     }
 
     @Override
-    public void onKillRecorded(NpcKillRecord kill, BossKillStats stats)
-    {
-        scheduleLootUpdate(kill.getNpcName(), stats);
-    }
-
-    @Override
     public void onLootUpdated(BossKillStats stats, LootStorageData.KillRecord kill)
     {
         scheduleLootUpdate(stats.getNpcName(), stats);

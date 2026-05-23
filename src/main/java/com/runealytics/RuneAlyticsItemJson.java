@@ -1,0 +1,67 @@
+package com.runealytics;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
+
+import java.util.List;
+
+/**
+ * Shared helpers for converting RuneLite {@link ItemContainer}s and
+ * {@link ItemStack} lists into the {@code [{id, qty}, ...]} JSON shape used
+ * everywhere the plugin POSTs item data (bank sync, matchmaking item report,
+ * wealth snapshots, etc).
+ *
+ * <p>Consolidated here so {@link BankDataManager} and {@link MatchmakingManager}
+ * do not each carry their own near-identical copy of the conversion code.</p>
+ */
+public final class RuneAlyticsItemJson
+{
+    private RuneAlyticsItemJson() {}
+
+    /**
+     * Returns a JSON array of {@code {id, qty}} objects describing every
+     * non-empty slot in {@code container}. Returns an empty array if the
+     * container is null/empty.
+     */
+    public static JsonArray fromContainer(ItemContainer container)
+    {
+        JsonArray arr = new JsonArray();
+        if (container == null) return arr;
+
+        Item[] items = container.getItems();
+        if (items == null) return arr;
+
+        for (Item item : items)
+        {
+            if (item == null) continue;
+            if (item.getId() <= 0 || item.getQuantity() <= 0) continue;
+
+            JsonObject entry = new JsonObject();
+            entry.addProperty("id",  item.getId());
+            entry.addProperty("qty", item.getQuantity());
+            arr.add(entry);
+        }
+        return arr;
+    }
+
+    /** Same as {@link #fromContainer} but for a list of {@link ItemStack}. */
+    public static JsonArray fromStacks(List<ItemStack> stacks)
+    {
+        JsonArray arr = new JsonArray();
+        if (stacks == null) return arr;
+
+        for (ItemStack s : stacks)
+        {
+            if (s == null) continue;
+            if (s.getId() <= 0 || s.getQuantity() <= 0) continue;
+
+            JsonObject entry = new JsonObject();
+            entry.addProperty("id",  s.getId());
+            entry.addProperty("qty", s.getQuantity());
+            arr.add(entry);
+        }
+        return arr;
+    }
+}

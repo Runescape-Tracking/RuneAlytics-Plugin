@@ -1,10 +1,8 @@
 package com.runealytics;
 
 import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import net.runelite.api.Client;
 import net.runelite.api.InventoryID;
-import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
 import net.runelite.api.coords.WorldPoint;
@@ -399,10 +397,10 @@ public class MatchmakingManager
         }
 
         ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
-        ItemContainer gear = client.getItemContainer(InventoryID.EQUIPMENT);
+        ItemContainer gear      = client.getItemContainer(InventoryID.EQUIPMENT);
 
-        JsonArray inventoryItems = buildItemPayload(inventory);
-        JsonArray gearItems = buildItemPayload(gear);
+        JsonArray inventoryItems = RuneAlyticsItemJson.fromContainer(inventory);
+        JsonArray gearItems      = RuneAlyticsItemJson.fromContainer(gear);
 
         itemsReportInFlight = true;
 
@@ -627,35 +625,6 @@ public class MatchmakingManager
         }
 
         return null;
-    }
-
-    private JsonArray buildItemPayload(ItemContainer container)
-    {
-        JsonArray items = new JsonArray();
-
-        if (container == null)
-        {
-            return items;
-        }
-
-        Item[] containerItems = container.getItems();
-        if (containerItems == null)
-        {
-            return items;
-        }
-
-        for (Item item : containerItems)
-        {
-            if (item != null && item.getId() > 0 && item.getQuantity() > 0)
-            {
-                JsonObject itemData = new JsonObject();
-                itemData.addProperty("id", item.getId());
-                itemData.addProperty("qty", item.getQuantity());
-                items.add(itemData);
-            }
-        }
-
-        return items;
     }
 
     private void handleResult(MatchmakingApiResult result)

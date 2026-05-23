@@ -2,7 +2,6 @@ package com.runealytics;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -109,56 +108,19 @@ public class BankDataManager
         JsonObject data = new JsonObject();
         data.addProperty("username",  username);
         data.addProperty("timestamp", Instant.now().getEpochSecond());
-        data.addProperty("world", 0); // Future: populate if you track world
+        data.addProperty("world",     0); // Future: populate if you track world
 
-        // Bank items
-        JsonArray bankItems = buildItemArray(bankContainer);
-        data.add("items", bankItems);
+        JsonArray bankItems      = RuneAlyticsItemJson.fromContainer(bankContainer);
+        JsonArray inventoryItems = RuneAlyticsItemJson.fromContainer(inventoryContainer);
+        JsonArray equipmentItems = RuneAlyticsItemJson.fromContainer(equipmentContainer);
 
-        // Inventory items — included so the snapshot captures carried wealth
-        JsonArray inventoryItems = buildItemArray(inventoryContainer);
+        data.add("items",     bankItems);
         data.add("inventory", inventoryItems);
-
-        // Equipped items — included so BiS gear is counted even if not banked
-        JsonArray equipmentItems = buildItemArray(equipmentContainer);
         data.add("equipment", equipmentItems);
 
         log.debug("Wealth snapshot: bank={} inv={} equip={} items for {}",
                 bankItems.size(), inventoryItems.size(), equipmentItems.size(), username);
 
         return data;
-    }
-
-    /**
-     * Converts an {@link ItemContainer} to a JSON array of {@code {id, qty}} objects.
-     * Returns an empty array if the container is null or empty.
-     */
-    private JsonArray buildItemArray(ItemContainer container)
-    {
-        JsonArray array = new JsonArray();
-
-        if (container == null)
-        {
-            return array;
-        }
-
-        Item[] items = container.getItems();
-        if (items == null)
-        {
-            return array;
-        }
-
-        for (Item item : items)
-        {
-            if (item != null && item.getId() > 0 && item.getQuantity() > 0)
-            {
-                JsonObject entry = new JsonObject();
-                entry.addProperty("id",  item.getId());
-                entry.addProperty("qty", item.getQuantity());
-                array.add(entry);
-            }
-        }
-
-        return array;
     }
 }

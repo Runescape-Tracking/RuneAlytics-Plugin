@@ -2,10 +2,9 @@ package com.runealytics;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.gson.JsonObject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
-import net.runelite.api.events.*;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.game.ItemManager;
 import javax.inject.Inject;
@@ -248,56 +247,12 @@ public class LootTrackerManager
                     .build();
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  WIDGET GROUP-IDs FOR CHEST / REWARD INTERFACES
+    //  WIDGET / CONTAINER IDs
+    //  Single source of truth lives in {@link RewardSources}. The legacy
+    //  WIDGET_WHISPERER alias is kept here because RuneAlyticsPlugin still
+    //  references it via {@code LootTrackerManager.WIDGET_WHISPERER}.
     // ═════════════════════════════════════════════════════════════════════════
-
-    /** Barrows reward chest                                  */
-    static final int WIDGET_BARROWS            = 155;
-    /** Chambers of Xeric reward chest                        */
-    static final int WIDGET_COX                = 539;
-    /** Theatre of Blood reward chest                         */
-    static final int WIDGET_TOB                = 23;
-    /** Tombs of Amascut reward chest                         */
-    static final int WIDGET_TOA                = 773;
-    /** The Corrupted Gauntlet reward chest                   */
-    static final int WIDGET_CORRUPTED_GAUNTLET = 700;
-    /** The Gauntlet (normal) reward chest                    */
-    static final int WIDGET_GAUNTLET           = 595;
-    /** Nightmare / Phosani reward chest                      */
-    static final int WIDGET_NIGHTMARE          = 600;
-    /** Zalcano reward chest                                  */
-    static final int WIDGET_ZALCANO            = 620;
-    /** Tempoross reward pool                                 */
-    static final int WIDGET_TEMPOROSS          = 229;
-    /** Wintertodt reward crate                               */
-    static final int WIDGET_WINTERTODT         = 634;
-    /** Clue scroll reward casket                             */
-    static final int WIDGET_CLUE               = 73;
-    /** Royal Titans (Varlamore lair) reward chest            */
-    static final int WIDGET_ROYAL_TITANS       = 174;
-    /** Yama reward interface                                 */
-    static final int WIDGET_YAMA               = 810;
-    /** Fortis Colosseum reward chest                         */
-    static final int WIDGET_COLOSSEUM          = 867;
-    /** Hespori flower chest (Farming Guild boss)             */
-    static final int WIDGET_HESPORI            = 897;
-    /** Giant's Foundry / Mahogany Homes minigame rewards     */
-    static final int WIDGET_MINIGAME_REWARD    = 300;
-    /**
-     * The Whisperer reward interface (Desert Treasure 2).
-     * Items are nested 3-4 widget layers deep — requires
-     * {@link #WIDGET_ITEM_SEARCH_DEPTH} to be ≥ 4 to find them.
-     */
-    static final int WIDGET_WHISPERER          = 834;
-
-    // ── InventoryID constants for container reads ────────────────────────────
-    private static final int CONTAINER_BARROWS   = 141;
-    private static final int CONTAINER_COX       = 582;
-    private static final int CONTAINER_TOB       = 23;
-    private static final int CONTAINER_TOA       = 141;
-    private static final int CONTAINER_GAUNTLET  = 179;
-    private static final int CONTAINER_NIGHTMARE = 646;
-    private static final int CONTAINER_ZALCANO   = 631;
+    static final int WIDGET_WHISPERER = RewardSources.WIDGET_WHISPERER;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  INJECTED DEPENDENCIES
@@ -579,6 +534,87 @@ public class LootTrackerManager
                 : npcName;
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 7 – IMPLING / IMP JAR LOOT
+    //
+    //  Catching an imp gives the player an impling jar (which is recorded as a
+    //  Hunter skilling drop via the existing path). The actual loot only
+    //  materialises when the player "Loot-jar"s the impling jar, which yields
+    //  no XP — so the generic skilling diff misses it.
+    //
+    //  We expose a dedicated entry point that the plugin calls after detecting
+    //  a "Loot-jar" or "Loot" click on an "* impling jar" item, then diffing
+    //  the inventory. Each impling tier is tracked separately so the user
+    //  sees "Impling: Eclectic" instead of everything bucketing into "Hunter".
+    // ═════════════════════════════════════════════════════════════════════════
+
+    public static final String IMPLING_PREFIX = "Impling: ";
+
+    /**
+     * Maps a raw {@code "* impling jar"} item name to the user-facing tier label.
+     * Falls back to title-casing the jar prefix when the tier isn't in the map
+     * so new content is still tracked under a sensible name.
+     */
+    private static final Map<String, String> IMPLING_JAR_NAMES =
+            ImmutableMap.<String, String>builder()
+                    .put("baby impling jar",     "Baby")
+                    .put("young impling jar",    "Young")
+                    .put("gourmet impling jar",  "Gourmet")
+                    .put("earth impling jar",    "Earth")
+                    .put("essence impling jar",  "Essence")
+                    .put("eclectic impling jar", "Eclectic")
+                    .put("nature impling jar",   "Nature")
+                    .put("magpie impling jar",   "Magpie")
+                    .put("ninja impling jar",    "Ninja")
+                    .put("crystal impling jar",  "Crystal")
+                    .put("dragon impling jar",   "Dragon")
+                    .put("lucky impling jar",    "Lucky")
+                    .build();
+
+    /**
+     * Records loot extracted from a single impling jar.
+     *
+     * @param jarItemName the raw item name of the jar that was looted
+     * @param items       items gained after the loot-jar action
+     */
+    public void processImplingLoot(String jarItemName, List<ItemStack> items)
+    {
+        if (!config.enableLootTracking()) return;
+        if (items == null || items.isEmpty()) return;
+
+        List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
+        if (drops.isEmpty()) return;
+
+        String tier = canonicaliseImplingJar(jarItemName);
+        String storedKey = IMPLING_PREFIX + tier;
+        log.info("Impling jar loot: '{}' tier='{}' ({} items)", jarItemName, tier, drops.size());
+        recordKill(storedKey, 0, 0, client.getWorld(), drops);
+    }
+
+    private static String canonicaliseImplingJar(String raw)
+    {
+        if (raw == null || raw.isEmpty()) return "Unknown";
+        String lower = raw.trim().toLowerCase();
+        String mapped = IMPLING_JAR_NAMES.get(lower);
+        if (mapped != null) return mapped;
+        // Fallback: "Foo impling jar" -> "Foo"
+        int idx = lower.indexOf(" impling jar");
+        if (idx > 0) return Character.toUpperCase(lower.charAt(0)) + lower.substring(1, idx);
+        return raw.trim();
+    }
+
+    public boolean isImplingSource(String npcName)
+    {
+        return npcName != null && npcName.startsWith(IMPLING_PREFIX);
+    }
+
+    public String stripImplingPrefix(String storedName)
+    {
+        return (storedName != null && storedName.startsWith(IMPLING_PREFIX))
+                ? storedName.substring(IMPLING_PREFIX.length())
+                : storedName;
+    }
+
     /**
      * Appends additional drops to the most recent kill record for {@code npcName}.
      *
@@ -783,7 +819,7 @@ public class LootTrackerManager
 
             for (int i = 0; i < maxChildren; i++)
             {
-                net.runelite.api.widgets.Widget w = client.getWidget(groupId, i);
+                Widget w = client.getWidget(groupId, i);
                 if (w == null) continue;
                 collectWidgetItemsDeep(w, items, WIDGET_ITEM_SEARCH_DEPTH);
             }
@@ -810,7 +846,7 @@ public class LootTrackerManager
     {
         executorService.schedule(() -> clientThread.invokeLater(() ->
         {
-            net.runelite.api.widgets.Widget parent = client.getWidget(WIDGET_CLUE, 10);
+            Widget parent = client.getWidget(RewardSources.WIDGET_CLUE, 10);
             if (parent == null)
             {
                 log.warn("Clue reward widget (73,10) not found for '{}'", sourceName);
@@ -834,16 +870,7 @@ public class LootTrackerManager
 
     // ── Widget item collection helpers ────────────────────────────────────────
 
-    private void collectWidgetItems(net.runelite.api.widgets.Widget w, List<ItemStack> items)
-    {
-        if (w.getItemId() > 0 && w.getItemQuantity() > 0)
-            items.add(new ItemStack(w.getItemId(), w.getItemQuantity()));
-    }
-
-    private void collectWidgetItemsDeep(
-            net.runelite.api.widgets.Widget w,
-            List<ItemStack> items,
-            int depth)
+    private void collectWidgetItemsDeep(Widget w, List<ItemStack> items, int depth)
     {
         if (w == null || depth < 0) return;
 
@@ -852,15 +879,33 @@ public class LootTrackerManager
 
         if (depth == 0) return;
 
-        net.runelite.api.widgets.Widget[] children = w.getChildren();
+        Widget[] children = w.getChildren();
         if (children != null)
-            for (net.runelite.api.widgets.Widget child : children)
+            for (Widget child : children)
                 collectWidgetItemsDeep(child, items, depth - 1);
 
-        net.runelite.api.widgets.Widget[] dynamic = w.getDynamicChildren();
+        Widget[] dynamic = w.getDynamicChildren();
         if (dynamic != null)
-            for (net.runelite.api.widgets.Widget child : dynamic)
+            for (Widget child : dynamic)
                 collectWidgetItemsDeep(child, items, depth - 1);
+    }
+
+    /**
+     * Reads loot from a configured {@link RewardSources.Source} entry.
+     * Uses the container path when the source has a {@code containerId},
+     * otherwise walks the widget tree.
+     */
+    public void readReward(RewardSources.Source src, int widgetGroupId)
+    {
+        if (src == null) return;
+        if (src.containerId != null)
+        {
+            readRewardContainer(src.displayName, src.containerId);
+        }
+        else
+        {
+            readWidgetLoot(src.displayName, widgetGroupId, src.widgetMaxChildren);
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -932,13 +977,18 @@ public class LootTrackerManager
     }
 
 
-    @Inject
-    private ScheduledExecutorService executor;
     /**
      * The single write path for all loot sources.
      *
      * <p>If {@code gameKC} is positive, the local {@link BossKillStats} counter
      * is synced to {@code gameKC - 1} before the kill is added.</p>
+     *
+     * <p>This intentionally does <b>NOT</b> trigger a server sync.  All server
+     * traffic happens via the 60-second scheduled task
+     * ({@link RuneAlyticsPlugin#syncDataScheduled}) which batches unsynced
+     * kills via {@link #uploadUnsyncedKills()}.  Per-kill syncing was causing
+     * one HTTP call per drop, which would melt the server and rate-limit the
+     * client during long boss sessions.</p>
      */
     private void recordKill(
             String npcName, int npcId, int combatLevel, int world,
@@ -953,29 +1003,20 @@ public class LootTrackerManager
                 ? gameKC
                 : stats.getKillCount() + 1;
 
-        // 3. Create the NEW storage-compatible record (replaces NpcKillRecord)
+        // 3. Create the storage-compatible record
         LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
         killRecord.setTimestamp(System.currentTimeMillis());
         killRecord.setKillNumber(killNumber);
         killRecord.setWorld(world);
         killRecord.setCombatLevel(combatLevel);
-        killRecord.setDrops(drops);           // Direct assignment, no conversion needed
-        killRecord.setSyncedToServer(false);  // Flag it for the batch sync worker
+        killRecord.setDrops(drops);
+        killRecord.setSyncedToServer(false); // picked up by the next batch
 
-        // 4. Update the UI stats object
+        // 4. Update the in-memory UI stats and persistent storage
         stats.addKill(killRecord);
-
-        // 5. Update persistent local storage (JSON file)
         storageManager.addKill(
                 npcName, npcId, combatLevel, killNumber,
                 world, state.getPrestige(), drops);
-
-        // 6. Trigger the Bulk Sync Batcher
-        // We replace the old single-shot sync with our new batching logic
-        if (config.syncLootToServer())
-        {
-            executor.execute(this::syncAllLocalLoot);
-        }
 
         notifyListeners(stats, killRecord);
 
@@ -983,107 +1024,6 @@ public class LootTrackerManager
                 npcName, killNumber, gameKC > 0 ? gameKC : "n/a",
                 drops.size(),
                 drops.stream().mapToLong(LootStorageData.DropRecord::getTotalValue).sum());
-    }
-
-    public void recordXpBatch(String token, String username, Map<Skill, Integer> snapshot)
-    {
-        // Ensure 'apiClient' matches the variable name for the API client in this class
-        apiClient.syncXpBatch(snapshot);
-    }
-
-    /**
-     * Synchronizes all local unsynced loot records to the server in batches.
-     * This prevents HTTP 500 errors caused by massive payloads.
-     */
-    public void syncAllLocalLoot() {
-        String username = state.getVerifiedUsername();
-        if (username == null || username.isEmpty() || !state.canSync()) return;
-
-        // 1. Retrieve the storage data
-        LootStorageData data = storageManager.getCurrentData();
-        if (data == null) {
-            data = storageManager.loadData();
-        }
-
-        if (data == null || data.getBossKills().isEmpty()) return;
-
-        // 2. Prepare containers
-        List<JsonObject> allPayloads = new ArrayList<>();
-        List<LootStorageData.KillRecord> recordsToMark = new ArrayList<>();
-
-        for (LootStorageData.BossKillData bossData : data.getBossKills().values()) {
-            String name = bossData.getNpcName();
-            int id = bossData.getNpcId();
-
-            for (LootStorageData.KillRecord record : bossData.getKills()) {
-                // Only sync if not already synced
-                if (!record.isSyncedToServer()) {
-                    JsonObject payload = apiClient.buildKillPayload(record, name, id, bossData.getPrestige());
-                    if (payload != null) {
-                        allPayloads.add(payload);
-                        recordsToMark.add(record);
-                    }
-                }
-            }
-        }
-
-        if (allPayloads.isEmpty()) return;
-
-        // 3. Process in batches
-        int batchSize = 50;
-        boolean anySuccess = false;
-
-        for (int i = 0; i < allPayloads.size(); i += batchSize) {
-            int end = Math.min(i + batchSize, allPayloads.size());
-            List<JsonObject> payloadBatch = allPayloads.subList(i, end);
-            List<LootStorageData.KillRecord> recordBatch = recordsToMark.subList(i, end);
-
-            // Send to Laravel backend
-            boolean success = apiClient.syncBulkBatch(state.getVerifiedUsername(), payloadBatch);
-
-            if (success) {
-                anySuccess = true;
-                for (LootStorageData.KillRecord record : recordBatch) {
-                    record.setSyncedToServer(true);
-                }
-            } else {
-                log.error("Bulk sync failed at batch starting at index {}. stopping sync.", i);
-                break;
-            }
-        }
-
-        // 4. Save state
-        if (anySuccess) {
-            storageManager.saveData();
-        }
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    //  SERVER SYNC
-    // ═════════════════════════════════════════════════════════════════════════
-
-    private void asyncServerSync(
-            String npcName, int npcId, int combatLevel,
-            int killNumber, int world,
-            List<LootStorageData.DropRecord> drops)
-    {
-        if (!state.canSync()) return;
-
-        executorService.submit(() -> {
-            try
-            {
-                apiClient.syncSingleKill(
-                        state.getVerifiedUsername(), npcName, npcId, combatLevel,
-                        killNumber, world, System.currentTimeMillis(),
-                        state.getPrestige(), drops);
-                storageManager.markKillsSynced(
-                        npcName, System.currentTimeMillis(), System.currentTimeMillis());
-            }
-            catch (Exception e)
-            {
-                log.error("Async sync failed for '{}' #{}", npcName, killNumber, e);
-            }
-        });
     }
 
     public void downloadKillHistoryFromServer()
@@ -1181,10 +1121,19 @@ public class LootTrackerManager
     }
 
     /**
-     * Helper to handle the actual API call and storage update for a batch
+     * Helper to handle the actual API call and storage update for one batch.
+     *
+     * <p>The per-boss {@link LootStorageData.BossKillData} map is needed so the
+     * client can populate {@code npc_id} / {@code prestige} on every kill —
+     * those fields live on the boss record, not on individual kills.</p>
      */
-    private void processBatch(String username, Map<String, List<LootStorageData.KillRecord>> byBoss) throws IOException {
-        boolean ok = apiClient.bulkSyncKills(username, byBoss);
+    private void processBatch(String username, Map<String, List<LootStorageData.KillRecord>> byBoss) throws IOException
+    {
+        LootStorageData data = storageManager.getCurrentData();
+        Map<String, LootStorageData.BossKillData> bossLookup =
+                data != null ? data.getBossKills() : Collections.emptyMap();
+
+        boolean ok = apiClient.bulkSyncKills(username, byBoss, bossLookup);
         if (ok)
         {
             for (Map.Entry<String, List<LootStorageData.KillRecord>> e : byBoss.entrySet())
@@ -1266,17 +1215,6 @@ public class LootTrackerManager
             {
                 for (LootStorageData.KillRecord kr : bd.getKills())
                 {
-                    NpcKillRecord nkr = new NpcKillRecord(
-                            bd.getNpcName(), bd.getNpcId(),
-                            kr.getCombatLevel(), kr.getWorld());
-                    nkr.setTimestamp(kr.getTimestamp());
-                    nkr.setKillNumber(kr.getKillNumber());
-
-                    for (LootStorageData.DropRecord dr : kr.getDrops())
-                        nkr.addDrop(new LootDrop(
-                                dr.getItemId(), dr.getItemName(),
-                                dr.getQuantity(), dr.getGePrice(), dr.getHighAlch()));
-
                     stats.addKill(kr);
                 }
 
@@ -1604,7 +1542,6 @@ public class LootTrackerManager
 
                 int killNumber = stats.getKillCount() + 1;
 
-                // FIX: Create the NEW KillRecord type instead of NpcKillRecord
                 LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
                 killRecord.setKillNumber(killNumber);
                 killRecord.setTimestamp(System.currentTimeMillis());

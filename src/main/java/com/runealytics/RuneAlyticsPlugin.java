@@ -7,7 +7,6 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.*;
-import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -46,46 +45,15 @@ import static com.runealytics.RuneAlyticsPanel.*;
 public class RuneAlyticsPlugin extends Plugin
 {
     // ═════════════════════════════════════════════════════════════════════════
-    //  WIDGET GROUP-IDs  (all sourced from {@link LootTrackerManager} constants)
+    //  WIDGET GROUP-IDs
+    //  All canonical values live in {@link RewardSources}.  The two widgets
+    //  that need bespoke handling (Whisperer, Wintertodt) are aliased here for
+    //  readability inside {@link #onWidgetLoaded}.
     // ═════════════════════════════════════════════════════════════════════════
-
-    /** Barrows reward chest */
-    static final int WIDGET_BARROWS            = LootTrackerManager.WIDGET_BARROWS;
-    /** Chambers of Xeric chest */
-    static final int WIDGET_COX                = LootTrackerManager.WIDGET_COX;
-    /** Theatre of Blood chest */
-    static final int WIDGET_TOB                = LootTrackerManager.WIDGET_TOB;
-    /** Tombs of Amascut chest */
-    static final int WIDGET_TOA                = LootTrackerManager.WIDGET_TOA;
-    /** Corrupted Gauntlet chest */
-    static final int WIDGET_CORRUPTED_GAUNTLET = LootTrackerManager.WIDGET_CORRUPTED_GAUNTLET;
-    /** Normal Gauntlet chest */
-    static final int WIDGET_GAUNTLET           = LootTrackerManager.WIDGET_GAUNTLET;
-    /** Nightmare / Phosani chest */
-    static final int WIDGET_NIGHTMARE          = LootTrackerManager.WIDGET_NIGHTMARE;
-    /** Zalcano chest */
-    static final int WIDGET_ZALCANO            = LootTrackerManager.WIDGET_ZALCANO;
-    /** Tempoross reward pool */
-    static final int WIDGET_TEMPOROSS          = LootTrackerManager.WIDGET_TEMPOROSS;
-    /** Wintertodt reward crate */
-    static final int WIDGET_WINTERTODT         = LootTrackerManager.WIDGET_WINTERTODT;
-    /** Clue scroll casket */
-    static final int WIDGET_CLUE               = LootTrackerManager.WIDGET_CLUE;
-    /** Royal Titans (Varlamore lair) */
-    static final int WIDGET_ROYAL_TITANS       = LootTrackerManager.WIDGET_ROYAL_TITANS;
-    /** Yama reward */
-    static final int WIDGET_YAMA               = LootTrackerManager.WIDGET_YAMA;
-    /** Fortis Colosseum chest */
-    static final int WIDGET_COLOSSEUM          = LootTrackerManager.WIDGET_COLOSSEUM;
-    /** Hespori flower chest */
-    static final int WIDGET_HESPORI            = LootTrackerManager.WIDGET_HESPORI;
-    /**
-     * The Whisperer reward interface (Desert Treasure 2, group 834).
-     *
-     * @see LootTrackerManager#WIDGET_WHISPERER
-     * @see LootTrackerManager#WIDGET_ITEM_SEARCH_DEPTH
-     */
-    static final int WIDGET_WHISPERER          = LootTrackerManager.WIDGET_WHISPERER;
+    static final int WIDGET_WHISPERER  = RewardSources.WIDGET_WHISPERER;
+    static final int WIDGET_WINTERTODT = RewardSources.WIDGET_WINTERTODT;
+    static final int WIDGET_NIGHTMARE  = RewardSources.WIDGET_NIGHTMARE;
+    static final int WIDGET_CLUE       = RewardSources.WIDGET_CLUE;
 
     // ── Timing ────────────────────────────────────────────────────────────────
     /** ms after a kill during which spawning ground items are attributed to it */
@@ -220,6 +188,24 @@ public class RuneAlyticsPlugin extends Plugin
      */
     private long pickpocketWindowExpiry = 0L;
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  IMPLING JAR STATE
+    //
+    //  Imp catches give the player an "* impling jar" inventory item which
+    //  itself doesn't have the loot — the loot only materialises when the
+    //  player picks the "Loot-jar" option on the jar.  That action gives no
+    //  XP, so the generic Hunter skilling diff misses it entirely (which is
+    //  the user-reported "if you catch an imp - will that work?" bug).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** ms after a Loot-jar click during which inventory diffs are credited to the jar. */
+    private static final long IMP_JAR_WINDOW_MS = 1_500;
+
+    /** Raw item name of the impling jar that was last looted, e.g. "Eclectic impling jar". */
+    private String  pendingImpJarName       = null;
+    private List<ItemStack> impJarInventorySnapshot = null;
+    private long    impJarWindowExpiry      = 0L;
+
     // ═════════════════════════════════════════════════════════════════════════
     //  STARTUP / SHUTDOWN
     // ═════════════════════════════════════════════════════════════════════════
@@ -303,6 +289,11 @@ public class RuneAlyticsPlugin extends Plugin
         pendingPickpocketNpc        = null;
         pickpocketInventorySnapshot = null;
         pickpocketWindowExpiry      = 0L;
+
+        // Clear impling jar state
+        pendingImpJarName       = null;
+        impJarInventorySnapshot = null;
+        impJarWindowExpiry      = 0L;
     }
 
     @Provides
@@ -383,101 +374,51 @@ public class RuneAlyticsPlugin extends Plugin
         int gid = event.getGroupId();
         log.info("WidgetLoaded: groupId={}", gid);
 
-        if (gid == WIDGET_BARROWS)
-        {
-            lastChestSource = "Barrows";
-            lootManager.readRewardContainer("Barrows", 141);
-        }
-        else if (gid == WIDGET_COX)
-        {
-            lastChestSource = "Chambers of Xeric";
-            lootManager.readRewardContainer("Chambers of Xeric", 122);
-        }
-        else if (gid == WIDGET_TOB)
-        {
-            lastChestSource = "Theatre of Blood";
-            lootManager.readRewardContainer("Theatre of Blood", 612);
-        }
-        else if (gid == WIDGET_TOA)
-        {
-            lastChestSource = "Tombs of Amascut";
-            lootManager.readRewardContainer("Tombs of Amascut", 801);
-        }
-        else if (gid == WIDGET_CORRUPTED_GAUNTLET)
-        {
-            lastChestSource = "Corrupted Gauntlet";
-            lootManager.readRewardContainer("Corrupted Gauntlet", 179);
-        }
-        else if (gid == WIDGET_GAUNTLET)
-        {
-            lastChestSource = "The Gauntlet";
-            lootManager.readRewardContainer("The Gauntlet", 179);
-        }
-        else if (gid == WIDGET_NIGHTMARE)
-        {
-            String nm = (lastChestSource != null && lastChestSource.contains("Phosani"))
-                    ? "Phosani's Nightmare" : "The Nightmare";
-            lastChestSource = nm;
-            lootManager.readRewardContainer(nm, 646);
-        }
-        else if (gid == WIDGET_ZALCANO)
-        {
-            lastChestSource = "Zalcano";
-            lootManager.readRewardContainer("Zalcano", 631);
-        }
-
+        // ── Special cases that can't use the generic registry ────────────────
         if (gid == WIDGET_WHISPERER)
         {
-            log.info("RuneAlytics: Whisperer widget 834 detected — waiting for drops (KC={})",
-                    whispererParsedKC);
-
+            log.info("Whisperer widget 834 detected — waiting for drops (KC={})", whispererParsedKC);
             whispererGroundItemWindow = true;
-
-            if (whispererFlushTask != null)
-                whispererFlushTask.cancel(false);
-
+            if (whispererFlushTask != null) whispererFlushTask.cancel(false);
             whispererFlushTask = executorService.schedule(
                     this::flushWhispererLoot, 450, TimeUnit.MILLISECONDS);
             return;
         }
-        else if (gid == WIDGET_ROYAL_TITANS)
+        if (gid == WIDGET_NIGHTMARE)
         {
-            if (lastChestSource == null) lastChestSource = "Royal Titans";
-            lootManager.readWidgetLoot(lastChestSource, WIDGET_ROYAL_TITANS, 100);
+            // Nightmare and Phosani share the same widget group; the chat
+            // detector populates lastChestSource so we can tell them apart.
+            String nm = (lastChestSource != null && lastChestSource.contains("Phosani"))
+                    ? "Phosani's Nightmare" : "The Nightmare";
+            lastChestSource = nm;
+            lootManager.readRewardContainer(nm, RewardSources.CONTAINER_NIGHTMARE);
+            return;
         }
-        else if (gid == WIDGET_YAMA)
-        {
-            lastChestSource = "Yama";
-            lootManager.readWidgetLoot("Yama", WIDGET_YAMA, 100);
-        }
-        else if (gid == WIDGET_COLOSSEUM)
-        {
-            lastChestSource = "Fortis Colosseum";
-            lootManager.readWidgetLoot("Fortis Colosseum", WIDGET_COLOSSEUM, 150);
-        }
-        else if (gid == WIDGET_HESPORI)
-        {
-            lastChestSource = "Hespori";
-            lootManager.readWidgetLoot("Hespori", WIDGET_HESPORI, 60);
-        }
-        else if (gid == WIDGET_WINTERTODT)
+        if (gid == WIDGET_WINTERTODT)
         {
             lastChestSource = "Wintertodt";
             clientThread.invokeLater(() -> {
                 inventorySnapshot        = getCurrentInventory();
                 waitingForWintertodtLoot = true;
             });
+            // Wintertodt has no clean container ID, walk the widget tree.
             lootManager.readWidgetLoot("Wintertodt", WIDGET_WINTERTODT, 80);
+            return;
         }
-        else if (gid == WIDGET_TEMPOROSS)
-        {
-            lootManager.readWidgetLoot("Tempoross", WIDGET_TEMPOROSS, 80);
-        }
-        else if (gid == WIDGET_CLUE)
+        if (gid == WIDGET_CLUE)
         {
             String src = (lastChestSource != null) ? lastChestSource : "Clue Scroll";
             lastChestSource = null;
             lootManager.readClueReward(src);
+            return;
+        }
+
+        // ── Generic registry-driven reads ────────────────────────────────────
+        RewardSources.Source src = RewardSources.BY_WIDGET.get(gid);
+        if (src != null)
+        {
+            lastChestSource = src.displayName;
+            lootManager.readReward(src, gid);
         }
     }
 
@@ -519,10 +460,48 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         if (!config.enableLootTracking()) return;
-        if (event.getContainerId() != InventoryID.INVENTORY.getId()) return;
+
+        // ── Wilderness Loot Chest & Lunar (Moons of Peril) Chest ─────────────
+        // These chests don't fire WidgetLoaded with a usable group for us, but
+        // the inventory container itself can be read directly when it fills.
+        int containerId = event.getContainerId();
+        if (containerId == RewardSources.CONTAINER_WILDY_LOOT_CHEST)
+        {
+            captureRewardContainer("Wilderness Loot Chest", event.getItemContainer());
+            return;
+        }
+        if (containerId == RewardSources.CONTAINER_LUNAR_CHEST)
+        {
+            captureRewardContainer("Moons of Peril", event.getItemContainer());
+            return;
+        }
+
+        if (containerId != InventoryID.INVENTORY.getId()) return;
 
         clientThread.invokeLater(() ->
         {
+            // ── Impling jar loot (no XP, so the skilling diff misses it) ──────
+            if (pendingImpJarName != null && impJarInventorySnapshot != null)
+            {
+                if (System.currentTimeMillis() > impJarWindowExpiry)
+                {
+                    pendingImpJarName       = null;
+                    impJarInventorySnapshot = null;
+                }
+                else
+                {
+                    List<ItemStack> currentInv = getCurrentInventory();
+                    List<ItemStack> gained     = diffInventory(impJarInventorySnapshot, currentInv);
+                    if (!gained.isEmpty())
+                    {
+                        String jarName = pendingImpJarName;
+                        pendingImpJarName       = null;
+                        impJarInventorySnapshot = null;
+                        lootManager.processImplingLoot(jarName, gained);
+                    }
+                }
+            }
+
             // ── Tempoross / Wintertodt ────────────────────────────────────────
             if ((waitingForTemporossLoot || waitingForWintertodtLoot) && inventorySnapshot != null)
             {
@@ -615,34 +594,47 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onMenuOptionClicked(MenuOptionClicked event)
     {
-        if (!config.enableLootTracking() || !config.enablePickpocketTracking()) return;
+        if (!config.enableLootTracking()) return;
 
         String option = event.getMenuOption();
         if (option == null) return;
 
-        // Accept both the modern and legacy menu option spellings
-        if (!"Pickpocket".equalsIgnoreCase(option) && !"Pick-pocket".equalsIgnoreCase(option))
-            return;
-
-        // Strip RuneScape HTML colour tags from the NPC / stall name
         String rawTarget = event.getMenuTarget();
         if (rawTarget == null || rawTarget.isEmpty()) return;
 
-        String npcName = rawTarget.replaceAll("<[^>]*>", "").trim();
-        if (npcName.isEmpty()) return;
+        String targetName = rawTarget.replaceAll("<[^>]*>", "").trim();
+        if (targetName.isEmpty()) return;
 
-        log.debug("Pickpocket click detected: option='{}' target='{}'", option, npcName);
+        // ── Impling jar loot ─────────────────────────────────────────────────
+        // The menu option is "Loot-jar" (or "Loot" in some clients) and the
+        // target is the jar item name (e.g. "Eclectic impling jar").
+        if (("Loot-jar".equalsIgnoreCase(option) || "Loot".equalsIgnoreCase(option))
+                && targetName.toLowerCase().endsWith("impling jar"))
+        {
+            pendingImpJarName  = targetName;
+            impJarWindowExpiry = System.currentTimeMillis() + IMP_JAR_WINDOW_MS;
+            clientThread.invokeLater(() -> {
+                impJarInventorySnapshot = getCurrentInventory();
+                log.debug("Impling jar snapshot for '{}' ({} slots)", targetName,
+                        impJarInventorySnapshot.size());
+            });
+            return;
+        }
 
-        // Snapshot the inventory on the next client tick (invokeLater ensures
-        // the snapshot is taken BEFORE the server-side result is applied)
-        pendingPickpocketNpc   = npcName;
+        // ── Pickpocket / Thieving (only if enabled) ──────────────────────────
+        if (!config.enablePickpocketTracking()) return;
+        if (!"Pickpocket".equalsIgnoreCase(option) && !"Pick-pocket".equalsIgnoreCase(option))
+            return;
+
+        log.debug("Pickpocket click detected: option='{}' target='{}'", option, targetName);
+        pendingPickpocketNpc   = targetName;
         pickpocketWindowExpiry = System.currentTimeMillis() + PICKPOCKET_WINDOW_MS;
 
         clientThread.invokeLater(() ->
         {
             pickpocketInventorySnapshot = getCurrentInventory();
             log.debug("Pickpocket snapshot taken for '{}' ({} slots occupied)",
-                    npcName, pickpocketInventorySnapshot.size());
+                    targetName, pickpocketInventorySnapshot.size());
         });
     }
 
@@ -898,6 +890,14 @@ public class RuneAlyticsPlugin extends Plugin
             pickpocketInventorySnapshot = null;
         }
 
+        // ── Expire impling jar attribution window ─────────────────────────────
+        if (pendingImpJarName != null && System.currentTimeMillis() > impJarWindowExpiry)
+        {
+            log.debug("Impling jar window ticked out for '{}'", pendingImpJarName);
+            pendingImpJarName       = null;
+            impJarInventorySnapshot = null;
+        }
+
         // ── Expire skilling sessions ──────────────────────────────────────────
         long nowMs = System.currentTimeMillis();
         skillingExpiry.entrySet().removeIf(entry -> {
@@ -1140,6 +1140,29 @@ public class RuneAlyticsPlugin extends Plugin
             if (item != null && item.getId() > 0 && item.getQuantity() > 0)
                 items.add(new ItemStack(item.getId(), item.getQuantity()));
         return items;
+    }
+
+    /**
+     * Reads a freshly-filled reward container and dispatches the items as
+     * {@code source} loot.  Used for chests that don't surface a usable
+     * WidgetLoaded event (Wilderness Loot Chest, Lunar/Moons of Peril Chest).
+     */
+    private void captureRewardContainer(String source, ItemContainer container)
+    {
+        if (container == null) return;
+        Item[] arr = container.getItems();
+        if (arr == null || arr.length == 0) return;
+
+        List<ItemStack> items = new ArrayList<>();
+        for (Item item : arr)
+        {
+            if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+                items.add(new ItemStack(item.getId(), item.getQuantity()));
+        }
+        if (items.isEmpty()) return;
+
+        log.info("Reward container '{}': {} items", source, items.size());
+        lootManager.processPlayerLoot(source, items);
     }
 
     /**
