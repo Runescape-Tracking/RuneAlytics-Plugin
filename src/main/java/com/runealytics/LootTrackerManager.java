@@ -650,8 +650,7 @@ public class LootTrackerManager
         LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
         if (petItem != null)
         {
-            net.runelite.client.game.ItemComposition comp =
-                    itemManager.getItemComposition(petItem.getId());
+            ItemComposition comp = itemManager.getItemComposition(petItem.getId());
             drop.setItemId   (petItem.getId());
             drop.setItemName (comp.getName());
             drop.setQuantity (1);
