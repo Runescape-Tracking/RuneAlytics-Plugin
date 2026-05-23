@@ -394,6 +394,100 @@ public class LootTrackerManager
     }
 
     // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 1b – ZERO-LOOT NPC KILLS
+    //
+    //  RuneLite's NpcLootReceived event only fires when the kill produced at
+    //  least one item.  Many NPCs (low-level mobs, some bosses on a dry kill)
+    //  die without dropping anything, which silently dropped the kill from
+    //  every counter that hangs off NpcLootReceived.
+    //
+    //  RuneAlyticsPlugin now also watches ActorDeath + HitsplatApplied to
+    //  detect a "I killed it" event that is independent of loot, and routes
+    //  those kills here so the per-NPC kill count stays accurate.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * NPCs whose drops arrive via a reward chest / widget read, not via
+     * {@link net.runelite.client.events.NpcLootReceived}.
+     *
+     * <p>These bosses must <b>NOT</b> be tracked by the zero-loot path because
+     * the chest-read path ({@code processPlayerLoot}) is the canonical kill
+     * recorder for them.  Allowing the ActorDeath path to also count would
+     * double-count every raid clear.</p>
+     */
+    private static final Set<Integer> CHEST_LOOT_NPC_IDS = ImmutableSet.<Integer>builder()
+            // CoX (Great Olm head / hands)
+            .add(7554).add(7555).add(7556)
+            // ToB
+            .add(10674).add(10698).add(10702).add(10704).add(10707).add(10847)
+            // ToA
+            .add(11750).add(11751).add(11752).add(11753).add(11754).add(11770).add(11771)
+            // Barrows brothers (chest at end)
+            .add(2025).add(2026).add(2027).add(2028).add(2029).add(2030)
+            // Gauntlet / Corrupted Gauntlet (Hunllef)
+            .add(9035).add(9036)
+            // Zalcano (chest)
+            .add(9050)
+            // The Nightmare / Phosani's Nightmare (chest)
+            .add(9415).add(9416).add(9425).add(9426)
+            // Moons of Peril (lunar chest)
+            .add(13010).add(13011).add(13012).add(13013).add(13014).add(13015)
+            // Yama (chest)
+            .add(12821).add(12822).add(12823)
+            // Royal Titans (chest)
+            .add(13751).add(13752).add(13753).add(13754).add(13755).add(13756).add(13757).add(13758)
+            // The Hueycoatl (chest)
+            .add(14000).add(14001).add(14002).add(14003).add(14013).add(14014)
+            // The Whisperer (special ground-item flow, already counted there)
+            .add(12205).add(12223).add(12224).add(12225).add(12226).add(12227)
+            // Fortis Colosseum (widget read)
+            .add(12816).add(12817).add(12818)
+            .build();
+
+    /**
+     * Records an NPC kill that produced no loot.
+     *
+     * <p>Respects the same filters as {@link #processNpcLoot}:</p>
+     * <ul>
+     *   <li>Loot-tracking config must be enabled</li>
+     *   <li>NPC must be a tracked boss <em>or</em> {@code trackAllNpcs} must be on</li>
+     *   <li>NPC must not be in {@link #CHEST_LOOT_NPC_IDS}</li>
+     * </ul>
+     *
+     * <p>Called from {@code RuneAlyticsPlugin} after {@code ActorDeath} on an
+     * NPC the local player damaged, when no {@code NpcLootReceived} arrived
+     * within the grace window.</p>
+     *
+     * @param npc the dying NPC
+     */
+    public void processZeroLootKill(NPC npc)
+    {
+        if (!config.enableLootTracking()) return;
+        if (npc == null || npc.getName() == null) return;
+
+        int npcId = npc.getId();
+        if (CHEST_LOOT_NPC_IDS.contains(npcId))
+        {
+            log.debug("Zero-loot kill suppressed for chest-based NPC '{}' (id={})",
+                    npc.getName(), npcId);
+            return;
+        }
+
+        String name = normalizeBossName(npc.getName());
+        boolean isBoss = isBoss(npcId, name);
+
+        if (!isBoss && !config.trackAllNpcs())
+        {
+            log.debug("Zero-loot kill filtered (not a tracked boss): '{}' id={}", name, npcId);
+            return;
+        }
+
+        log.info("Zero-loot kill: '{}' id={} cb={}", name, npcId, npc.getCombatLevel());
+        recordKill(name, npcId, npc.getCombatLevel(),
+                client.getWorld(), Collections.emptyList());
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
     //  LOOT PATH 2 – PLAYER / CHEST LOOT  (PlayerLootReceived + Widget reads)
     // ═════════════════════════════════════════════════════════════════════════
 

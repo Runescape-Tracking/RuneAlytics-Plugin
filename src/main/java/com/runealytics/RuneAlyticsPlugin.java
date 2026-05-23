@@ -206,6 +206,58 @@ public class RuneAlyticsPlugin extends Plugin
     private List<ItemStack> impJarInventorySnapshot = null;
     private long    impJarWindowExpiry      = 0L;
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  ZERO-LOOT KILL TRACKING
+    //
+    //  RuneLite's NpcLootReceived fires only when the kill produced loot, so
+    //  every dry kill on a low-level monster (and many bosses on RNG zero
+    //  drops) was being lost.  We close that gap by:
+    //
+    //    1. Tracking every NPC the local player damaged (HitsplatApplied
+    //       with hitsplat.isMine())
+    //    2. On ActorDeath for an NPC we damaged, queue a pending zero-loot
+    //       kill that flushes ZERO_LOOT_FLUSH_TICKS game ticks later
+    //    3. If NpcLootReceived arrives for that NPC in the meantime the
+    //       pending entry is cancelled (the normal loot path handles it)
+    //
+    //  Chest-only bosses (raids, Nightmare, Yama, Royal Titans, etc.) are
+    //  excluded inside LootTrackerManager#processZeroLootKill so the chest
+    //  read path stays the single source of truth for them.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Game ticks to wait after {@link ActorDeath} before flushing a pending
+     * zero-loot kill.  Long enough for {@code NpcLootReceived} (which usually
+     * arrives on the same tick or the very next one) to cancel the entry, but
+     * short enough that the kill counter feels live.  3 ticks ≈ 1.8 s.
+     */
+    private static final int ZERO_LOOT_FLUSH_TICKS = 3;
+
+    /** NPC indexes the local player damaged this combat. */
+    private final Map<Integer, NPC> damagedNpcs = new HashMap<>();
+
+    /**
+     * NPCs that have entered the dying animation and are awaiting either a
+     * cancelling {@link NpcLootReceived} or a scheduled flush as a zero-loot
+     * kill.  Keyed by NPC index.
+     */
+    private final Map<Integer, PendingDeath> pendingDeaths = new HashMap<>();
+
+    /** Plugin-local game tick counter; incremented every {@link #onGameTick}. */
+    private long gameTickCount = 0;
+
+    private static final class PendingDeath
+    {
+        final NPC  npc;
+        final long flushAtTick;
+
+        PendingDeath(NPC npc, long flushAtTick)
+        {
+            this.npc         = npc;
+            this.flushAtTick = flushAtTick;
+        }
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     //  STARTUP / SHUTDOWN
     // ═════════════════════════════════════════════════════════════════════════
@@ -294,6 +346,10 @@ public class RuneAlyticsPlugin extends Plugin
         pendingImpJarName       = null;
         impJarInventorySnapshot = null;
         impJarWindowExpiry      = 0L;
+
+        // Clear zero-loot kill tracking (damage history is per-world)
+        damagedNpcs.clear();
+        pendingDeaths.clear();
     }
 
     @Provides
@@ -314,6 +370,11 @@ public class RuneAlyticsPlugin extends Plugin
         NPC npc = event.getNpc();
         if (npc == null) return;
 
+        // Loot arrived → cancel any pending zero-loot kill for this NPC so
+        // we don't double-count.
+        pendingDeaths.remove(npc.getIndex());
+        damagedNpcs.remove(npc.getIndex());
+
         lastKilledBoss = npc;
         lastKillTime   = Instant.now();
 
@@ -333,6 +394,61 @@ public class RuneAlyticsPlugin extends Plugin
             items.add(new ItemStack(i.getId(), i.getQuantity()));
 
         lootManager.processNpcLoot(npc, items);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LOOT PATH 1b – ZERO-LOOT NPC KILLS
+    //
+    //  See the comment block on the ZERO_LOOT_FLUSH_TICKS constant for the
+    //  full design.  These three handlers feed the pendingDeaths map which
+    //  onGameTick drains.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    @Subscribe
+    public void onHitsplatApplied(HitsplatApplied event)
+    {
+        if (!config.enableLootTracking()) return;
+
+        Actor target = event.getActor();
+        if (!(target instanceof NPC)) return;
+
+        Hitsplat hs = event.getHitsplat();
+        if (hs == null || !hs.isMine()) return;
+
+        damagedNpcs.put(((NPC) target).getIndex(), (NPC) target);
+    }
+
+    @Subscribe
+    public void onActorDeath(ActorDeath event)
+    {
+        if (!config.enableLootTracking()) return;
+
+        Actor actor = event.getActor();
+        if (!(actor instanceof NPC)) return;
+
+        NPC npc = (NPC) actor;
+        if (!damagedNpcs.containsKey(npc.getIndex())) return;
+
+        // ActorDeath fires at the *start* of the death animation, but
+        // NpcLootReceived can lag by 1–2 ticks (loot table rolls server-side,
+        // ground items take a tick to spawn).  Wait ZERO_LOOT_FLUSH_TICKS
+        // before deciding this kill produced nothing.
+        pendingDeaths.put(
+                npc.getIndex(),
+                new PendingDeath(npc, gameTickCount + ZERO_LOOT_FLUSH_TICKS));
+    }
+
+    @Subscribe
+    public void onNpcDespawned(NpcDespawned event)
+    {
+        NPC npc = event.getNpc();
+        if (npc == null) return;
+
+        // Drop the damage-tracking entry once the NPC is gone.  We deliberately
+        // leave any pendingDeaths entry in place: a despawn often happens after
+        // ActorDeath but before the flush window closes, and we still want to
+        // record the zero-loot kill.
+        damagedNpcs.remove(npc.getIndex());
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -858,6 +974,23 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onGameTick(GameTick tick)
     {
+        gameTickCount++;
+
+        // ── Flush zero-loot kills ──────────────────────────────────────────────
+        // ActorDeath entries that aged out without a cancelling
+        // NpcLootReceived are promoted to zero-loot kills here.
+        if (!pendingDeaths.isEmpty())
+        {
+            final long now = gameTickCount;
+            pendingDeaths.entrySet().removeIf(e ->
+            {
+                if (now < e.getValue().flushAtTick) return false;
+                lootManager.processZeroLootKill(e.getValue().npc);
+                damagedNpcs.remove(e.getKey());
+                return true;
+            });
+        }
+
         // ── Expire stale boss ground-item attribution ──────────────────────────
         if (lastKillTime != null
                 && ChronoUnit.SECONDS.between(lastKillTime, Instant.now())
