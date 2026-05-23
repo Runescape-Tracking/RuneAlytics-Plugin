@@ -91,7 +91,7 @@ public class BossKillStats
                 agg.totalQuantity += drop.getQuantity();
                 agg.totalValue    += drop.getTotalValue();
                 agg.dropCount++;
-                if (drop.isPet()) agg.pet = true;
+                if (drop.isPet()) agg.setPet(true);
             }
         }
 
@@ -121,13 +121,14 @@ public class BossKillStats
     @Setter
     public static class AggregatedDrop
     {
-        private int    itemId;
-        private String itemName;
-        private int    totalQuantity;
-        private long   totalValue;
-        private int    dropCount;
-        private long   gePrice;
-        private long   highAlchValue;
+        private int     itemId;
+        private String  itemName;
+        private int     totalQuantity;
+        private long    totalValue;
+        private int     dropCount;
+        private long    gePrice;
+        private long    highAlchValue;
+        private boolean pet;
 
         public AggregatedDrop(int itemId, String itemName,
                               int totalQuantity, long totalValue, int dropCount,
@@ -140,6 +141,7 @@ public class BossKillStats
             this.dropCount     = dropCount;
             this.gePrice       = gePrice;
             this.highAlchValue = highAlchValue;
+            this.pet           = false;
         }
     }
 }
