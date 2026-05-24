@@ -36,6 +36,7 @@ public class MatchmakingManager
 
     private int     tickCounter;
     private boolean requestInFlight;
+    private boolean acceptInFlight;
     private boolean beginInFlight;
     private boolean reportInFlight;
     private boolean itemsReportInFlight;
@@ -156,13 +157,9 @@ public class MatchmakingManager
      */
     public void onGameTick()
     {
-        if (session == null && currentInventorySnapshot == null)
-        {
-            // No active match yet but still capture snapshots so the very
-            // first loadMatch() call already has item data to send.
-        }
-
-        // ── Always refresh gear snapshot on the client thread ─────────────────
+        // Always refresh gear snapshot on the client thread so every outbound
+        // call (poll, accept, begin-match) carries up-to-date item data for
+        // server-side validation.  Safe even when there is no active match.
         refreshSnapshots();
 
         if (session == null || requestInFlight)
@@ -224,6 +221,7 @@ public class MatchmakingManager
         session                 = null;
         tickCounter             = 0;
         requestInFlight         = false;
+        acceptInFlight          = false;
         beginInFlight           = false;
         reportInFlight          = false;
         itemsReportInFlight     = false;
@@ -356,7 +354,7 @@ public class MatchmakingManager
 
     private void attemptAcceptMatchIfNeeded()
     {
-        if (session == null || session.isLocalJoined()) return;
+        if (session == null || session.isLocalJoined() || acceptInFlight) return;
 
         String token            = session.getLocalToken();
         if (token == null || token.isEmpty()) return;
@@ -373,6 +371,8 @@ public class MatchmakingManager
         // Use current snapshot (always populated by refreshSnapshots above)
         final JsonArray inventory = currentInventorySnapshot != null ? currentInventorySnapshot : new JsonArray();
         final JsonArray gear      = currentGearSnapshot      != null ? currentGearSnapshot      : new JsonArray();
+
+        acceptInFlight = true;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
@@ -393,8 +393,20 @@ public class MatchmakingManager
                 session = result.getSession();
                 updateResultStatus();
             }
-            // On token_refresh, the snapshot is re-read on the next game tick
-            // before attemptAcceptMatchIfNeeded fires again — no explicit clear needed.
+            else if (result.isTokenRefresh())
+            {
+                // Token expired — allow re-attempt on next tick with refreshed token
+                acceptInFlight = false;
+            }
+            // On other failures: keep acceptInFlight=true to prevent retry loop.
+            // The next poll will update session.isLocalJoined() if server already
+            // accepted, which will naturally stop further attempts.
+            // acceptInFlight is cleared in reset() when user starts a new match.
+
+            if (result.isSuccess())
+            {
+                acceptInFlight = false;
+            }
         });
     }
 

@@ -230,7 +230,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         JPanel row = new JPanel(new BorderLayout(8, 0));
         row.setOpaque(false);
         row.setAlignmentX(LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 54));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 66));
 
         // left: avatar
         row.add(avatar, BorderLayout.WEST);
@@ -536,12 +536,12 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
         if (firstError != null)
         {
-            lbl.setText("✗ " + firstError);
+            lbl.setText("<html>✗ " + firstError + "</html>");
             lbl.setForeground(COL_RED);
         }
         else if (firstWarning != null)
         {
-            lbl.setText("⚠ " + firstWarning);
+            lbl.setText("<html>⚠ " + firstWarning + "</html>");
             lbl.setForeground(new Color(230, 180, 40));
         }
         else

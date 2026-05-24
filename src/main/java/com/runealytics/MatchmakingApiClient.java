@@ -184,6 +184,7 @@ public class MatchmakingApiClient
         RequestBody body    = RequestBody.create(RuneAlyticsHttp.JSON, gson.toJson(payload));
         Request     request = new Request.Builder()
                 .url(config.apiUrl() + path)
+                .addHeader("Accept", "application/json")
                 .post(body)
                 .build();
 
@@ -229,7 +230,12 @@ public class MatchmakingApiClient
         }
         catch (Exception ex)
         {
-            log.debug("Failed to parse matchmaking response: {}", ex.getMessage());
+            // Log the first 200 chars of the body so we can diagnose what
+            // the server actually returned (HTML error page, PHP notice, etc.)
+            String preview = responseBody.length() > 200
+                    ? responseBody.substring(0, 200) + "…"
+                    : responseBody;
+            log.debug("Failed to parse matchmaking response: {} | body: {}", ex.getMessage(), preview);
             return null;
         }
     }
