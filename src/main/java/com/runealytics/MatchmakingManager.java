@@ -641,7 +641,7 @@ public class MatchmakingManager
 
         if (result.isTokenRefresh())
         {
-            log.info("Matchmaking token refresh requested by server");
+            log.debug("Matchmaking token refresh requested by server");
             refreshToken();
         }
     }
