@@ -203,6 +203,20 @@ public interface RunealyticsConfig extends Config
         return true;
     }
 
+    @ConfigItem(
+            keyName = "gridMasterMode",
+            name = "Grid Master Mode",
+            description = "Tags all loot and XP syncs as Grid Master challenge mode. "
+                    + "Enable when participating in a Grid Master run so your data is "
+                    + "separated from regular and ironman profiles on RuneAlytics.",
+            section = lootSection,
+            position = 10
+    )
+    default boolean gridMasterMode()
+    {
+        return false;
+    }
+
     // ==================== ADVANCED ====================
 
     @ConfigItem(

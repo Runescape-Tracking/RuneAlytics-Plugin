@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.*;
+import java.util.EnumSet;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -427,6 +428,9 @@ public class RuneAlyticsPlugin extends Plugin
 
         NPC npc = event.getNpc();
         if (npc == null) return;
+
+        // Capture game mode at kill time so the record reflects the world in use now
+        updateCurrentGameMode();
 
         // Loot arrived → cancel any pending zero-loot kill for this NPC so
         // we don't double-count.
@@ -1139,7 +1143,10 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGIN_SCREEN)
         {
             state.setLoggedIn(false);
-            SwingUtilities.invokeLater(() -> mainPanel.showLoggedOutState());
+            SwingUtilities.invokeLater(() -> {
+                mainPanel.showLoggedOutState();
+                injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
+            });
             return;
         }
 
@@ -1148,9 +1155,11 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGGED_IN)
         {
             state.setLoggedIn(true);
-            // Refresh verification panel immediately so the button enables
-            SwingUtilities.invokeLater(() ->
-                    injector.getInstance(RuneAlyticsVerificationPanel.class).refreshLoginState());
+            // Refresh verification + settings panels so code field enables on login
+            SwingUtilities.invokeLater(() -> {
+                injector.getInstance(RuneAlyticsVerificationPanel.class).refreshLoginState();
+                injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
+            });
 
             String username = client.getLocalPlayer() != null
                     ? client.getLocalPlayer().getName()
@@ -1259,6 +1268,9 @@ public class RuneAlyticsPlugin extends Plugin
         previousXp.put(skill, current);
 
         if (gained <= 0 || gained < config.minXpGain()) return;
+
+        // Snapshot game mode at XP-gain time (player may have world-hopped)
+        updateCurrentGameMode();
 
         // ── Delegate XP batching to XpTrackerManager ──────────────────────────
         // The manager opens a 30-second window on the first call and accumulates
@@ -1485,6 +1497,95 @@ public class RuneAlyticsPlugin extends Plugin
         log.info("Auto-verify       : {}", config.enableAutoVerification());
         log.info("API URL           : {}", config.apiUrl());
         log.info("=========================");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  GAME-MODE DETECTION
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Resolves the current game mode by checking world type first (temporary
+     * session modes like Leagues/Deadman override the account type), then
+     * falling back to the permanent account restriction.
+     *
+     * <p>World type takes precedence: an Ironman playing Leagues records as
+     * {@code "leagues"}, not {@code "ironman"}.</p>
+     *
+     * <p>Grid Master is a plugin config toggle (not a native OSRS concept) and
+     * overrides every other check when enabled.</p>
+     *
+     * @return one of "regular", "ironman", "leagues", "deadman",
+     *         "fresh_start", or "grid_master"
+     */
+    private String determineGameMode()
+    {
+        if (config.gridMasterMode()) return "grid_master";
+
+        EnumSet<WorldType> worldTypes = client.getWorldType();
+        if (worldTypes != null)
+        {
+            if (worldTypes.contains(WorldType.DEADMAN))           return "deadman";
+            if (worldTypes.contains(WorldType.SEASONAL))          return "leagues";
+            if (worldTypes.contains(WorldType.FRESH_START_WORLD)) return "fresh_start";
+        }
+
+        AccountType accountType = client.getAccountType();
+        if (accountType != null)
+        {
+            switch (accountType)
+            {
+                case IRONMAN:
+                case HARDCORE_IRONMAN:
+                case ULTIMATE_IRONMAN:
+                case GROUP_IRONMAN:
+                case HARDCORE_GROUP_IRONMAN:
+                case UNRANKED_GROUP_IRONMAN:
+                    return "ironman";
+                default:
+                    return "regular";
+            }
+        }
+        return "regular";
+    }
+
+    /**
+     * Returns the specific OSRS account subtype for fine-grained server-side
+     * filtering, independent of the current world mode.
+     *
+     * <p>For example, an Ironman on a Leagues world has
+     * {@code game_mode="leagues"} but {@code account_type="ironman"}.</p>
+     *
+     * @return one of "normal", "ironman", "hardcore_ironman",
+     *         "ultimate_ironman", "group_ironman",
+     *         "hardcore_group_ironman", "unranked_group_ironman"
+     */
+    private String determineAccountSubtype()
+    {
+        AccountType accountType = client.getAccountType();
+        if (accountType == null) return "normal";
+        switch (accountType)
+        {
+            case IRONMAN:                return "ironman";
+            case HARDCORE_IRONMAN:       return "hardcore_ironman";
+            case ULTIMATE_IRONMAN:       return "ultimate_ironman";
+            case GROUP_IRONMAN:          return "group_ironman";
+            case HARDCORE_GROUP_IRONMAN: return "hardcore_group_ironman";
+            case UNRANKED_GROUP_IRONMAN: return "unranked_group_ironman";
+            default:                     return "normal";
+        }
+    }
+
+    /**
+     * Snapshots the current game mode and account subtype into {@link RuneAlyticsState}
+     * so they are available to API clients without re-reading the client on the EDT.
+     * Call this at the start of any loot or XP event handler.
+     */
+    private void updateCurrentGameMode()
+    {
+        state.setCurrentGameMode(determineGameMode());
+        state.setCurrentAccountSubtype(determineAccountSubtype());
+        log.debug("[GameMode] mode={} subtype={} world={}",
+                state.getCurrentGameMode(), state.getCurrentAccountSubtype(), client.getWorld());
     }
 
     private BufferedImage loadPluginIcon()

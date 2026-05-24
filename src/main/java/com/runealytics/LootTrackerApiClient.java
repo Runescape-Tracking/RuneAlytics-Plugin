@@ -107,7 +107,11 @@ public class LootTrackerApiClient
 
         if (killPayloads.isEmpty()) return true;
 
-        JsonObject envelope = LootKillJsonBuilder.buildBulkEnvelope(username, killPayloads);
+        JsonObject envelope = LootKillJsonBuilder.buildBulkEnvelope(
+                username,
+                state.getCurrentGameMode(),
+                state.getCurrentAccountSubtype(),
+                killPayloads);
         return postJson(LOOT_BULK_SYNC_PATH, envelope, "bulk-sync " + killPayloads.size() + " kills");
     }
 

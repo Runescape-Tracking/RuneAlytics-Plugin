@@ -69,6 +69,8 @@ public final class LootKillJsonBuilder
         payload.addProperty("world",        kill.getWorld());
         payload.addProperty("timestamp",    kill.getTimestamp());
         payload.addProperty("prestige",     prestige);
+        payload.addProperty("game_mode",    kill.getGameMode()    != null ? kill.getGameMode()    : "regular");
+        payload.addProperty("account_type", kill.getAccountType() != null ? kill.getAccountType() : "normal");
 
         JsonArray dropsArr = new JsonArray();
         long totalValue = 0;
@@ -92,13 +94,28 @@ public final class LootKillJsonBuilder
     }
 
     /**
-     * Wraps a batch of kill payloads inside the envelope the bulk endpoints
-     * expect: {@code { "username": ..., "kills": [...] }}.
+     * Wraps a batch of kill payloads inside the envelope the bulk endpoints expect.
+     *
+     * <p>Schema: {@code { "username": ..., "game_mode": ..., "account_type": ..., "kills": [...] }}.
+     * {@code game_mode} and {@code account_type} at the top level represent the session-level
+     * default; individual kill objects may carry their own values if the mode changed
+     * mid-session (e.g. world-hop from regular to a Leagues world).</p>
+     *
+     * @param username       verified RSN
+     * @param gameMode       session-level game mode (e.g. "regular", "leagues")
+     * @param accountSubtype session-level account subtype (e.g. "normal", "ironman")
+     * @param kills          list of per-kill payloads built by {@link #buildKill}
      */
-    public static JsonObject buildBulkEnvelope(String username, List<JsonObject> kills)
+    public static JsonObject buildBulkEnvelope(
+            String username,
+            String gameMode,
+            String accountSubtype,
+            List<JsonObject> kills)
     {
         JsonObject envelope = new JsonObject();
-        envelope.addProperty("username", username);
+        envelope.addProperty("username",     username);
+        envelope.addProperty("game_mode",    gameMode      != null ? gameMode      : "regular");
+        envelope.addProperty("account_type", accountSubtype != null ? accountSubtype : "normal");
 
         JsonArray arr = new JsonArray();
         for (JsonObject k : kills) arr.add(k);

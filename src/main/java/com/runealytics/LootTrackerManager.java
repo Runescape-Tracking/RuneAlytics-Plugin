@@ -1181,6 +1181,8 @@ public class LootTrackerManager
         killRecord.setCombatLevel(combatLevel);
         killRecord.setDrops(drops);
         killRecord.setSyncedToServer(false); // picked up by the next batch
+        killRecord.setGameMode(state.getCurrentGameMode());
+        killRecord.setAccountType(state.getCurrentAccountSubtype());
 
         // 4. Update the in-memory UI stats and persistent storage
         stats.addKill(killRecord);
@@ -1777,6 +1779,8 @@ public class LootTrackerManager
                 killRecord.setCombatLevel(0);
                 killRecord.setDrops(drops); // We can just pass the list directly
                 killRecord.setSyncedToServer(false); // Mark for bulk sync later
+                killRecord.setGameMode(state.getCurrentGameMode());
+                killRecord.setAccountType(state.getCurrentAccountSubtype());
 
                 // This now matches the BossKillStats.addKill(KillRecord) signature
                 stats.addKill(killRecord);

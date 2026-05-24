@@ -72,6 +72,22 @@ public class LootStorageData
 
         @SerializedName("synced_to_server")
         private boolean syncedToServer;
+
+        /**
+         * Game mode at the time this kill was recorded.
+         * Values: "regular", "ironman", "leagues", "deadman", "fresh_start", "grid_master".
+         * Defaults to "regular" for records loaded from older storage files.
+         */
+        @SerializedName("game_mode")
+        private String gameMode = "regular";
+
+        /**
+         * OSRS account subtype at the time this kill was recorded.
+         * Values: "normal", "ironman", "hardcore_ironman", "ultimate_ironman",
+         * "group_ironman", "hardcore_group_ironman", "unranked_group_ironman".
+         */
+        @SerializedName("account_type")
+        private String accountType = "normal";
     }
 
     @Data

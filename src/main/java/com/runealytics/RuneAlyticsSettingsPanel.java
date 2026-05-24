@@ -1,10 +1,11 @@
 package com.runealytics;
 
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.PluginPanel;
-import net.runelite.client.ui.components.materialtabs.MaterialTab;
-import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
+import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 
 import javax.inject.Inject;
@@ -13,7 +14,12 @@ import javax.swing.*;
 import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.DocumentFilter;
 import java.awt.*;
+import java.awt.image.BufferedImage;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.ScheduledExecutorService;
@@ -22,88 +28,90 @@ import java.util.concurrent.ScheduledExecutorService;
 @Singleton
 public class RuneAlyticsSettingsPanel extends JPanel
 {
-    private static final DateTimeFormatter TIME_FORMATTER    = DateTimeFormatter.ofPattern("HH:mm:ss");
-    private static final String           RUNEALYTICS_URL   = "https://www.runealytics.com";
+    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
 
-    // ── Palette ───────────────────────────────────────────────────────────────
-    /** Gold used for the "RUNEALYTICS" brand title */
-    private static final Color GOLD_COLOR         = new Color(215, 175, 55);
+    private static final String RUNEALYTICS_URL = "https://www.runealytics.com";
+    private static final String DISCORD_URL     = "https://runealytics.com/discord";
+
+    // ── Colour palette ────────────────────────────────────────────────────────
+    /** Gold brand colour for the logo title */
+    private static final Color GOLD_COLOR        = new Color(215, 175, 55);
     /** Teal used for section headers and tagline */
-    private static final Color TEAL_COLOR         = new Color(82, 196, 196);
-    /** Purple used for the primary Link Account CTA */
-    private static final Color LINK_BTN_BG        = new Color(108, 76, 203);
-    /** Amber border on the 3rd-party warning card */
-    private static final Color WARN_BORDER        = new Color(200, 160, 0, 200);
-    /** Gold background on the Continue confirmation button */
-    private static final Color CONTINUE_BTN_BG    = new Color(200, 160, 0);
-
-    // ── MaterialTabGroup plumbing ─────────────────────────────────────────────
-    /** Content area managed by {@link MaterialTabGroup}; swaps its child on tab select. */
-    private final JPanel display = new JPanel(new BorderLayout());
-
-    /** @see MaterialTabGroup */
-    private MaterialTabGroup tabGroup;
+    private static final Color TEAL_COLOR        = new Color(82, 196, 196);
+    /** Amber used for the full-width Verify Account CTA */
+    private static final Color VERIFY_BTN_COLOR  = new Color(200, 160, 0);
+    /** Green for "Connected" state indicators */
+    private static final Color CONNECTED_GREEN   = new Color(105, 220, 140);
+    /** Red for "Not Connected" state indicators */
+    private static final Color ERROR_RED         = new Color(255, 110, 110);
+    /** Background for step-number cards */
+    private static final Color STEP_CARD_BG      = new Color(40, 40, 42);
+    /** Background circle behind step numbers */
+    private static final Color STEP_ICON_BG      = new Color(55, 55, 60);
 
     // ── Injected dependencies ─────────────────────────────────────────────────
-    /** @see RuneAlyticsVerificationPanel */
+    /**
+     * Retained for token storage ({@link RuneAlyticsVerificationPanel#saveAccountToken},
+     * {@link RuneAlyticsVerificationPanel#loadAccountToken},
+     * {@link RuneAlyticsVerificationPanel#clearAccountToken}) and for back-compat
+     * with plugin code that calls {@link RuneAlyticsVerificationPanel#refreshLoginState()}.
+     *
+     * @see RuneAlyticsVerificationPanel
+     */
     private final RuneAlyticsVerificationPanel verificationPanel;
     /** @see RunealyticsConfig */
     private final RunealyticsConfig            config;
     /** @see RuneAlyticsState */
-    private final RuneAlyticsState             runeAlyticsState;
+    private final RuneAlyticsState             state;
     /** @see RunealyticsApiClient */
     private final RunealyticsApiClient         apiClient;
     private final ScheduledExecutorService     executorService;
+    private final Client                       client;
 
-    // ── State guards ──────────────────────────────────────────────────────────
-    /** Tracks whether the Verification tab is currently added to avoid redundant rebuilds. */
-    private boolean verificationTabVisible = true;
+    // ── Verification form live widgets ────────────────────────────────────────
+    /** 6-character verification code entry; auto-uppercased and length-capped */
+    private JTextField codeField;
+    /** Triggers the verification API call; disabled until logged in */
+    private JButton    verifyButton;
 
-    // ── Live-update widgets (replaced on each {@link #buildTabs()} call) ──────
-    /** Shows "Verified ✓" or "Not Verified" with colour feedback. */
-    private JLabel  statusLabel;
-    /** Displays the linked OSRS username. */
-    private JLabel  usernameLabel;
-    /** Timestamp of the last successful bank sync. */
-    private JLabel  lastSyncLabel;
-    /** "XP: ON/OFF" tracking indicator. */
-    private JLabel  xpTrackingLabel;
-    /** "Bank: ON/OFF" tracking indicator. */
-    private JLabel  bankTrackingLabel;
-    /** Triggers a server-side token re-verification. */
-    private JButton reVerifyButton;
-
-    // ── Link-account warning (inline; toggled by button click) ───────────────
-    /** The amber-bordered 3rd-party disclaimer card; hidden until user clicks Link Account. */
-    private JPanel  warningPanel;
-    /** Disabled while {@link #warningPanel} is visible. */
-    private JButton linkAccountButton;
+    // ── Connection status card live widgets ───────────────────────────────────
+    /** Bullet/icon label that changes colour with connection state */
+    private JLabel connectionIconLabel;
+    /** "Connected" / "Not Connected" heading inside the status card */
+    private JLabel connectionTitleLabel;
+    /** Detail text inside the status card */
+    private JLabel connectionBodyLabel;
 
     @Inject
     public RuneAlyticsSettingsPanel(
             RuneAlyticsVerificationPanel verificationPanel,
             RunealyticsConfig            config,
-            RuneAlyticsState             runeAlyticsState,
+            RuneAlyticsState             state,
             RunealyticsApiClient         apiClient,
-            ScheduledExecutorService     executorService
+            ScheduledExecutorService     executorService,
+            Client                       client
     )
     {
         this.verificationPanel = verificationPanel;
         this.config            = config;
-        this.runeAlyticsState  = runeAlyticsState;
+        this.state             = state;
         this.apiClient         = apiClient;
         this.executorService   = executorService;
+        this.client            = client;
 
-        RuneAlyticsUi.styleRootPanel(this);
+        setLayout(new BorderLayout());
+        setBackground(ColorScheme.DARK_GRAY_COLOR);
+        setOpaque(true);
+
+        // Forward verification callbacks so the connection card updates
         this.verificationPanel.setVerificationStatusListener(this::handleVerificationStatusChange);
-        buildTabs();
+
+        add(buildScrollPane(), BorderLayout.CENTER);
     }
 
     /**
-     * Mirrors the parent container's current height so this panel never requests
-     * more vertical space than the sidebar has available.  Without this, the
-     * long feature-highlight list would bubble a huge preferred height up through
-     * the JTabbedPane and trigger an unwanted RuneLite window resize.
+     * Mirrors parent height to prevent the sidebar from inflating the RuneLite
+     * window to fit tall content.  Identical pattern to {@link RuneAlyticsPanel}.
      */
     @Override
     public Dimension getPreferredSize()
@@ -114,177 +122,357 @@ public class RuneAlyticsSettingsPanel extends JPanel
     }
 
     @Override
-    public Dimension getMinimumSize()
-    {
-        return new Dimension(50, 80);
-    }
+    public Dimension getMinimumSize() { return new Dimension(50, 80); }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Tab construction
+    //  Top-level layout
     // ═════════════════════════════════════════════════════════════════════════
 
-    private void buildTabs()
+    private JScrollPane buildScrollPane()
     {
-        boolean shouldShowVerification = !runeAlyticsState.isVerified();
-
-        removeAll();
-
-        tabGroup = new MaterialTabGroup(display);
-        RuneAlyticsUi.styleTabStrip(tabGroup);
-        RuneAlyticsUi.styleDisplayPanel(display);
-
-        // Each tab's content is wrapped in its own JScrollPane so that tall
-        // content scrolls in-place rather than forcing the sidebar to expand.
-        MaterialTab statusTab = new MaterialTab("Status", tabGroup,
-                makeScrollPane(createStatusPanel()));
-        tabGroup.addTab(statusTab);
-
-        if (shouldShowVerification)
-        {
-            MaterialTab verifyTab = new MaterialTab("Verification", tabGroup,
-                    makeScrollPane(verificationPanel));
-            tabGroup.addTab(verifyTab);
-        }
-
-        verificationTabVisible = shouldShowVerification;
-        tabGroup.select(statusTab);
-
-        add(tabGroup, BorderLayout.NORTH);
-        add(display,  BorderLayout.CENTER);
-
-        revalidate();
-        repaint();
-    }
-
-    /**
-     * Creates a transparent, vertically-scrollable pane that never shows a
-     * horizontal scrollbar.  The unit increment is tuned for comfortable
-     * mouse-wheel scrolling through the feature list.
-     */
-    private JScrollPane makeScrollPane(JComponent content)
-    {
-        JScrollPane scroll = new JScrollPane(content);
+        JScrollPane scroll = new JScrollPane(buildContent());
         scroll.setBorder(null);
         scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         scroll.getViewport().setBackground(ColorScheme.DARK_GRAY_COLOR);
         scroll.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        scroll.setOpaque(false);
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         return scroll;
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
-    //  Status panel layout
-    // ═════════════════════════════════════════════════════════════════════════
-
-    private JPanel createStatusPanel()
+    private JPanel buildContent()
     {
         JPanel panel = RuneAlyticsUi.rootContentPanel();
 
-        panel.add(buildBrandingSection());
+        panel.add(buildLogoSection());
         panel.add(RuneAlyticsUi.vSpace(14));
 
-        panel.add(buildAccountStatusSection());
+        panel.add(buildVerificationSection());
         panel.add(RuneAlyticsUi.vSpace(14));
 
-        panel.add(sectionHeader("BENEFITS"));
+        panel.add(sectionHeader("RUNEALYTICS BENEFITS"));
         panel.add(RuneAlyticsUi.vSpace(6));
         panel.add(buildBenefitsSection());
         panel.add(RuneAlyticsUi.vSpace(14));
 
-        panel.add(sectionHeader("LINK TO RUNEALYTICS"));
-        panel.add(RuneAlyticsUi.vSpace(6));
-        panel.add(buildLinkSection());
+        panel.add(buildNeedHelpSection());
+        panel.add(RuneAlyticsUi.vSpace(10));
 
+        panel.add(buildVersionLabel());
         panel.add(Box.createVerticalGlue());
         return panel;
     }
 
-    // ── Branding: gold logo, teal tagline, description ───────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Logo section
+    // ═════════════════════════════════════════════════════════════════════════
 
-    private JPanel buildBrandingSection()
+    private JPanel buildLogoSection()
     {
         JPanel p = RuneAlyticsUi.verticalPanel();
+        p.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-        JLabel title = new JLabel("RUNEALYTICS");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 22f));
-        title.setForeground(GOLD_COLOR);
-        title.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.add(title);
-
-        JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.");
-        tagline.setFont(tagline.getFont().deriveFont(Font.BOLD, 10f));
-        tagline.setForeground(TEAL_COLOR);
-        tagline.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.add(tagline);
-
+        JLabel logo = loadLogoLabel(80);
+        logo.setAlignmentX(Component.CENTER_ALIGNMENT);
+        p.add(logo);
         p.add(RuneAlyticsUi.vSpace(8));
 
-        JLabel desc = new JLabel(
-                "<html><body style='width:195px'>"
-                + "<span style='color:#cccccc'>RuneAlytics gives you powerful insights, "
-                + "real-time data, and advanced tracking tools to enhance your OSRS experience.</span>"
-                + "</body></html>");
-        desc.setFont(desc.getFont().deriveFont(Font.PLAIN, 11f));
-        desc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.add(desc);
+        JLabel title = new JLabel("RUNEALYTICS", SwingConstants.CENTER);
+        title.setFont(title.getFont().deriveFont(Font.BOLD, 20f));
+        title.setForeground(GOLD_COLOR);
+        title.setAlignmentX(Component.CENTER_ALIGNMENT);
+        p.add(title);
+
+        JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
+        tagline.setFont(tagline.getFont().deriveFont(Font.BOLD, 10f));
+        tagline.setForeground(TEAL_COLOR);
+        tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
+        p.add(tagline);
 
         return p;
     }
 
-    // ── Account status card ───────────────────────────────────────────────────
+    /**
+     * Loads {@code runealytics_icon.png} from the classpath and scales it to
+     * {@code size × size}.  Falls back to a gold "RA" text label if the image
+     * cannot be loaded (e.g. in test environments).
+     */
+    private JLabel loadLogoLabel(int size)
+    {
+        try
+        {
+            BufferedImage img = ImageUtil.loadImageResource(
+                    RuneAlyticsSettingsPanel.class, "/runealytics_icon.png");
+            if (img != null)
+            {
+                Image scaled = img.getScaledInstance(size, size, Image.SCALE_SMOOTH);
+                return new JLabel(new ImageIcon(scaled));
+            }
+        }
+        catch (Exception e)
+        {
+            log.debug("Logo image unavailable: {}", e.getMessage());
+        }
+        JLabel fallback = new JLabel("RA", SwingConstants.CENTER);
+        fallback.setFont(fallback.getFont().deriveFont(Font.BOLD, 24f));
+        fallback.setForeground(GOLD_COLOR);
+        fallback.setOpaque(true);
+        fallback.setBackground(new Color(50, 40, 10));
+        fallback.setPreferredSize(new Dimension(size, size));
+        fallback.setMaximumSize(new Dimension(size, size));
+        return fallback;
+    }
 
-    private JPanel buildAccountStatusSection()
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Account Verification section
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private JPanel buildVerificationSection()
+    {
+        JPanel p = RuneAlyticsUi.verticalPanel();
+
+        p.add(sectionHeader("ACCOUNT VERIFICATION"));
+        p.add(RuneAlyticsUi.vSpace(6));
+
+        JLabel desc = new JLabel(
+                "<html><body style='width:195px'>"
+                + "<span style='color:#cccccc'>Connect your <b>RuneLite</b> client with your "
+                + "<b>RuneAlytics</b> account to unlock powerful tracking and analytics features.</span>"
+                + "</body></html>");
+        desc.setFont(desc.getFont().deriveFont(Font.PLAIN, 11f));
+        desc.setAlignmentX(Component.LEFT_ALIGNMENT);
+        p.add(desc);
+        p.add(RuneAlyticsUi.vSpace(10));
+
+        // Numbered step cards
+        p.add(buildStepCard("1", "Go to Runealytics.com",
+                "Open your browser and visit runealytics.com."));
+        p.add(RuneAlyticsUi.vSpace(5));
+        p.add(buildStepCard("2", "Link your account",
+                "Log in to your account and click \"Link RuneLite\"."));
+        p.add(RuneAlyticsUi.vSpace(5));
+        p.add(buildStepCard("3", "Paste your code below",
+                "Copy your verification code and paste it below to finish."));
+        p.add(RuneAlyticsUi.vSpace(10));
+
+        // Code input
+        p.add(sectionHeader("VERIFICATION CODE"));
+        p.add(RuneAlyticsUi.vSpace(4));
+
+        codeField = RuneAlyticsUi.inputField();
+        ((AbstractDocument) codeField.getDocument()).setDocumentFilter(new UpperCaseFilter(6));
+        codeField.addActionListener(e -> triggerVerification());
+        p.add(codeField);
+        p.add(RuneAlyticsUi.vSpace(6));
+
+        // Gold full-width Verify Account button
+        verifyButton = buildGoldButton("Verify Account");
+        verifyButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
+        verifyButton.addActionListener(e -> triggerVerification());
+        p.add(verifyButton);
+        p.add(RuneAlyticsUi.vSpace(8));
+
+        // Live connection-status card
+        p.add(buildConnectionStatusCard());
+
+        return p;
+    }
+
+    /**
+     * A horizontal step card with a teal-outlined circle number and a title + body text.
+     */
+    private JPanel buildStepCard(String stepNum, String title, String body)
+    {
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.X_AXIS));
+        card.setBackground(STEP_CARD_BG);
+        card.setBorder(new CompoundBorder(
+                new LineBorder(new Color(60, 60, 65), 1, true),
+                new EmptyBorder(8, 8, 8, 8)));
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        card.add(buildStepIcon(stepNum));
+        card.add(RuneAlyticsUi.hSpace(10));
+
+        JPanel textCol = RuneAlyticsUi.verticalPanel();
+
+        JLabel t = new JLabel(title);
+        t.setFont(t.getFont().deriveFont(Font.BOLD, 12f));
+        t.setForeground(Color.WHITE);
+        textCol.add(t);
+
+        JLabel b = new JLabel(
+                "<html><body style='width:155px'><span style='color:#aaaaaa'>" + body + "</span></body></html>");
+        b.setFont(b.getFont().deriveFont(Font.PLAIN, 10f));
+        textCol.add(b);
+
+        card.add(textCol);
+        return card;
+    }
+
+    /**
+     * A teal-bordered circle label with the step number centred inside.
+     * Painted with anti-aliased Graphics2D so the circle is smooth at any DPI.
+     */
+    private JLabel buildStepIcon(String num)
+    {
+        JLabel icon = new JLabel(num, SwingConstants.CENTER)
+        {
+            @Override
+            protected void paintComponent(Graphics g)
+            {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(STEP_ICON_BG);
+                g2.fillOval(0, 0, getWidth(), getHeight());
+                g2.setColor(TEAL_COLOR);
+                g2.setStroke(new BasicStroke(1.5f));
+                g2.drawOval(1, 1, getWidth() - 2, getHeight() - 2);
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        icon.setFont(icon.getFont().deriveFont(Font.BOLD, 13f));
+        icon.setForeground(TEAL_COLOR);
+        icon.setOpaque(false);
+        Dimension d = new Dimension(30, 30);
+        icon.setPreferredSize(d);
+        icon.setMinimumSize(d);
+        icon.setMaximumSize(d);
+        return icon;
+    }
+
+    /**
+     * The bottom card in the verification section; shows the current link state.
+     * Widgets are stored in fields so {@link #updateConnectionStatus} can mutate them.
+     */
+    private JPanel buildConnectionStatusCard()
     {
         JPanel card = RuneAlyticsUi.cardPanel();
 
-        card.add(sectionHeader("ACCOUNT STATUS"));
-        card.add(RuneAlyticsUi.vSpace(6));
+        JPanel row = new JPanel();
+        row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        statusLabel = RuneAlyticsUi.statusLabel();
-        statusLabel.setText("Not Verified");
-        RuneAlyticsUi.styleNegativeStatus(statusLabel);
-        card.add(statusLabel);
-        card.add(RuneAlyticsUi.vSpace(3));
+        connectionIconLabel = new JLabel("◉");
+        connectionIconLabel.setFont(connectionIconLabel.getFont().deriveFont(Font.BOLD, 20f));
+        connectionIconLabel.setForeground(ERROR_RED);
+        connectionIconLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
+        row.add(connectionIconLabel);
+        row.add(RuneAlyticsUi.hSpace(10));
 
-        usernameLabel = RuneAlyticsUi.valueLabel("Username: N/A");
-        card.add(usernameLabel);
-        card.add(RuneAlyticsUi.vSpace(8));
+        JPanel textCol = RuneAlyticsUi.verticalPanel();
 
-        // Compact tracking-status row
-        JLabel lootLabel = RuneAlyticsUi.valueLabel("Loot: ON");
-        RuneAlyticsUi.stylePositiveStatus(lootLabel);
+        connectionTitleLabel = new JLabel("Not Connected");
+        connectionTitleLabel.setFont(connectionTitleLabel.getFont().deriveFont(Font.BOLD, 13f));
+        connectionTitleLabel.setForeground(ERROR_RED);
+        textCol.add(connectionTitleLabel);
 
-        xpTrackingLabel = RuneAlyticsUi.valueLabel("XP: " + (config.enableXpTracking() ? "ON" : "OFF"));
-        if (config.enableXpTracking()) RuneAlyticsUi.stylePositiveStatus(xpTrackingLabel);
-        else xpTrackingLabel.setForeground(Color.GRAY);
+        connectionBodyLabel = new JLabel("Your account is not linked.");
+        connectionBodyLabel.setFont(connectionBodyLabel.getFont().deriveFont(Font.PLAIN, 11f));
+        connectionBodyLabel.setForeground(new Color(170, 170, 170));
+        textCol.add(connectionBodyLabel);
 
-        bankTrackingLabel = RuneAlyticsUi.valueLabel("Bank: " + (config.enableBankSync() ? "ON" : "OFF"));
-        if (config.enableBankSync()) RuneAlyticsUi.stylePositiveStatus(bankTrackingLabel);
-        else bankTrackingLabel.setForeground(Color.GRAY);
-
-        card.add(RuneAlyticsUi.formRow(
-                lootLabel,        RuneAlyticsUi.hSpace(8),
-                xpTrackingLabel,  RuneAlyticsUi.hSpace(8),
-                bankTrackingLabel
-        ));
-        card.add(RuneAlyticsUi.vSpace(6));
-
-        JLabel syncTitle = RuneAlyticsUi.valueLabel("Last Bank Sync: ");
-        lastSyncLabel    = RuneAlyticsUi.valueLabel("Never");
-        card.add(RuneAlyticsUi.formRow(syncTitle, lastSyncLabel));
-        card.add(RuneAlyticsUi.vSpace(8));
-
-        reVerifyButton = RuneAlyticsUi.secondaryButton("Re-verify Account");
-        reVerifyButton.setEnabled(hasStoredToken());
-        reVerifyButton.addActionListener(e -> reVerify());
-        card.add(reVerifyButton);
+        row.add(textCol);
+        card.add(row);
 
         return card;
     }
 
-    // ── Benefits cards ────────────────────────────────────────────────────────
+    // ── Verification API call ─────────────────────────────────────────────────
+
+    /**
+     * Reads the code field, validates input, then calls
+     * {@link RunealyticsApiClient#verifyToken} on the executor.
+     * Saves or clears the per-account token via {@link RuneAlyticsVerificationPanel}
+     * and updates {@link RuneAlyticsState} on the EDT.
+     */
+    private void triggerVerification()
+    {
+        if (client.getGameState() != GameState.LOGGED_IN
+                || client.getLocalPlayer() == null)
+        {
+            updateConnectionStatus(false, "Log into RuneScape first to link your account.");
+            return;
+        }
+
+        String code = codeField.getText().trim().toUpperCase();
+        if (code.isEmpty())
+        {
+            updateConnectionStatus(false, "Enter the code from RuneAlytics.com.");
+            return;
+        }
+        if (code.length() != 6)
+        {
+            updateConnectionStatus(false, "Code must be exactly 6 characters.");
+            return;
+        }
+
+        final String rsn = client.getLocalPlayer().getName().trim().toLowerCase();
+
+        verifyButton.setEnabled(false);
+        verifyButton.setText("Verifying...");
+        updateConnectionStatus(false, "Verifying with server...");
+
+        executorService.submit(() -> {
+            boolean success = false;
+            try
+            {
+                success = apiClient.verifyToken(code, rsn);
+            }
+            catch (Exception e)
+            {
+                log.warn("Verification request failed: {}", e.getMessage());
+            }
+
+            final boolean verified = success;
+            SwingUtilities.invokeLater(() -> {
+                verifyButton.setText("Verify Account");
+                verifyButton.setEnabled(true);
+
+                if (verified)
+                {
+                    verificationPanel.saveAccountToken(rsn, code);
+                    config.authToken(code);
+                    state.setVerified(true);
+                    state.setVerifiedUsername(rsn);
+                    state.setVerificationCode(code);
+                    updateConnectionStatus(true, "Linked as " + rsn);
+                    log.info("Verification succeeded for '{}'", rsn);
+                }
+                else
+                {
+                    verificationPanel.clearAccountToken(rsn);
+                    config.authToken("");
+                    state.setVerified(false);
+                    state.setVerifiedUsername(null);
+                    state.setVerificationCode(null);
+                    updateConnectionStatus(false, "Invalid code — check and try again.");
+                    log.warn("Verification failed for '{}'", rsn);
+                }
+            });
+        });
+    }
+
+    /**
+     * Updates the connection-status card to reflect a verified or unverified state.
+     * Must be called on the EDT.
+     */
+    private void updateConnectionStatus(boolean connected, String detail)
+    {
+        if (connectionIconLabel == null) return;
+
+        Color colour = connected ? CONNECTED_GREEN : ERROR_RED;
+        connectionIconLabel.setForeground(colour);
+        connectionTitleLabel.setForeground(colour);
+        connectionTitleLabel.setText(connected ? "Connected" : "Not Connected");
+        connectionBodyLabel.setText(detail);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Benefits section
+    // ═════════════════════════════════════════════════════════════════════════
 
     private JPanel buildBenefitsSection()
     {
@@ -293,22 +481,17 @@ public class RuneAlyticsSettingsPanel extends JPanel
         addBenefitCard(p, "Real-time Boss & Drop Tracking",
                 "Track your kills, unique drops, and valuable loot in real time.");
         p.add(RuneAlyticsUi.vSpace(5));
-
         addBenefitCard(p, "Performance Insights",
                 "Analyze your PvM performance with detailed stats and metrics.");
         p.add(RuneAlyticsUi.vSpace(5));
-
         addBenefitCard(p, "Leaderboards",
                 "Compete with other players on global and server-specific rankings.");
         p.add(RuneAlyticsUi.vSpace(5));
-
         addBenefitCard(p, "Session History",
                 "Review your past sessions, drops, and progress over time.");
         p.add(RuneAlyticsUi.vSpace(5));
-
         addBenefitCard(p, "Community Driven",
                 "Join a community of players and share your achievements.");
-
         return p;
     }
 
@@ -328,150 +511,83 @@ public class RuneAlyticsSettingsPanel extends JPanel
         d.setFont(d.getFont().deriveFont(Font.PLAIN, 11f));
         d.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.add(d);
-
         parent.add(card);
     }
 
-    // ── Link-to-RuneAlytics section ───────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Need Help section
+    // ═════════════════════════════════════════════════════════════════════════
 
-    private JPanel buildLinkSection()
+    private JPanel buildNeedHelpSection()
     {
         JPanel p = RuneAlyticsUi.verticalPanel();
 
-        JLabel connectText = new JLabel(
-                "<html><body style='width:195px'>"
-                + "<span style='color:#cccccc'>"
-                + "<b>Connect</b> your account to unlock full tracking and analytics features."
+        p.add(sectionHeader("NEED HELP?"));
+        p.add(RuneAlyticsUi.vSpace(6));
+
+        JLabel helpText = new JLabel(
+                "<html><body style='width:195px'><span style='color:#cccccc'>"
+                + "Join our Discord or visit runealytics.com for support and more information."
                 + "</span></body></html>");
-        connectText.setFont(connectText.getFont().deriveFont(Font.PLAIN, 11f));
-        connectText.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.add(connectText);
-        p.add(RuneAlyticsUi.vSpace(10));
-
-        linkAccountButton = buildPurpleButton("Link Account");
-        linkAccountButton.addActionListener(e -> revealWarning(p));
-        p.add(linkAccountButton);
-
-        // Warning card: hidden until Link Account is clicked
-        warningPanel = buildWarningPanel(p);
-        warningPanel.setVisible(false);
+        helpText.setFont(helpText.getFont().deriveFont(Font.PLAIN, 11f));
+        helpText.setAlignmentX(Component.LEFT_ALIGNMENT);
+        p.add(helpText);
         p.add(RuneAlyticsUi.vSpace(8));
-        p.add(warningPanel);
 
-        p.add(RuneAlyticsUi.vSpace(14));
+        JButton discordBtn = buildTealButton("Discord");
+        discordBtn.addActionListener(e -> LinkBrowser.browse(DISCORD_URL));
+        p.add(discordBtn);
+        p.add(RuneAlyticsUi.vSpace(5));
 
-        JLabel alreadyLinked = RuneAlyticsUi.valueLabel("Already linked?");
-        p.add(alreadyLinked);
-        p.add(RuneAlyticsUi.vSpace(4));
-
-        JButton manageBtn = RuneAlyticsUi.secondaryButton("Manage Connection");
-        manageBtn.addActionListener(e -> revealWarning(p));
-        p.add(manageBtn);
-        p.add(RuneAlyticsUi.vSpace(8));
+        JButton websiteBtn = buildTealButton("Website");
+        websiteBtn.addActionListener(e -> LinkBrowser.browse(RUNEALYTICS_URL));
+        p.add(websiteBtn);
 
         return p;
     }
 
-    /** Purple full-width button matching the screenshot's Link Account CTA. */
-    private JButton buildPurpleButton(String text)
-    {
-        JButton btn = new JButton(text);
-        btn.setFocusPainted(false);
-        btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        btn.setBackground(LINK_BTN_BG);
-        btn.setForeground(Color.WHITE);
-        btn.setFont(btn.getFont().deriveFont(Font.BOLD, 13f));
-        btn.setBorder(new CompoundBorder(
-                new LineBorder(LINK_BTN_BG.darker(), 1, true),
-                new EmptyBorder(6, 16, 6, 16)
-        ));
-        btn.setAlignmentX(Component.LEFT_ALIGNMENT);
-        btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
-        return btn;
-    }
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Shared button builders
+    // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Builds the amber-bordered 3rd-party disclaimer card.
-     * Buttons inside capture {@code linkSection} so they can revalidate the
-     * correct parent after toggling visibility.
-     *
-     * @param linkSection the panel that owns this warning card
-     */
-    private JPanel buildWarningPanel(JPanel linkSection)
-    {
-        JPanel warn = RuneAlyticsUi.cardPanel();
-        warn.setBorder(new CompoundBorder(
-                new LineBorder(WARN_BORDER, 1, true),
-                new EmptyBorder(10, 10, 10, 10)
-        ));
-
-        JLabel iconLabel = new JLabel("⚠  WARNING");
-        iconLabel.setFont(iconLabel.getFont().deriveFont(Font.BOLD, 11f));
-        iconLabel.setForeground(new Color(240, 180, 0));
-        iconLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        warn.add(iconLabel);
-        warn.add(RuneAlyticsUi.vSpace(6));
-
-        JLabel warnText = new JLabel(
-                "<html><body style='width:185px'>"
-                + "<span style='color:#cccccc'>"
-                + "You are about to leave the client to link your account on the official RuneAlytics website."
-                + "<br><br>"
-                + "This is a 3rd party website. We are not responsible for its content or policies."
-                + "</span></body></html>");
-        warnText.setFont(warnText.getFont().deriveFont(Font.PLAIN, 11f));
-        warnText.setAlignmentX(Component.LEFT_ALIGNMENT);
-        warn.add(warnText);
-        warn.add(RuneAlyticsUi.vSpace(10));
-
-        JButton cancelBtn = RuneAlyticsUi.secondaryButton("Cancel");
-        cancelBtn.addActionListener(e -> {
-            warningPanel.setVisible(false);
-            linkAccountButton.setEnabled(true);
-            linkSection.revalidate();
-            linkSection.repaint();
-        });
-
-        JButton continueBtn = buildGoldButton("Continue");
-        continueBtn.addActionListener(e -> {
-            warningPanel.setVisible(false);
-            linkAccountButton.setEnabled(true);
-            linkSection.revalidate();
-            linkSection.repaint();
-            LinkBrowser.browse(RUNEALYTICS_URL);
-        });
-
-        warn.add(RuneAlyticsUi.formRow(cancelBtn, RuneAlyticsUi.hSpace(8), continueBtn));
-        return warn;
-    }
-
-    /** Gold button used for the Continue confirmation action. */
+    /** Full-width amber button used for the primary Verify Account CTA. */
     private JButton buildGoldButton(String text)
     {
         JButton btn = new JButton(text);
         btn.setFocusPainted(false);
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        btn.setBackground(CONTINUE_BTN_BG);
+        btn.setBackground(VERIFY_BTN_COLOR);
         btn.setForeground(Color.BLACK);
-        btn.setFont(btn.getFont().deriveFont(Font.BOLD, 12f));
+        btn.setFont(btn.getFont().deriveFont(Font.BOLD, 13f));
         btn.setBorder(new CompoundBorder(
                 new LineBorder(new Color(180, 140, 0), 1, true),
-                new EmptyBorder(4, 12, 4, 12)
+                new EmptyBorder(6, 16, 6, 16)
         ));
         btn.setAlignmentX(Component.LEFT_ALIGNMENT);
         return btn;
     }
 
-    /** Disables the Link Account button and reveals the 3rd-party warning card. */
-    private void revealWarning(JPanel linkSection)
+    /** Dark teal outline button used for Discord and Website links. */
+    private JButton buildTealButton(String text)
     {
-        linkAccountButton.setEnabled(false);
-        warningPanel.setVisible(true);
-        linkSection.revalidate();
-        linkSection.repaint();
+        JButton btn = new JButton(text);
+        btn.setFocusPainted(false);
+        btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        btn.setBackground(new Color(30, 70, 70));
+        btn.setForeground(TEAL_COLOR);
+        btn.setFont(btn.getFont().deriveFont(Font.BOLD, 12f));
+        btn.setBorder(new CompoundBorder(
+                new LineBorder(TEAL_COLOR.darker(), 1, true),
+                new EmptyBorder(5, 14, 5, 14)
+        ));
+        btn.setAlignmentX(Component.LEFT_ALIGNMENT);
+        btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        return btn;
     }
 
-    // ── Shared teal section-header label ─────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Shared teal section-header label
+    // ═════════════════════════════════════════════════════════════════════════
 
     private JLabel sectionHeader(String text)
     {
@@ -483,131 +599,97 @@ public class RuneAlyticsSettingsPanel extends JPanel
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Re-verify
+    //  Version label
     // ═════════════════════════════════════════════════════════════════════════
 
-    private void reVerify()
+    private JLabel buildVersionLabel()
     {
-        String token = config.authToken();
-        String rsn   = runeAlyticsState.getVerifiedUsername();
-
-        if (token == null || token.isEmpty())
-        {
-            statusLabel.setText("No auth token — link your account first.");
-            RuneAlyticsUi.styleNegativeStatus(statusLabel);
-            return;
-        }
-
-        reVerifyButton.setEnabled(false);
-        reVerifyButton.setText("Checking...");
-        statusLabel.setText("Checking with server...");
-
-        executorService.submit(() -> {
-            boolean confirmed = false;
-            try
-            {
-                confirmed = apiClient.verifyToken(token, rsn);
-            }
-            catch (Exception e)
-            {
-                log.warn("Re-verify request failed: {}", e.getMessage());
-            }
-
-            final boolean success = confirmed;
-            SwingUtilities.invokeLater(() -> {
-                reVerifyButton.setText("Re-verify Account");
-                reVerifyButton.setEnabled(true);
-
-                if (success)
-                {
-                    runeAlyticsState.setVerified(true);
-                    if (rsn != null) runeAlyticsState.setVerifiedUsername(rsn);
-                    runeAlyticsState.setVerificationCode(token);
-                    statusLabel.setText("Verified ✓");
-                    RuneAlyticsUi.stylePositiveStatus(statusLabel);
-                    log.info("Re-verify succeeded for '{}'", rsn);
-                }
-                else
-                {
-                    runeAlyticsState.setVerified(false);
-                    runeAlyticsState.setVerifiedUsername(null);
-                    runeAlyticsState.setVerificationCode(null);
-                    config.authToken("");
-                    statusLabel.setText("Not Verified — token rejected.");
-                    RuneAlyticsUi.styleNegativeStatus(statusLabel);
-                    log.warn("Re-verify failed for '{}' — token cleared", rsn);
-                }
-
-                syncTabs();
-            });
-        });
-    }
-
-    private boolean hasStoredToken()
-    {
-        String t = config.authToken();
-        return t != null && !t.isEmpty();
+        JLabel lbl = new JLabel("Runealytics v1.0.0");
+        lbl.setFont(lbl.getFont().deriveFont(Font.PLAIN, 10f));
+        lbl.setForeground(new Color(90, 90, 90));
+        lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return lbl;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  External API (called from RuneAlyticsPlugin)
     // ═════════════════════════════════════════════════════════════════════════
 
+    /** Called on login/logout state change to enable or disable the code field. */
     public void refreshLoginState()
     {
-        syncTabs();
+        SwingUtilities.invokeLater(() -> {
+            boolean loggedIn = (client.getGameState() == GameState.LOGGED_IN
+                    && client.getLocalPlayer() != null);
+            if (codeField    != null) codeField.setEnabled(loggedIn);
+            if (verifyButton != null) verifyButton.setEnabled(loggedIn);
+            if (!loggedIn && codeField != null)
+                updateConnectionStatus(false, "Log into RuneScape to link your account.");
+        });
         verificationPanel.refreshLoginState();
-        updateVerificationStatus(runeAlyticsState.isVerified(), runeAlyticsState.getVerifiedUsername());
     }
 
+    /**
+     * Called by the plugin after server-side verification succeeds or fails.
+     * Updates the connection-status card.
+     *
+     * @param verified whether the account is now verified
+     * @param username the linked RSN, or {@code null} if not verified
+     */
     public void updateVerificationStatus(boolean verified, String username)
     {
-        syncTabs();
         SwingUtilities.invokeLater(() -> {
-            if (statusLabel == null) return;
-
             if (verified)
-            {
-                statusLabel.setText("Verified ✓");
-                RuneAlyticsUi.stylePositiveStatus(statusLabel);
-                usernameLabel.setText("Username: " + (username != null ? username : "N/A"));
-                log.info("UI updated: Account verified as {}", username);
-            }
+                updateConnectionStatus(true,
+                        "Linked as " + (username != null ? username : "unknown"));
             else
-            {
-                statusLabel.setText("Not Verified");
-                RuneAlyticsUi.styleNegativeStatus(statusLabel);
-                usernameLabel.setText("Username: N/A");
-                log.info("UI updated: Account not verified");
-            }
-
-            if (reVerifyButton != null)
-                reVerifyButton.setEnabled(hasStoredToken());
+                updateConnectionStatus(false, "Your account is not linked.");
         });
     }
 
-    private void syncTabs()
-    {
-        boolean shouldShow = !runeAlyticsState.isVerified();
-        if (tabGroup == null || verificationTabVisible != shouldShow)
-        {
-            SwingUtilities.invokeLater(this::buildTabs);
-        }
-    }
-
+    /** No-op — kept for API compatibility; last-sync time is no longer shown here. */
     public void updateLastSyncTime()
     {
-        SwingUtilities.invokeLater(() -> {
-            if (lastSyncLabel != null)
-                lastSyncLabel.setText(LocalDateTime.now().format(TIME_FORMATTER));
-        });
+        // Last sync time display removed in this design revision
     }
 
     private void handleVerificationStatusChange()
     {
-        updateVerificationStatus(
-                runeAlyticsState.isVerified(),
-                runeAlyticsState.getVerifiedUsername()
-        );
+        updateVerificationStatus(state.isVerified(), state.getVerifiedUsername());
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  UpperCaseFilter — forces the code field to 6 upper-case characters max
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private static final class UpperCaseFilter extends DocumentFilter
+    {
+        private final int maxLen;
+
+        UpperCaseFilter(int maxLen) { this.maxLen = maxLen; }
+
+        @Override
+        public void insertString(FilterBypass fb, int offset, String string, AttributeSet attr)
+                throws BadLocationException
+        {
+            if (string == null) return;
+            String upper   = string.toUpperCase();
+            int    current = fb.getDocument().getLength();
+            if (current + upper.length() > maxLen)
+                upper = upper.substring(0, Math.max(0, maxLen - current));
+            super.insertString(fb, offset, upper, attr);
+        }
+
+        @Override
+        public void replace(FilterBypass fb, int offset, int length, String text, AttributeSet attrs)
+                throws BadLocationException
+        {
+            if (text == null) { super.replace(fb, offset, length, null, attrs); return; }
+            String upper   = text.toUpperCase();
+            int    current = fb.getDocument().getLength() - length;
+            if (current + upper.length() > maxLen)
+                upper = upper.substring(0, Math.max(0, maxLen - current));
+            super.replace(fb, offset, length, upper, attrs);
+        }
     }
 }

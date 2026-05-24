@@ -77,9 +77,11 @@ public class RunealyticsApiClient
         xpGains.forEach(skillsObj::addProperty);
 
         JsonObject payload = new JsonObject();
-        payload.addProperty("username",  username);
-        payload.add("xp_gains",          skillsObj);
-        payload.addProperty("timestamp", System.currentTimeMillis() / 1000);
+        payload.addProperty("username",     username);
+        payload.add("xp_gains",             skillsObj);
+        payload.addProperty("timestamp",    System.currentTimeMillis() / 1000);
+        payload.addProperty("game_mode",    state.getCurrentGameMode()    != null ? state.getCurrentGameMode()    : "regular");
+        payload.addProperty("account_type", state.getCurrentAccountSubtype() != null ? state.getCurrentAccountSubtype() : "normal");
 
         String payloadJson = gson.toJson(payload);
         String url         = config.apiUrl() + "/xp/batch";

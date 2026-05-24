@@ -26,6 +26,21 @@ public class RuneAlyticsState
     private long lastSyncTime;
     private int pendingLootCount;
     private List<LootRecord> lootRecords = new ArrayList<>();
+
+    /**
+     * Current game mode resolved at the time of the last loot/XP event.
+     * Possible values: "regular", "ironman", "leagues", "deadman",
+     * "fresh_start", "grid_master".
+     */
+    private String currentGameMode = "regular";
+
+    /**
+     * Current OSRS account subtype for server-side filtering.
+     * Possible values: "normal", "ironman", "hardcore_ironman",
+     * "ultimate_ironman", "group_ironman", "hardcore_group_ironman",
+     * "unranked_group_ironman".
+     */
+    private String currentAccountSubtype = "normal";
     // A map that stores Boss Name -> Number of Kills
     private Map<String, Integer> killCounts = new HashMap<>();
 
@@ -38,6 +53,8 @@ public class RuneAlyticsState
         syncInProgress = false;
         lastSyncTime = 0;
         pendingLootCount = 0;
+        currentGameMode = "regular";
+        currentAccountSubtype = "normal";
     }
 
     public boolean canSync()
