@@ -1,6 +1,7 @@
 package com.runealytics;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import okhttp3.OkHttpClient;
@@ -44,15 +45,24 @@ public class MatchmakingApiClient
         return executeRequest(GET_MATCH_PATH, payload, matchCode, osrsRsn);
     }
 
+    /**
+     * Accepts a match for the local player.  The server requires
+     * {@code player_gear} and {@code player_inventory} to create the gear
+     * snapshot row — omitting them causes a validation error.
+     */
     public MatchmakingApiResult acceptMatch(
             String verificationCode,
             String matchCode,
             String osrsRsn,
-            String authenticationToken
+            String authenticationToken,
+            JsonArray playerInventory,
+            JsonArray playerGear
     ) throws IOException
     {
         JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
         payload.addProperty("authentication_token", authenticationToken);
+        payload.add("player_inventory", playerInventory != null ? playerInventory : new JsonArray());
+        payload.add("player_gear",      playerGear      != null ? playerGear      : new JsonArray());
         return executeRequest(ACCEPT_MATCH_PATH, payload, matchCode, osrsRsn);
     }
 

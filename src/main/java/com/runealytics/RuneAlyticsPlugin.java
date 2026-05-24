@@ -18,6 +18,7 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
 import okhttp3.OkHttpClient;
 
@@ -134,6 +135,9 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private XpTrackerManager         xpTrackerManager;
     @Inject private RunealyticsApiClient     apiClient;
     @Inject private BankDataManager          bankDataManager;
+    @Inject private MatchmakingManager       matchmakingManager;
+    @Inject private MatchmakingMinimapOverlay matchmakingOverlay;
+    @Inject private OverlayManager           overlayManager;
 
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
@@ -319,6 +323,7 @@ public class RuneAlyticsPlugin extends Plugin
                 .panel(mainPanel)
                 .build();
         clientToolbar.addNavigation(navButton);
+        overlayManager.add(matchmakingOverlay);
         log.info("RuneAlytics nav button registered");
 
         // Heavy panel construction stays async — it can take a few ms and we
@@ -363,6 +368,8 @@ public class RuneAlyticsPlugin extends Plugin
         // the executor shuts down, so the player's last session gains are not lost.
         try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.warn("XP flush on shutdown failed: {}", e.getMessage()); }
         try { lootManager.shutdown();             } catch (Exception e) { log.warn("Loot manager shutdown failed: {}", e.getMessage()); }
+        try { matchmakingManager.reset();         } catch (Exception e) { log.warn("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
+        try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.warn("Matchmaking overlay removal failed: {}", e.getMessage()); }
 
         // Always attempt to remove the nav button — even if some other code
         // path nulled the reference, leaving an orphan would mean the next
@@ -483,9 +490,16 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onActorDeath(ActorDeath event)
     {
+        Actor actor = event.getActor();
+
+        // ── Matchmaking: report player deaths to server ───────────────────────
+        if (actor instanceof Player)
+        {
+            matchmakingManager.onActorDeath((Player) actor);
+        }
+
         if (!config.enableLootTracking()) return;
 
-        Actor actor = event.getActor();
         if (!(actor instanceof NPC)) return;
 
         NPC npc = (NPC) actor;
@@ -1057,6 +1071,11 @@ public class RuneAlyticsPlugin extends Plugin
     {
         gameTickCount++;
 
+        // ── Matchmaking polling / automation ─────────────────────────────────
+        // Runs on the client thread, so inventory/gear reads inside the manager
+        // are safe (no AssertionError from ItemContainer access off-thread).
+        matchmakingManager.onGameTick();
+
         // ── Flush zero-loot kills ──────────────────────────────────────────────
         // ActorDeath entries that aged out without a cancelling
         // NpcLootReceived are promoted to zero-loot kills here.
@@ -1143,6 +1162,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGIN_SCREEN)
         {
             state.setLoggedIn(false);
+            matchmakingManager.reset(); // clear any active match on logout
             SwingUtilities.invokeLater(() -> {
                 mainPanel.showLoggedOutState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
