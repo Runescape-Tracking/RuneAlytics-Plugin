@@ -97,12 +97,12 @@ public class RuneAlyticsSettingsPanel extends JPanel
     {
         JPanel panel = RuneAlyticsUi.rootContentPanel();
 
-        JLabel titleLabel = RuneAlyticsUi.titleLabel("Tracking Status");
+        JLabel titleLabel = RuneAlyticsUi.titleLabel("RuneAlytics");
         panel.add(titleLabel);
         panel.add(RuneAlyticsUi.vSpace(15));
 
-        // Verification status
-        JLabel statusTitleLabel = RuneAlyticsUi.bodyLabel("Verification:");
+        // ── Account status ───────────────────────────────────────────────────
+        JLabel statusTitleLabel = RuneAlyticsUi.bodyLabel("Account:");
         panel.add(statusTitleLabel);
         panel.add(RuneAlyticsUi.vSpace(5));
 
@@ -116,61 +116,113 @@ public class RuneAlyticsSettingsPanel extends JPanel
         panel.add(usernameLabel);
         panel.add(RuneAlyticsUi.vSpace(10));
 
-        // Re-verify button
         reVerifyButton = RuneAlyticsUi.primaryButton("Re-verify Account");
         reVerifyButton.setEnabled(hasStoredToken());
         reVerifyButton.addActionListener(e -> reVerify());
         panel.add(reVerifyButton);
         panel.add(RuneAlyticsUi.vSpace(15));
 
-        // Tracking features card
+        // ── Active tracking card ─────────────────────────────────────────────
         JPanel trackingCard = RuneAlyticsUi.cardPanel();
-
         JLabel trackingTitle = RuneAlyticsUi.bodyLabel("Active Tracking:");
         trackingCard.add(trackingTitle);
         trackingCard.add(RuneAlyticsUi.vSpace(8));
 
+        // Loot tracking is always on (issue #10)
+        JLabel lootStatus = RuneAlyticsUi.valueLabel("Loot Tracking: ON (always)");
+        RuneAlyticsUi.stylePositiveStatus(lootStatus);
+        trackingCard.add(lootStatus);
+        trackingCard.add(RuneAlyticsUi.vSpace(5));
+
         xpTrackingLabel = RuneAlyticsUi.valueLabel(
-                "XP Tracking: " + (config.enableXpTracking() ? "ON" : "OFF")
-        );
-        if (config.enableXpTracking())
-            RuneAlyticsUi.stylePositiveStatus(xpTrackingLabel);
-        else
-            xpTrackingLabel.setForeground(Color.GRAY);
+                "XP Tracking: " + (config.enableXpTracking() ? "ON" : "OFF"));
+        if (config.enableXpTracking()) RuneAlyticsUi.stylePositiveStatus(xpTrackingLabel);
+        else xpTrackingLabel.setForeground(Color.GRAY);
         trackingCard.add(xpTrackingLabel);
         trackingCard.add(RuneAlyticsUi.vSpace(5));
 
         bankTrackingLabel = RuneAlyticsUi.valueLabel(
-                "Bank Tracking: " + (config.enableBankSync() ? "ON" : "OFF")
-        );
-        if (config.enableBankSync())
-            RuneAlyticsUi.stylePositiveStatus(bankTrackingLabel);
-        else
-            bankTrackingLabel.setForeground(Color.GRAY);
+                "Bank Tracking: " + (config.enableBankSync() ? "ON" : "OFF"));
+        if (config.enableBankSync()) RuneAlyticsUi.stylePositiveStatus(bankTrackingLabel);
+        else bankTrackingLabel.setForeground(Color.GRAY);
         trackingCard.add(bankTrackingLabel);
-
         panel.add(trackingCard);
         panel.add(RuneAlyticsUi.vSpace(15));
 
-        // Last bank sync
+        // ── Last bank sync ───────────────────────────────────────────────────
         JLabel lastSyncTitleLabel = RuneAlyticsUi.bodyLabel("Last Bank Sync:");
         panel.add(lastSyncTitleLabel);
         panel.add(RuneAlyticsUi.vSpace(5));
-
         lastSyncLabel = RuneAlyticsUi.valueLabel("Never");
         panel.add(lastSyncLabel);
+        panel.add(RuneAlyticsUi.vSpace(18));
+
+        // ── Feature highlights (issue #11) ───────────────────────────────────
+        panel.add(buildFeatureHighlightsCard());
+        panel.add(RuneAlyticsUi.vSpace(12));
 
         panel.add(Box.createVerticalGlue());
 
         JTextArea infoText = RuneAlyticsUi.infoTextArea(
-                "To change tracking settings, use\n" +
-                        "the RuneLite configuration panel.\n\n" +
-                        "Click the wrench icon and search\n" +
-                        "for 'RuneAlytics'."
+                "Toggle XP / Bank sync from the RuneLite\n" +
+                        "wrench icon → search 'RuneAlytics'.\n\n" +
+                        "Loot tracking is always on."
         );
         panel.add(infoText);
 
         return panel;
+    }
+
+    /**
+     * Returns a card that summarises every RuneAlytics feature so users can see
+     * everything the plugin offers at a glance (issue #11).
+     */
+    private JPanel buildFeatureHighlightsCard()
+    {
+        JPanel card = RuneAlyticsUi.cardPanel();
+        JLabel header = RuneAlyticsUi.bodyLabel("What RuneAlytics tracks:");
+        card.add(header);
+        card.add(RuneAlyticsUi.vSpace(8));
+
+        addFeatureRow(card, "🗡  Boss kills & drops",
+                "NPC loot, reward chests, instances and rare unique drops are\n" +
+                "tracked automatically.");
+        addFeatureRow(card, "🌿  Skilling drops",
+                "Logs, fish, ores, herbs, runes, hunter loot and impling jars\n" +
+                "are bucketed per skill.");
+        addFeatureRow(card, "👜  Pickpocketing",
+                "Per-NPC attempt counts and loot, including Rogues' outfit\n" +
+                "bonuses captured via inventory diff.");
+        addFeatureRow(card, "💍  Ring of Wealth auto-pickup",
+                "Coins / alched items the ring grabs for you are credited\n" +
+                "back to the source kill.");
+        addFeatureRow(card, "📊  XP tracking",
+                "Skill XP is batched every 30 seconds and synced to your\n" +
+                "RuneAlytics dashboard.");
+        addFeatureRow(card, "🏦  Bank value",
+                "Full bank + worn equipment + carried inventory snapshot\n" +
+                "sent on bank close.");
+        addFeatureRow(card, "📥  RuneLite import",
+                "Use the ⬇ icon in the Loot Tracker tab to import history\n" +
+                "from RuneLite's built-in tracker.");
+        addFeatureRow(card, "⚔  Match Finder",
+                "Discover open PvP / boss-mass events and joinable rallies.");
+        addFeatureRow(card, "🧮  Theory-crafting (on the website)",
+                "DPS calculators, gear comparisons and per-boss BiS guides\n" +
+                "are available at runealytics.com.");
+        return card;
+    }
+
+    private void addFeatureRow(JPanel parent, String title, String description)
+    {
+        JLabel t = RuneAlyticsUi.valueLabel(title);
+        t.setForeground(new Color(220, 220, 220));
+        parent.add(t);
+        JLabel d = new JLabel("<html><span style='color:#888'>" + description.replace("\n", "<br>") + "</span></html>");
+        d.setFont(d.getFont().deriveFont(11f));
+        d.setAlignmentX(Component.LEFT_ALIGNMENT);
+        parent.add(d);
+        parent.add(RuneAlyticsUi.vSpace(6));
     }
 
     // ── Re-verify ────────────────────────────────────────────────────────────

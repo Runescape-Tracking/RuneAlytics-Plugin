@@ -302,6 +302,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         sortButton  = makeIconButton("⇅",  currentSort.getLabel());
         clearButton = makeIconButton("🗑", "Clear all loot data");
         sortButton.setBackground(new Color(45, 70, 45));
+        applyEyeButtonState();   // start with the correct red/green colour
 
         eyeButton  .addActionListener(e -> toggleHiddenItems());
         sortButton .addActionListener(e -> cycleSortMode());
@@ -411,13 +412,38 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         return btn;
     }
 
+    // ── Eye-icon colours (issue #6 — clear ON / OFF indication) ─────────────
+    /** Green: all drops are shown (ignored ones included). */
+    private static final Color EYE_BG_ALL_SHOWN  = new Color( 30, 110,  40);
+    private static final Color EYE_BORDER_SHOWN  = new Color( 70, 180,  90);
+    /** Red: ignored drops are hidden from the panel. */
+    private static final Color EYE_BG_HIDING     = new Color(140,  35,  35);
+    private static final Color EYE_BORDER_HIDING = new Color(200,  70,  70);
+
     private void toggleHiddenItems()
     {
         showIgnoredItems = !showIgnoredItems;
-        eyeButton.setBackground(showIgnoredItems ? new Color(160, 80, 0) : new Color(38, 38, 38));
-        eyeButton.setToolTipText(showIgnoredItems ? "Hide ignored drops" : "Show ignored drops");
+        applyEyeButtonState();
         invalidateFingerprint();
         refreshDisplay();
+    }
+
+    /** Updates the eye icon background + border + tooltip from {@link #showIgnoredItems}. */
+    private void applyEyeButtonState()
+    {
+        if (eyeButton == null) return;
+        if (showIgnoredItems)
+        {
+            eyeButton.setBackground(EYE_BG_ALL_SHOWN);
+            eyeButton.setBorder(BorderFactory.createLineBorder(EYE_BORDER_SHOWN, 1));
+            eyeButton.setToolTipText("All drops shown — click to hide ignored drops");
+        }
+        else
+        {
+            eyeButton.setBackground(EYE_BG_HIDING);
+            eyeButton.setBorder(BorderFactory.createLineBorder(EYE_BORDER_HIDING, 1));
+            eyeButton.setToolTipText("Ignored drops hidden — click to show all");
+        }
     }
 
     private void cycleSortMode()
@@ -1101,7 +1127,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private void restoreButtonColor(JButton btn)
     {
         if (btn == eyeButton)
-            btn.setBackground(showIgnoredItems ? new Color(160, 80, 0) : new Color(38, 38, 38));
+            btn.setBackground(showIgnoredItems ? EYE_BG_ALL_SHOWN : EYE_BG_HIDING);
         else if (btn == sortButton)
         {
             switch (currentSort)

@@ -126,13 +126,14 @@ public interface RunealyticsConfig extends Config
     )
     String lootSection = "loot";
 
-    @ConfigItem(
-            keyName = "enableLootTracking",
-            name = "Enable Loot Tracking",
-            description = "Track all drops and boss kills",
-            section = lootSection,
-            position = 0
-    )
+    /**
+     * Loot tracking is the core feature of RuneAlytics and is always on.
+     * The setter is retained as a no-op so old config files that toggled it
+     * off don't disable tracking on upgrade.
+     *
+     * <p>Kept as an interface method so existing callers compile unchanged —
+     * it now always returns {@code true}.</p>
+     */
     default boolean enableLootTracking()
     {
         return true;

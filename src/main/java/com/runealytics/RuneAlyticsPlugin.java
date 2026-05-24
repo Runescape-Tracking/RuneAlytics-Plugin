@@ -70,12 +70,46 @@ public class RuneAlyticsPlugin extends Plugin
      * inventory changes as belonging to that pickpocket action.
      */
     private static final long PICKPOCKET_WINDOW_MS = 1_800;
-    private static final long SKILLING_SESSION_MS  = 8_000;
+    /**
+     * How long an open skilling-snapshot window stays "live" for inventory
+     * diffs to be attributed to the skill that opened it.
+     *
+     * <p>Was 8 s, which was wide enough that <em>any</em> equipment swap,
+     * bank withdrawal, or shop transaction within 8 s of a lamp / book / quest
+     * XP reward would be falsely attributed to the rewarded skill (issue #3).</p>
+     *
+     * <p>1.5 s ≈ 2½ game ticks — wide enough to catch the inventory tick that
+     * follows a real skilling action (logs/fish/ores arrive on the same or
+     * next tick as the XP), but narrow enough that the player can't realistically
+     * change gear in time after using a lamp.</p>
+     */
+    private static final long SKILLING_SESSION_MS  = 1_500;
+
+    /**
+     * Tick window after a known "Rub" / "Read" / "Use" lamp/book menu click
+     * during which any XP gain skips the skilling-snapshot path entirely.
+     * Game ticks rather than ms because the click → XP delay is tick-bound.
+     */
+    private static final int  LAMP_XP_SUPPRESS_TICKS = 5;
+
+    /** Plugin tick at which the lamp-XP suppression window expires (0 = none). */
+    private long lampXpSuppressUntilTick = 0L;
 
     private static final Set<Skill> SKILLING_TRACKED = java.util.EnumSet.of(
             Skill.WOODCUTTING, Skill.FISHING,  Skill.MINING,    Skill.FARMING,
             Skill.HUNTER,      Skill.HERBLORE, Skill.RUNECRAFT, Skill.FLETCHING,
             Skill.COOKING,     Skill.SMITHING, Skill.CRAFTING,  Skill.AGILITY
+    );
+
+    /**
+     * Menu options that grant XP without producing a skilling drop. When any
+     * of these click on a target whose name contains "lamp", "book", "scroll",
+     * "tome", or "genie", we suppress the skilling snapshot for
+     * {@link #LAMP_XP_SUPPRESS_TICKS} ticks so the subsequent XP gain doesn't
+     * open a window that catches an equipment swap.
+     */
+    private static final Set<String> LAMP_XP_MENU_OPTIONS = java.util.Set.of(
+            "rub", "read", "open", "use", "claim", "activate", "tear"
     );
 
     private final Map<String, List<ItemStack>> skillingSnapshot = new java.util.concurrent.ConcurrentHashMap<>();
@@ -266,40 +300,55 @@ public class RuneAlyticsPlugin extends Plugin
     protected void startUp() throws Exception
     {
         log.info("RuneAlytics starting");
+
+        // Build the navigation button SYNCHRONOUSLY so it is registered with the
+        // toolbar before startUp() returns.  Previously this happened inside an
+        // executor callback, which meant:
+        //   - A rapid disable→enable cycle could leave a stale navButton orphaned
+        //     in the toolbar (issue #1 — UI disappearing).
+        //   - If shutDown() ran before the executor task fired, the button would
+        //     be added AFTER shutDown nulled it, never to be removed.
+        // The button now exists by the time shutDown() can possibly be called.
         mainPanel = injector.getInstance(RuneAlyticsPanel.class);
 
+        navButton = NavigationButton.builder()
+                .tooltip("RuneAlytics")
+                .icon(loadPluginIcon())
+                .priority(1)
+                .panel(mainPanel)
+                .build();
+        clientToolbar.addNavigation(navButton);
+        log.info("RuneAlytics nav button registered");
+
+        // Heavy panel construction stays async — it can take a few ms and we
+        // don't want it on the startup-critical path.  Tabs are appended via
+        // SwingUtilities.invokeLater so they show up the moment they're ready.
         executorService.execute(() ->
         {
             try
             {
-                // Initialize heavy components
-                LootTrackerPanel lootPanel = injector.getInstance(LootTrackerPanel.class);
-                MatchmakingPanel matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
-                RuneAlyticsSettingsPanel settingsPanel = injector.getInstance(RuneAlyticsSettingsPanel.class);
+                LootTrackerPanel        lootPanel        = injector.getInstance(LootTrackerPanel.class);
+                MatchmakingPanel        matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
+                RuneAlyticsSettingsPanel settingsPanel   = injector.getInstance(RuneAlyticsSettingsPanel.class);
 
                 SwingUtilities.invokeLater(() ->
                 {
-                    mainPanel.addTab("Loot Tracker", FEATURE_LOOT, lootPanel);
-                    mainPanel.addTab("Match Finder", FEATURE_MATCHES, matchmakingPanel);
-                    mainPanel.addTab("Settings", FEATURE_VERIFICATION, settingsPanel);
-
-                    navButton = NavigationButton.builder()
-                            .tooltip("RuneAlytics")
-                            .icon(loadPluginIcon())
-                            .priority(1) // Priority 1 ensures it stays near the top/middle
-                            .panel(mainPanel)
-                            .build();
-
-                    // REMOVE first, then ADD to force a UI refresh
-                    clientToolbar.removeNavigation(navButton);
-                    clientToolbar.addNavigation(navButton);
-
-                    log.info("RuneAlytics UI forced onto toolbar");
+                    try
+                    {
+                        mainPanel.addTab("Loot Tracker", FEATURE_LOOT,         lootPanel);
+                        mainPanel.addTab("Match Finder", FEATURE_MATCHES,      matchmakingPanel);
+                        mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
+                        log.info("RuneAlytics tabs populated");
+                    }
+                    catch (Exception ex)
+                    {
+                        log.error("Failed to populate RuneAlytics tabs", ex);
+                    }
                 });
             }
             catch (Exception e)
             {
-                log.error("Failed to build RuneAlytics UI", e);
+                log.error("Failed to instantiate RuneAlytics panels", e);
             }
         });
     }
@@ -311,10 +360,19 @@ public class RuneAlyticsPlugin extends Plugin
 
         // Flush any XP that accumulated in the current 30-second window before
         // the executor shuts down, so the player's last session gains are not lost.
-        xpTrackerManager.flushImmediate();
+        try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.warn("XP flush on shutdown failed: {}", e.getMessage()); }
+        try { lootManager.shutdown();             } catch (Exception e) { log.warn("Loot manager shutdown failed: {}", e.getMessage()); }
 
-        lootManager.shutdown();
-        if (navButton != null) clientToolbar.removeNavigation(navButton);
+        // Always attempt to remove the nav button — even if some other code
+        // path nulled the reference, leaving an orphan would mean the next
+        // startUp adds a duplicate (and the user sees no button).
+        if (navButton != null)
+        {
+            try { clientToolbar.removeNavigation(navButton); }
+            catch (Exception e) { log.warn("Nav button removal failed: {}", e.getMessage()); }
+            navButton = null;
+        }
+
         state.reset();
     }
 
@@ -721,6 +779,25 @@ public class RuneAlyticsPlugin extends Plugin
         String targetName = rawTarget.replaceAll("<[^>]*>", "").trim();
         if (targetName.isEmpty()) return;
 
+        // ── Lamp / book / genie / scroll XP suppression ──────────────────────
+        // These give XP without an inventory drop, but the XP gain still opens
+        // a skilling snapshot window. Pre-emptively close that window so the
+        // next inventory change (e.g. unequip) isn't falsely attributed.
+        String lowerTarget = targetName.toLowerCase();
+        if (LAMP_XP_MENU_OPTIONS.contains(option.toLowerCase())
+                && (lowerTarget.contains("lamp")
+                || lowerTarget.contains("book")
+                || lowerTarget.contains("tome")
+                || lowerTarget.contains("scroll")
+                || lowerTarget.contains("genie")
+                || lowerTarget.contains("antique")))
+        {
+            lampXpSuppressUntilTick = gameTickCount + LAMP_XP_SUPPRESS_TICKS;
+            log.debug("Lamp/book click '{}' on '{}': suppressing skilling snapshot for {} ticks",
+                    option, targetName, LAMP_XP_SUPPRESS_TICKS);
+            // fall through — the impling/pickpocket branches below should still run
+        }
+
         // ── Impling jar loot ─────────────────────────────────────────────────
         // The menu option is "Loot-jar" (or "Loot" in some clients) and the
         // target is the jar item name (e.g. "Eclectic impling jar").
@@ -921,10 +998,15 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         // ── Ring of Wealth auto-pickup ────────────────────────────────────────
-        // Game message: "Your ring of wealth has automatically picked up the coins."
-        // Coins bypass ItemSpawned entirely, so we diff inventory vs the snapshot
-        // taken at the NPC kill and append the gain to the existing kill record.
-        if (lower.contains("ring of wealth") && lower.contains("automatically picked up"))
+        // Game messages (imbued RoW):
+        //   "Your ring of wealth has automatically picked up the coins."
+        //   "Your ring of wealth has automatically alched the <item>."
+        // Auto-picked items bypass ItemSpawned, so we diff inventory vs the
+        // snapshot taken at the NPC kill and append the gain to the last
+        // kill record. We now capture ALL gained items (issue #7 — previously
+        // only coins were captured, so RoW-alched items were silently lost).
+        if (lower.contains("ring of wealth") &&
+                (lower.contains("automatically picked up") || lower.contains("automatically alched")))
         {
             if (rowInventorySnapshot != null && rowSnapshotBoss != null
                     && System.currentTimeMillis() < rowSnapshotExpiry)
@@ -937,17 +1019,12 @@ public class RuneAlyticsPlugin extends Plugin
                 clientThread.invokeLater(() -> {
                     List<ItemStack> current = getCurrentInventory();
                     List<ItemStack> gained  = diffInventory(snap, current);
-                    List<ItemStack> coins   = new ArrayList<>();
-                    for (ItemStack is : gained)
-                    {
-                        if (is.getId() == ITEM_ID_COINS) coins.add(is);
-                    }
-                    if (!coins.isEmpty())
+                    if (!gained.isEmpty())
                     {
                         String bossName = lootManager.normalizeBossName(boss.getName());
-                        lootManager.appendDropsToLastKill(bossName, coins);
-                        log.info("Ring of Wealth: {} coins appended to '{}'",
-                                coins.get(0).getQuantity(), bossName);
+                        lootManager.appendDropsToLastKill(bossName, gained);
+                        log.info("Ring of Wealth: {} item type(s) appended to '{}'",
+                                gained.size(), bossName);
                     }
                 });
             }
@@ -1189,8 +1266,10 @@ public class RuneAlyticsPlugin extends Plugin
         // and fires a single POST to /api/xp/batch.
         xpTrackerManager.onXpGained(skill, gained);
 
-        // ── Skilling loot snapshot (unchanged) ────────────────────────────────
-        if (SKILLING_TRACKED.contains(skill))
+        // ── Skilling loot snapshot ────────────────────────────────────────────
+        // Skipped when the lamp/book suppression window is active (issue #3 —
+        // prevents equipment swaps after lamp XP from being attributed).
+        if (SKILLING_TRACKED.contains(skill) && gameTickCount >= lampXpSuppressUntilTick)
         {
             String key = skill.getName();
             clientThread.invokeLater(() -> {

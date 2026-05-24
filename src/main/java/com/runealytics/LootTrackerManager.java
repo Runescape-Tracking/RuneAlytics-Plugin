@@ -302,6 +302,19 @@ public class LootTrackerManager
      */
     private final Map<String, Long> lastPlayerLootTime = new ConcurrentHashMap<>();
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  LIVE-SYNC DEBOUNCE
+    //
+    //  After every kill we kick off a debounced bulk-sync so drops show up on
+    //  the website within a few seconds (issue #2 — the 60-second scheduled
+    //  task was too slow to feel "live").  At most one upload is in flight at
+    //  a time; rapid consecutive kills coalesce into one HTTP call.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static final long LIVE_SYNC_DEBOUNCE_MS = 2_500;
+    private final java.util.concurrent.atomic.AtomicBoolean liveSyncPending =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     // ═════════════════════════════════════════════════════════════════════════
     //  CONSTRUCTOR
     // ═════════════════════════════════════════════════════════════════════════
@@ -1014,15 +1027,78 @@ public class LootTrackerManager
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  LOOT PATH 5 – GROUND ITEM SPAWN  (ItemSpawned fallback)
+    //  LOOT PATH 5 – GROUND ITEM SPAWN  (ItemSpawned fallback / supplement)
+    //
+    //  This path serves two distinct purposes:
+    //    1. SUPPLEMENT: NpcLootReceived already fired for this NPC and the
+    //       ground items are the same drops. We must not record a second kill
+    //       — instead we dedupe against the last kill's drops and append only
+    //       the truly-extra items (e.g. coins added by RoW that bypassed the
+    //       primary event).
+    //    2. FALLBACK: NpcLootReceived did NOT fire (new content RuneLite
+    //       hasn't catalogued yet). The ground items are the only signal we
+    //       have — record them as a fresh kill.
+    //
+    //  Calling {@code processNpcLoot} unconditionally here is what caused
+    //  every Callisto / Vorkath / etc. kill to be counted twice (issue #12).
     // ═════════════════════════════════════════════════════════════════════════
 
     public void processGroundItemBatch(NPC npc, List<ItemStack> items)
     {
-        if (npc == null || items.isEmpty()) return;
-        log.info("Ground items from '{}' (id={}): {} items",
-                npc.getName(), npc.getId(), items.size());
-        processNpcLoot(npc, items);
+        if (npc == null || items == null || items.isEmpty()) return;
+
+        String name = normalizeBossName(npc.getName());
+        BossKillStats stats = bossKillStats.get(name);
+
+        // No prior kill for this NPC → genuine FALLBACK path
+        if (stats == null || stats.getKillHistory().isEmpty())
+        {
+            log.info("Ground items from '{}' (id={}): {} items — no prior kill, treating as fresh",
+                    npc.getName(), npc.getId(), items.size());
+            processNpcLoot(npc, items);
+            return;
+        }
+
+        // Prior kill exists → SUPPLEMENT path.  Subtract items already on the
+        // last kill record so we don't double-count anything reported by
+        // NpcLootReceived.
+        LootStorageData.KillRecord lastKill =
+                stats.getKillHistory().get(stats.getKillHistory().size() - 1);
+
+        // Only dedupe against kills that happened in the last few seconds —
+        // anything older is a separate kill and the ground items belong to
+        // the new one as a fallback.
+        long ageMs = System.currentTimeMillis() - lastKill.getTimestamp();
+        if (ageMs > 10_000L)
+        {
+            log.info("Ground items from '{}': last kill {}ms ago — treating as fresh",
+                    npc.getName(), ageMs);
+            processNpcLoot(npc, items);
+            return;
+        }
+
+        Map<Integer, Integer> recorded = new HashMap<>();
+        for (LootStorageData.DropRecord dr : lastKill.getDrops())
+            recorded.merge(dr.getItemId(), dr.getQuantity(), Integer::sum);
+
+        List<ItemStack> extras = new ArrayList<>();
+        for (ItemStack item : items)
+        {
+            int alreadyRecorded = recorded.getOrDefault(item.getId(), 0);
+            int delta = item.getQuantity() - alreadyRecorded;
+            if (delta > 0) extras.add(new ItemStack(item.getId(), delta));
+        }
+
+        if (extras.isEmpty())
+        {
+            log.debug("Ground items for '{}': all already recorded by NpcLootReceived — skipping",
+                    npc.getName());
+            return;
+        }
+
+        log.info("Ground items for '{}': appending {} extra item type(s) to last kill",
+                npc.getName(), extras.size());
+        appendDropsToLastKill(name, extras);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1114,10 +1190,45 @@ public class LootTrackerManager
 
         notifyListeners(stats, killRecord);
 
+        // Kick off a debounced live sync so the website updates within a few
+        // seconds.  Multiple kills inside the debounce window batch into one
+        // HTTP call (see LIVE_SYNC_DEBOUNCE_MS).
+        scheduleLiveSync();
+
         log.info("Kill recorded: '{}' #{} (gameKC={}) – {} drops, {} gp",
                 npcName, killNumber, gameKC > 0 ? gameKC : "n/a",
                 drops.size(),
                 drops.stream().mapToLong(LootStorageData.DropRecord::getTotalValue).sum());
+    }
+
+    /**
+     * Schedules a bulk-sync upload {@value #LIVE_SYNC_DEBOUNCE_MS} ms in the
+     * future. If a sync is already scheduled, this is a no-op — the in-flight
+     * sync will pick up any kills recorded in the meantime.
+     */
+    private void scheduleLiveSync()
+    {
+        if (!config.syncLootToServer()) return;
+        if (state.getVerifiedUsername() == null) return;
+
+        if (liveSyncPending.compareAndSet(false, true))
+        {
+            executorService.schedule(() ->
+            {
+                try
+                {
+                    if (state.canSync()) uploadUnsyncedKills();
+                }
+                catch (Exception e)
+                {
+                    log.warn("Live sync failed: {}", e.getMessage());
+                }
+                finally
+                {
+                    liveSyncPending.set(false);
+                }
+            }, LIVE_SYNC_DEBOUNCE_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        }
     }
 
     public void downloadKillHistoryFromServer()
@@ -1290,6 +1401,10 @@ public class LootTrackerManager
     {
         LootStorageData data = storageManager.getCurrentData();
 
+        // Always restore the persisted RuneAlytics-specific ignore list
+        // (issue #6 — must survive a restart).
+        rehydrateHiddenDrops();
+
         if (data == null || data.getBossKills().isEmpty())
         {
             bossKillStats.clear();
@@ -1361,17 +1476,39 @@ public class LootTrackerManager
         List<BossKillStats.AggregatedDrop> result = new ArrayList<>();
         for (LootStorageData.AggregatedDrop agg : bd.getAggregatedDrops().values())
         {
-            result.add(new BossKillStats.AggregatedDrop(
+            BossKillStats.AggregatedDrop drop = new BossKillStats.AggregatedDrop(
                     agg.getItemId(),
                     agg.getItemName(),
                     agg.getTotalQuantity(),
                     agg.getTotalValue(),
                     agg.getDropCount(),
                     agg.getGePrice(),
-                    agg.getHighAlch()));
+                    agg.getHighAlch());
+            // Pet flag is stored on the persisted aggregated record.
+            drop.setPet(agg.isPet());
+
+            // Untradeable lookup is via ItemComposition so it stays correct
+            // even for items that recently became tradeable (or vice versa).
+            try
+            {
+                net.runelite.api.ItemComposition comp = itemManager.getItemComposition(agg.getItemId());
+                if (comp != null) drop.setUntradeable(!comp.isTradeable());
+            }
+            catch (Exception ignored) { /* fall through – treated as tradeable */ }
+
+            result.add(drop);
         }
 
-        result.sort((a, b) -> Long.compare(b.getTotalValue(), a.getTotalValue()));
+        // Issue #9: pets always first, then any other untradeable item, then by
+        // total value descending.  This keeps rare cosmetic / quest drops at the
+        // top of the panel instead of buried at the bottom because their GE
+        // price is 0.
+        result.sort((a, b) ->
+        {
+            if (a.isPet()         != b.isPet())         return a.isPet()         ? -1 : 1;
+            if (a.isUntradeable() != b.isUntradeable()) return a.isUntradeable() ? -1 : 1;
+            return Long.compare(b.getTotalValue(), a.getTotalValue());
+        });
         return result;
     }
 
@@ -1720,7 +1857,7 @@ public class LootTrackerManager
     public void hideDropForNpc(String npcName, int itemId)
     {
         hiddenDrops.computeIfAbsent(npcName, k -> new HashSet<>()).add(itemId);
-        storageManager.saveData();
+        persistHiddenDrops();
     }
 
     public void unhideDropForNpc(String npcName, int itemId)
@@ -1730,8 +1867,41 @@ public class LootTrackerManager
         {
             h.remove(itemId);
             if (h.isEmpty()) hiddenDrops.remove(npcName);
-            storageManager.saveData();
+            persistHiddenDrops();
         }
+    }
+
+    /**
+     * Pushes the in-memory hidden-drops map down to {@link LootStorageData} so
+     * it survives a restart.  Independent of RuneLite's own ignore feature
+     * (issue #6 — users wanted a RuneAlytics-specific list, right-click driven).
+     */
+    private void persistHiddenDrops()
+    {
+        LootStorageData data = storageManager.getCurrentData();
+        if (data == null) data = storageManager.loadData();
+        if (data == null) return;
+        // Defensive copy so future mutations don't accidentally surface to disk.
+        Map<String, Set<Integer>> snapshot = new HashMap<>();
+        for (Map.Entry<String, Set<Integer>> e : hiddenDrops.entrySet())
+            snapshot.put(e.getKey(), new HashSet<>(e.getValue()));
+        data.setHiddenDropsByBoss(snapshot);
+        storageManager.saveData();
+    }
+
+    /**
+     * Restores hidden-drops from persisted storage. Called by
+     * {@link #loadFromStorage}.
+     */
+    private void rehydrateHiddenDrops()
+    {
+        LootStorageData data = storageManager.getCurrentData();
+        if (data == null) return;
+        Map<String, Set<Integer>> saved = data.getHiddenDropsByBoss();
+        if (saved == null) return;
+        hiddenDrops.clear();
+        for (Map.Entry<String, Set<Integer>> e : saved.entrySet())
+            hiddenDrops.put(e.getKey(), new HashSet<>(e.getValue()));
     }
 
     // ═════════════════════════════════════════════════════════════════════════

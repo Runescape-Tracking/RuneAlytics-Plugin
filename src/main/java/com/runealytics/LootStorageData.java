@@ -17,6 +17,16 @@ public class LootStorageData
     @SerializedName("boss_kills")
     private Map<String, BossKillData> bossKills = new HashMap<>();
 
+    /**
+     * RuneAlytics-specific per-boss "ignored item" list.
+     *
+     * <p>Independent of RuneLite's own ignore feature so that hiding a drop in
+     * RuneAlytics has no effect on any other plugin.  Keyed by normalised boss
+     * name; value is the set of item IDs the user has chosen to hide.</p>
+     */
+    @SerializedName("hidden_drops_by_boss")
+    private Map<String, Set<Integer>> hiddenDropsByBoss = new HashMap<>();
+
     @Data
     public static class BossKillData
     {

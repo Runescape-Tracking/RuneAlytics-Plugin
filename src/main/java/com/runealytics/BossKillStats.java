@@ -129,6 +129,12 @@ public class BossKillStats
         private long    gePrice;
         private long    highAlchValue;
         private boolean pet;
+        /**
+         * True for non-tradeable items (quest rewards, untradeable cosmetics,
+         * pets). Used by the panel sort (issue #9) to put untradeables on the
+         * first row regardless of their GE value (which is often 0).
+         */
+        private boolean untradeable;
 
         public AggregatedDrop(int itemId, String itemName,
                               int totalQuantity, long totalValue, int dropCount,
@@ -142,6 +148,7 @@ public class BossKillStats
             this.gePrice       = gePrice;
             this.highAlchValue = highAlchValue;
             this.pet           = false;
+            this.untradeable   = false;
         }
     }
 }

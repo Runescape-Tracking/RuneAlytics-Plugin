@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
+import net.runelite.client.game.ItemManager;
 
 import java.util.List;
 
@@ -15,6 +16,11 @@ import java.util.List;
  *
  * <p>Consolidated here so {@link BankDataManager} and {@link MatchmakingManager}
  * do not each carry their own near-identical copy of the conversion code.</p>
+ *
+ * <p>The "valued" variants additionally embed per-item GE value resolved via
+ * {@link ItemValueResolver} so the server doesn't have to lookup prices
+ * itself, and so untradeable / charged variants (Scythe, Sanguinesti, etc.)
+ * count toward the player's reported wealth (issue #5).</p>
  */
 public final class RuneAlyticsItemJson
 {
@@ -63,5 +69,56 @@ public final class RuneAlyticsItemJson
             arr.add(entry);
         }
         return arr;
+    }
+
+    /**
+     * Same as {@link #fromContainer} but also writes {@code ge_per},
+     * {@code total} for every item — including untradeable / charged variants
+     * resolved via {@link ItemValueResolver} (issue #5).
+     */
+    public static JsonArray fromContainerWithValues(ItemContainer container, ItemManager itemManager)
+    {
+        JsonArray arr = new JsonArray();
+        if (container == null) return arr;
+
+        Item[] items = container.getItems();
+        if (items == null) return arr;
+
+        for (Item item : items)
+        {
+            if (item == null) continue;
+            if (item.getId() <= 0 || item.getQuantity() <= 0) continue;
+
+            int gePer = ItemValueResolver.perItemGeValue(itemManager, item.getId());
+            long total = (long) gePer * item.getQuantity();
+
+            JsonObject entry = new JsonObject();
+            entry.addProperty("id",     item.getId());
+            entry.addProperty("qty",    item.getQuantity());
+            entry.addProperty("ge_per", gePer);
+            entry.addProperty("total",  total);
+            arr.add(entry);
+        }
+        return arr;
+    }
+
+    /**
+     * Sum total GE value (with decomposition) of every item in {@code container}.
+     * Returns 0 for a null/empty container.
+     */
+    public static long containerTotalValue(ItemContainer container, ItemManager itemManager)
+    {
+        if (container == null) return 0L;
+        Item[] items = container.getItems();
+        if (items == null) return 0L;
+
+        long total = 0L;
+        for (Item item : items)
+        {
+            if (item == null) continue;
+            if (item.getId() <= 0 || item.getQuantity() <= 0) continue;
+            total += (long) ItemValueResolver.perItemGeValue(itemManager, item.getId()) * item.getQuantity();
+        }
+        return total;
     }
 }

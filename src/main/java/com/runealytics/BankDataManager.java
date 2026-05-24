@@ -3,6 +3,7 @@ package com.runealytics;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import net.runelite.api.ItemContainer;
+import net.runelite.client.game.ItemManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,11 +17,13 @@ public class BankDataManager
     private static final Logger log = LoggerFactory.getLogger(BankDataManager.class);
 
     private final RunealyticsApiClient apiClient;
+    private final ItemManager itemManager;
 
     @Inject
-    public BankDataManager(RunealyticsApiClient apiClient)
+    public BankDataManager(RunealyticsApiClient apiClient, ItemManager itemManager)
     {
-        this.apiClient = apiClient;
+        this.apiClient   = apiClient;
+        this.itemManager = itemManager;
     }
 
     /**
@@ -110,16 +113,35 @@ public class BankDataManager
         data.addProperty("timestamp", Instant.now().getEpochSecond());
         data.addProperty("world",     0); // Future: populate if you track world
 
-        JsonArray bankItems      = RuneAlyticsItemJson.fromContainer(bankContainer);
-        JsonArray inventoryItems = RuneAlyticsItemJson.fromContainer(inventoryContainer);
-        JsonArray equipmentItems = RuneAlyticsItemJson.fromContainer(equipmentContainer);
+        // Each item now carries its resolved per-item GE value + line total so the
+        // server doesn't have to look prices up itself. Untradeable / charged
+        // variants (Scythe, Sanguinesti, Ferocious Gloves, etc.) are
+        // decomposed into their tradeable components by ItemValueResolver
+        // (issue #5 — bank totals previously under-counted these by tens of
+        // thousands of GP each).
+        JsonArray bankItems      = RuneAlyticsItemJson.fromContainerWithValues(bankContainer,      itemManager);
+        JsonArray inventoryItems = RuneAlyticsItemJson.fromContainerWithValues(inventoryContainer, itemManager);
+        JsonArray equipmentItems = RuneAlyticsItemJson.fromContainerWithValues(equipmentContainer, itemManager);
 
         data.add("items",     bankItems);
         data.add("inventory", inventoryItems);
         data.add("equipment", equipmentItems);
 
-        log.debug("Wealth snapshot: bank={} inv={} equip={} items for {}",
-                bankItems.size(), inventoryItems.size(), equipmentItems.size(), username);
+        long bankValue  = RuneAlyticsItemJson.containerTotalValue(bankContainer,      itemManager);
+        long invValue   = RuneAlyticsItemJson.containerTotalValue(inventoryContainer, itemManager);
+        long equipValue = RuneAlyticsItemJson.containerTotalValue(equipmentContainer, itemManager);
+        long total      = bankValue + invValue + equipValue;
+
+        data.addProperty("bank_value",        bankValue);
+        data.addProperty("inventory_value",   invValue);
+        data.addProperty("equipment_value",   equipValue);
+        data.addProperty("total_wealth",      total);
+
+        log.info("Wealth snapshot: bank={} (gp={}) inv={} (gp={}) equip={} (gp={}) total={} gp",
+                bankItems.size(), bankValue,
+                inventoryItems.size(), invValue,
+                equipmentItems.size(), equipValue,
+                total);
 
         return data;
     }
