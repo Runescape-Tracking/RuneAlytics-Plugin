@@ -189,13 +189,24 @@ public class RunealyticsApiClient
      */
     public boolean verifyToken(String token, String osrsRsn) throws IOException
     {
+        return verifyTokenWithDetail(token, osrsRsn) == null;
+    }
+
+    /**
+     * Like {@link #verifyToken} but returns the server's human-readable error
+     * message on failure instead of a plain boolean, so the UI can show the
+     * exact reason rather than a generic fallback string.
+     *
+     * @return {@code null} on success; a non-empty error string on failure
+     */
+    public String verifyTokenWithDetail(String token, String osrsRsn) throws IOException
+    {
         if (token == null || token.isEmpty())
         {
             log.debug("No token provided for verification check");
-            return false;
+            return "No verification code provided.";
         }
 
-        // Normalise to match server expectations: code uppercase, RSN lowercase trimmed
         String normCode = token.trim().toUpperCase();
         String normRsn  = (osrsRsn != null) ? osrsRsn.trim().toLowerCase() : "";
 
@@ -218,7 +229,13 @@ public class RunealyticsApiClient
         {
             String responseBody = response.body() != null ? response.body().string() : "";
             log.info("[VerifyCheck] HTTP {} body={}", response.code(), responseBody);
-            return response.isSuccessful();
+            if (response.isSuccessful()) return null;
+
+            // Surface the server's own message so the user sees the real reason.
+            String serverMsg = RuneAlyticsJson.extractMessage(responseBody);
+            return (serverMsg != null && !serverMsg.isEmpty())
+                    ? serverMsg
+                    : "Verification failed (HTTP " + response.code() + ").";
         }
     }
 
