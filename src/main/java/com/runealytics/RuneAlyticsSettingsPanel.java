@@ -169,27 +169,37 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private JPanel buildLogoSection()
     {
-        JPanel p = RuneAlyticsUi.verticalPanel();
-        p.setAlignmentX(Component.CENTER_ALIGNMENT);
+        // Outer panel uses FlowLayout.CENTER so the inner stack is centred
+        // horizontally without disturbing the LEFT_ALIGNMENT of its siblings
+        // in the root BoxLayout (mixing alignmentX in BoxLayout causes drift).
+        JPanel outer = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        outer.setOpaque(false);
+        outer.setAlignmentX(Component.LEFT_ALIGNMENT);
+        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 160));
 
-        JLabel logo = loadLogoLabel(80);
+        JPanel inner = new JPanel();
+        inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
+        inner.setOpaque(false);
+
+        JLabel logo = loadLogoLabel(64);
         logo.setAlignmentX(Component.CENTER_ALIGNMENT);
-        p.add(logo);
-        p.add(RuneAlyticsUi.vSpace(8));
+        inner.add(logo);
+        inner.add(RuneAlyticsUi.vSpace(8));
 
         JLabel title = new JLabel("RUNEALYTICS", SwingConstants.CENTER);
         title.setFont(title.getFont().deriveFont(Font.BOLD, 20f));
         title.setForeground(GOLD_COLOR);
         title.setAlignmentX(Component.CENTER_ALIGNMENT);
-        p.add(title);
+        inner.add(title);
 
         JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
         tagline.setFont(tagline.getFont().deriveFont(Font.BOLD, 10f));
         tagline.setForeground(TEAL_COLOR);
         tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
-        p.add(tagline);
+        inner.add(tagline);
 
-        return p;
+        outer.add(inner);
+        return outer;
     }
 
     /**
@@ -201,11 +211,20 @@ public class RuneAlyticsSettingsPanel extends JPanel
     {
         try
         {
-            BufferedImage img = ImageUtil.loadImageResource(
+            BufferedImage src = ImageUtil.loadImageResource(
                     RuneAlyticsSettingsPanel.class, "/runealytics_icon.png");
-            if (img != null)
+            if (src != null)
             {
-                Image scaled = img.getScaledInstance(size, size, Image.SCALE_SMOOTH);
+                // Nearest-neighbour keeps pixel-art icons crisp at integer multiples.
+                // The source icon is 32×32, so 64px = exact 2× with no blurring.
+                BufferedImage scaled = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+                Graphics2D g2 = scaled.createGraphics();
+                g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                        RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+                g2.setRenderingHint(RenderingHints.KEY_RENDERING,
+                        RenderingHints.VALUE_RENDER_QUALITY);
+                g2.drawImage(src, 0, 0, size, size, null);
+                g2.dispose();
                 return new JLabel(new ImageIcon(scaled));
             }
         }
@@ -302,7 +321,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         textCol.add(t);
 
         JLabel b = new JLabel(
-                "<html><body style='width:155px'><span style='color:#aaaaaa'>" + body + "</span></body></html>");
+                "<html><body style='width:130px'><span style='color:#aaaaaa'>" + body + "</span></body></html>");
         b.setFont(b.getFont().deriveFont(Font.PLAIN, 10f));
         textCol.add(b);
 
