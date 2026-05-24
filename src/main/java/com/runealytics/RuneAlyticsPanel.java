@@ -103,7 +103,9 @@ public class RuneAlyticsPanel extends PluginPanel
         // huge preferred height (max-of-all-tabs) up to RuneAlyticsPanel.
         // This is what prevents the sidebar from inflating the client window to
         // fit every boss card in the LootTrackerPanel.
-        tabbedPane = new JTabbedPane(JTabbedPane.TOP)
+        // SCROLL_TAB_LAYOUT keeps all tabs on a single row (no second row).
+        // Calibri 10 pt fits three tabs within PluginPanel.PANEL_WIDTH (220 px).
+        tabbedPane = new JTabbedPane(JTabbedPane.TOP, JTabbedPane.SCROLL_TAB_LAYOUT)
         {
             @Override
             public Dimension getPreferredSize()
@@ -115,7 +117,7 @@ public class RuneAlyticsPanel extends PluginPanel
         };
         tabbedPane.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         tabbedPane.setForeground(Color.WHITE);
-        tabbedPane.setFont(tabbedPane.getFont().deriveFont(Font.PLAIN, 11f));
+        tabbedPane.setFont(new Font("Calibri", Font.PLAIN, 10));
         tabbedPane.setBorder(new EmptyBorder(0, 0, 0, 0));
 
         tabbedPane.addChangeListener(e -> saveLastTab());

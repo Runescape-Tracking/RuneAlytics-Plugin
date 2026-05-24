@@ -20,67 +20,45 @@ import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.concurrent.ScheduledExecutorService;
 
 @Slf4j
 @Singleton
 public class RuneAlyticsSettingsPanel extends JPanel
 {
-    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
-
     private static final String RUNEALYTICS_URL = "https://www.runealytics.com";
     private static final String DISCORD_URL     = "https://runealytics.com/discord";
 
+    // ── Font helper (Calibri, falls back to SansSerif on non-Windows) ─────────
+    private static Font cf(int style, float size) { return new Font("Calibri", style, Math.round(size)); }
+
     // ── Colour palette ────────────────────────────────────────────────────────
-    /** Gold brand colour for the logo title */
-    private static final Color GOLD_COLOR        = new Color(215, 175, 55);
-    /** Teal used for section headers and tagline */
-    private static final Color TEAL_COLOR        = new Color(82, 196, 196);
-    /** Amber used for the full-width Verify Account CTA */
-    private static final Color VERIFY_BTN_COLOR  = new Color(200, 160, 0);
-    /** Green for "Connected" state indicators */
-    private static final Color CONNECTED_GREEN   = new Color(105, 220, 140);
-    /** Red for "Not Connected" state indicators */
-    private static final Color ERROR_RED         = new Color(255, 110, 110);
-    /** Background for step-number cards */
-    private static final Color STEP_CARD_BG      = new Color(40, 40, 42);
-    /** Background circle behind step numbers */
-    private static final Color STEP_ICON_BG      = new Color(55, 55, 60);
+    private static final Color GOLD_COLOR      = new Color(215, 175, 55);
+    private static final Color TEAL_COLOR      = new Color(82, 196, 196);
+    private static final Color VERIFY_BTN_COLOR = new Color(200, 160, 0);
+    private static final Color CONNECTED_GREEN = new Color(105, 220, 140);
+    private static final Color ERROR_RED       = new Color(255, 110, 110);
+    private static final Color STEP_CARD_BG    = new Color(40, 40, 42);
+    private static final Color STEP_ICON_BG    = new Color(55, 55, 60);
+    /** Main body text — high contrast against the dark background. */
+    private static final Color BODY_TEXT       = new Color(204, 204, 204);
+    /** Secondary / detail text. */
+    private static final Color DIM_TEXT        = new Color(180, 180, 180);
 
     // ── Injected dependencies ─────────────────────────────────────────────────
-    /**
-     * Retained for token storage ({@link RuneAlyticsVerificationPanel#saveAccountToken},
-     * {@link RuneAlyticsVerificationPanel#loadAccountToken},
-     * {@link RuneAlyticsVerificationPanel#clearAccountToken}) and for back-compat
-     * with plugin code that calls {@link RuneAlyticsVerificationPanel#refreshLoginState()}.
-     *
-     * @see RuneAlyticsVerificationPanel
-     */
     private final RuneAlyticsVerificationPanel verificationPanel;
-    /** @see RunealyticsConfig */
     private final RunealyticsConfig            config;
-    /** @see RuneAlyticsState */
     private final RuneAlyticsState             state;
-    /** @see RunealyticsApiClient */
     private final RunealyticsApiClient         apiClient;
     private final ScheduledExecutorService     executorService;
     private final Client                       client;
 
-    // ── Verification form live widgets ────────────────────────────────────────
-    /** 6-character verification code entry; auto-uppercased and length-capped */
+    // ── Live widgets ──────────────────────────────────────────────────────────
     private JTextField codeField;
-    /** Triggers the verification API call; disabled until logged in */
     private JButton    verifyButton;
-
-    // ── Connection status card live widgets ───────────────────────────────────
-    /** Bullet/icon label that changes colour with connection state */
-    private JLabel connectionIconLabel;
-    /** "Connected" / "Not Connected" heading inside the status card */
-    private JLabel connectionTitleLabel;
-    /** Detail text inside the status card */
-    private JLabel connectionBodyLabel;
+    private JLabel     connectionIconLabel;
+    private JLabel     connectionTitleLabel;
+    private JLabel     connectionBodyLabel;
 
     @Inject
     public RuneAlyticsSettingsPanel(
@@ -103,16 +81,10 @@ public class RuneAlyticsSettingsPanel extends JPanel
         setBackground(ColorScheme.DARK_GRAY_COLOR);
         setOpaque(true);
 
-        // Forward verification callbacks so the connection card updates
         this.verificationPanel.setVerificationStatusListener(this::handleVerificationStatusChange);
-
         add(buildScrollPane(), BorderLayout.CENTER);
     }
 
-    /**
-     * Mirrors parent height to prevent the sidebar from inflating the RuneLite
-     * window to fit tall content.  Identical pattern to {@link RuneAlyticsPanel}.
-     */
     @Override
     public Dimension getPreferredSize()
     {
@@ -125,39 +97,43 @@ public class RuneAlyticsSettingsPanel extends JPanel
     public Dimension getMinimumSize() { return new Dimension(50, 80); }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Top-level layout
+    //  Scroll pane
     // ═════════════════════════════════════════════════════════════════════════
 
     private JScrollPane buildScrollPane()
     {
         JScrollPane scroll = new JScrollPane(buildContent());
         scroll.setBorder(null);
+        // Fixed 8-px scrollbar so the viewport width is always predictable;
+        // avoids content jittering when the scrollbar appears/disappears.
+        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
         scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        scroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
         scroll.getViewport().setBackground(ColorScheme.DARK_GRAY_COLOR);
         scroll.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        scroll.getVerticalScrollBar().setUnitIncrement(16);
         return scroll;
     }
 
     private JPanel buildContent()
     {
-        JPanel panel = RuneAlyticsUi.rootContentPanel();
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        panel.setOpaque(true);
+        // Extra right padding (14 px) ensures content never bleeds against the scrollbar.
+        panel.setBorder(new EmptyBorder(10, 10, 10, 14));
 
         panel.add(buildLogoSection());
-        panel.add(RuneAlyticsUi.vSpace(14));
-
+        panel.add(vSpace(14));
         panel.add(buildVerificationSection());
-        panel.add(RuneAlyticsUi.vSpace(14));
-
+        panel.add(vSpace(14));
         panel.add(sectionHeader("RUNEALYTICS BENEFITS"));
-        panel.add(RuneAlyticsUi.vSpace(6));
+        panel.add(vSpace(6));
         panel.add(buildBenefitsSection());
-        panel.add(RuneAlyticsUi.vSpace(14));
-
+        panel.add(vSpace(14));
         panel.add(buildNeedHelpSection());
-        panel.add(RuneAlyticsUi.vSpace(10));
-
+        panel.add(vSpace(10));
         panel.add(buildVersionLabel());
         panel.add(Box.createVerticalGlue());
         return panel;
@@ -169,77 +145,96 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private JPanel buildLogoSection()
     {
-        // Outer panel uses FlowLayout.CENTER so the inner stack is centred
-        // horizontally without disturbing the LEFT_ALIGNMENT of its siblings
-        // in the root BoxLayout (mixing alignmentX in BoxLayout causes drift).
+        // FlowLayout.CENTER horizontally centres the inner stack without
+        // breaking the LEFT_ALIGNMENT contract with sibling sections.
         JPanel outer = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
         outer.setOpaque(false);
         outer.setAlignmentX(Component.LEFT_ALIGNMENT);
-        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 160));
+        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 200));
 
         JPanel inner = new JPanel();
         inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
         inner.setOpaque(false);
 
-        JLabel logo = loadLogoLabel(64);
-        logo.setAlignmentX(Component.CENTER_ALIGNMENT);
-        inner.add(logo);
-        inner.add(RuneAlyticsUi.vSpace(8));
+        // Prefer the full branding logo (contains "RuneAlytics" text in image).
+        // Place runealytics_logo.png in src/main/resources/ to activate this path.
+        BufferedImage fullLogo = tryLoadImage("/runealytics_logo.png");
+        if (fullLogo != null)
+        {
+            int displayW = 170;
+            int displayH = Math.max(1,
+                    (int)(fullLogo.getHeight() * (displayW / (double) fullLogo.getWidth())));
+            JLabel lbl = scaledImageLabel(fullLogo, displayW, displayH);
+            lbl.setAlignmentX(Component.CENTER_ALIGNMENT);
+            inner.add(lbl);
+            inner.add(vSpace(4));
+            JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
+            tagline.setFont(cf(Font.BOLD, 9f));
+            tagline.setForeground(TEAL_COLOR);
+            tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
+            inner.add(tagline);
+        }
+        else
+        {
+            // Fallback: 32x32 icon + text labels.
+            BufferedImage icon = tryLoadImage("/runealytics_icon.png");
+            JLabel logo;
+            if (icon != null)
+            {
+                logo = scaledImageLabel(icon, 64, 64);
+            }
+            else
+            {
+                logo = new JLabel("RA", SwingConstants.CENTER);
+                logo.setFont(cf(Font.BOLD, 24f));
+                logo.setForeground(GOLD_COLOR);
+                logo.setOpaque(true);
+                logo.setBackground(new Color(50, 40, 10));
+                logo.setPreferredSize(new Dimension(64, 64));
+                logo.setMaximumSize(new Dimension(64, 64));
+            }
+            logo.setAlignmentX(Component.CENTER_ALIGNMENT);
+            inner.add(logo);
+            inner.add(vSpace(8));
 
-        JLabel title = new JLabel("RUNEALYTICS", SwingConstants.CENTER);
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 20f));
-        title.setForeground(GOLD_COLOR);
-        title.setAlignmentX(Component.CENTER_ALIGNMENT);
-        inner.add(title);
+            JLabel title = new JLabel("RUNEALYTICS", SwingConstants.CENTER);
+            title.setFont(cf(Font.BOLD, 20f));
+            title.setForeground(GOLD_COLOR);
+            title.setAlignmentX(Component.CENTER_ALIGNMENT);
+            inner.add(title);
 
-        JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
-        tagline.setFont(tagline.getFont().deriveFont(Font.BOLD, 10f));
-        tagline.setForeground(TEAL_COLOR);
-        tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
-        inner.add(tagline);
+            JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
+            tagline.setFont(cf(Font.BOLD, 10f));
+            tagline.setForeground(TEAL_COLOR);
+            tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
+            inner.add(tagline);
+        }
 
         outer.add(inner);
         return outer;
     }
 
-    /**
-     * Loads {@code runealytics_icon.png} from the classpath and scales it to
-     * {@code size × size}.  Falls back to a gold "RA" text label if the image
-     * cannot be loaded (e.g. in test environments).
-     */
-    private JLabel loadLogoLabel(int size)
+    /** Loads a classpath image; returns {@code null} silently on failure. */
+    private static BufferedImage tryLoadImage(String resource)
     {
-        try
-        {
-            BufferedImage src = ImageUtil.loadImageResource(
-                    RuneAlyticsSettingsPanel.class, "/runealytics_icon.png");
-            if (src != null)
-            {
-                // Nearest-neighbour keeps pixel-art icons crisp at integer multiples.
-                // The source icon is 32×32, so 64px = exact 2× with no blurring.
-                BufferedImage scaled = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
-                Graphics2D g2 = scaled.createGraphics();
-                g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-                        RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-                g2.setRenderingHint(RenderingHints.KEY_RENDERING,
-                        RenderingHints.VALUE_RENDER_QUALITY);
-                g2.drawImage(src, 0, 0, size, size, null);
-                g2.dispose();
-                return new JLabel(new ImageIcon(scaled));
-            }
-        }
-        catch (Exception e)
-        {
-            log.debug("Logo image unavailable: {}", e.getMessage());
-        }
-        JLabel fallback = new JLabel("RA", SwingConstants.CENTER);
-        fallback.setFont(fallback.getFont().deriveFont(Font.BOLD, 24f));
-        fallback.setForeground(GOLD_COLOR);
-        fallback.setOpaque(true);
-        fallback.setBackground(new Color(50, 40, 10));
-        fallback.setPreferredSize(new Dimension(size, size));
-        fallback.setMaximumSize(new Dimension(size, size));
-        return fallback;
+        try { return ImageUtil.loadImageResource(RuneAlyticsSettingsPanel.class, resource); }
+        catch (Exception e) { return null; }
+    }
+
+    /** Scales {@code src} to exactly {@code w × h} using bicubic interpolation. */
+    private static JLabel scaledImageLabel(BufferedImage src, int w, int h)
+    {
+        BufferedImage dest = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = dest.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g2.setRenderingHint(RenderingHints.KEY_RENDERING,
+                RenderingHints.VALUE_RENDER_QUALITY);
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.drawImage(src, 0, 0, w, h, null);
+        g2.dispose();
+        return new JLabel(new ImageIcon(dest));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -248,58 +243,56 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private JPanel buildVerificationSection()
     {
-        JPanel p = RuneAlyticsUi.verticalPanel();
+        JPanel p = verticalPanel();
 
         p.add(sectionHeader("ACCOUNT VERIFICATION"));
-        p.add(RuneAlyticsUi.vSpace(6));
+        p.add(vSpace(6));
 
-        JLabel desc = new JLabel(
-                "<html><body style='width:195px'>"
-                + "<span style='color:#cccccc'>Connect your <b>RuneLite</b> client with your "
-                + "<b>RuneAlytics</b> account to unlock powerful tracking and analytics features.</span>"
-                + "</body></html>");
-        desc.setFont(desc.getFont().deriveFont(Font.PLAIN, 11f));
-        desc.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel desc = htmlLabel(
+                "<span style='color:#cccccc'>Connect your <b>RuneLite</b> client with your "
+                + "<b>RuneAlytics</b> account to unlock powerful tracking and analytics "
+                + "features.</span>",
+                160);
+        desc.setFont(cf(Font.PLAIN, 11f));
         p.add(desc);
-        p.add(RuneAlyticsUi.vSpace(10));
+        p.add(vSpace(10));
 
-        // Numbered step cards
-        p.add(buildStepCard("1", "Go to Runealytics.com",
+        p.add(buildStepCard("1", "Go to RuneAlytics.com",
                 "Open your browser and visit runealytics.com."));
-        p.add(RuneAlyticsUi.vSpace(5));
-        p.add(buildStepCard("2", "Link your account",
-                "Log in to your account and click \"Link RuneLite\"."));
-        p.add(RuneAlyticsUi.vSpace(5));
-        p.add(buildStepCard("3", "Paste your code below",
-                "Copy your verification code and paste it below to finish."));
-        p.add(RuneAlyticsUi.vSpace(10));
+        p.add(vSpace(5));
+        p.add(buildStepCard("2", "Create an Account",
+                "Sign up and navigate to your Dashboard."));
+        p.add(vSpace(5));
+        p.add(buildStepCard("3", "Get Your Auth Code",
+                "Find the Verify Account section and follow the steps to receive your auth code."));
+        p.add(vSpace(5));
+        p.add(buildStepCard("4", "Paste Your Auth Code",
+                "Enter your auth code in the field below and press Verify Account."));
+        p.add(vSpace(5));
+        p.add(buildStepCard("5", "You're All Set!",
+                "Your RuneLite client is now linked to your RuneAlytics account."));
+        p.add(vSpace(10));
 
-        // Code input
         p.add(sectionHeader("VERIFICATION CODE"));
-        p.add(RuneAlyticsUi.vSpace(4));
+        p.add(vSpace(4));
 
         codeField = RuneAlyticsUi.inputField();
+        codeField.setFont(cf(Font.PLAIN, 12f));
         ((AbstractDocument) codeField.getDocument()).setDocumentFilter(new UpperCaseFilter(6));
         codeField.addActionListener(e -> triggerVerification());
         p.add(codeField);
-        p.add(RuneAlyticsUi.vSpace(6));
+        p.add(vSpace(6));
 
-        // Gold full-width Verify Account button
         verifyButton = buildGoldButton("Verify Account");
         verifyButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
         verifyButton.addActionListener(e -> triggerVerification());
         p.add(verifyButton);
-        p.add(RuneAlyticsUi.vSpace(8));
+        p.add(vSpace(8));
 
-        // Live connection-status card
         p.add(buildConnectionStatusCard());
-
         return p;
     }
 
-    /**
-     * A horizontal step card with a teal-outlined circle number and a title + body text.
-     */
     private JPanel buildStepCard(String stepNum, String title, String body)
     {
         JPanel card = new JPanel();
@@ -311,28 +304,23 @@ public class RuneAlyticsSettingsPanel extends JPanel
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         card.add(buildStepIcon(stepNum));
-        card.add(RuneAlyticsUi.hSpace(10));
+        card.add(hSpace(10));
 
-        JPanel textCol = RuneAlyticsUi.verticalPanel();
+        JPanel textCol = verticalPanel();
 
         JLabel t = new JLabel(title);
-        t.setFont(t.getFont().deriveFont(Font.BOLD, 12f));
+        t.setFont(cf(Font.BOLD, 12f));
         t.setForeground(Color.WHITE);
         textCol.add(t);
 
-        JLabel b = new JLabel(
-                "<html><body style='width:130px'><span style='color:#aaaaaa'>" + body + "</span></body></html>");
-        b.setFont(b.getFont().deriveFont(Font.PLAIN, 10f));
+        JLabel b = htmlLabel("<span style='color:#cccccc'>" + body + "</span>", 108);
+        b.setFont(cf(Font.PLAIN, 10f));
         textCol.add(b);
 
         card.add(textCol);
         return card;
     }
 
-    /**
-     * A teal-bordered circle label with the step number centred inside.
-     * Painted with anti-aliased Graphics2D so the circle is smooth at any DPI.
-     */
     private JLabel buildStepIcon(String num)
     {
         JLabel icon = new JLabel(num, SwingConstants.CENTER)
@@ -341,7 +329,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
             protected void paintComponent(Graphics g)
             {
                 Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON);
                 g2.setColor(STEP_ICON_BG);
                 g2.fillOval(0, 0, getWidth(), getHeight());
                 g2.setColor(TEAL_COLOR);
@@ -351,7 +340,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 super.paintComponent(g);
             }
         };
-        icon.setFont(icon.getFont().deriveFont(Font.BOLD, 13f));
+        icon.setFont(cf(Font.BOLD, 13f));
         icon.setForeground(TEAL_COLOR);
         icon.setOpaque(false);
         Dimension d = new Dimension(30, 30);
@@ -361,10 +350,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
         return icon;
     }
 
-    /**
-     * The bottom card in the verification section; shows the current link state.
-     * Widgets are stored in fields so {@link #updateConnectionStatus} can mutate them.
-     */
     private JPanel buildConnectionStatusCard()
     {
         JPanel card = RuneAlyticsUi.cardPanel();
@@ -375,38 +360,31 @@ public class RuneAlyticsSettingsPanel extends JPanel
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         connectionIconLabel = new JLabel("◉");
-        connectionIconLabel.setFont(connectionIconLabel.getFont().deriveFont(Font.BOLD, 20f));
+        connectionIconLabel.setFont(cf(Font.BOLD, 18f));
         connectionIconLabel.setForeground(ERROR_RED);
         connectionIconLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
         row.add(connectionIconLabel);
-        row.add(RuneAlyticsUi.hSpace(10));
+        row.add(hSpace(10));
 
-        JPanel textCol = RuneAlyticsUi.verticalPanel();
+        JPanel textCol = verticalPanel();
 
         connectionTitleLabel = new JLabel("Not Connected");
-        connectionTitleLabel.setFont(connectionTitleLabel.getFont().deriveFont(Font.BOLD, 13f));
+        connectionTitleLabel.setFont(cf(Font.BOLD, 13f));
         connectionTitleLabel.setForeground(ERROR_RED);
         textCol.add(connectionTitleLabel);
 
         connectionBodyLabel = new JLabel("Your account is not linked.");
-        connectionBodyLabel.setFont(connectionBodyLabel.getFont().deriveFont(Font.PLAIN, 11f));
-        connectionBodyLabel.setForeground(new Color(170, 170, 170));
+        connectionBodyLabel.setFont(cf(Font.PLAIN, 11f));
+        connectionBodyLabel.setForeground(DIM_TEXT);
         textCol.add(connectionBodyLabel);
 
         row.add(textCol);
         card.add(row);
-
         return card;
     }
 
     // ── Verification API call ─────────────────────────────────────────────────
 
-    /**
-     * Reads the code field, validates input, then calls
-     * {@link RunealyticsApiClient#verifyToken} on the executor.
-     * Saves or clears the per-account token via {@link RuneAlyticsVerificationPanel}
-     * and updates {@link RuneAlyticsState} on the EDT.
-     */
     private void triggerVerification()
     {
         if (client.getGameState() != GameState.LOGGED_IN
@@ -474,14 +452,9 @@ public class RuneAlyticsSettingsPanel extends JPanel
         });
     }
 
-    /**
-     * Updates the connection-status card to reflect a verified or unverified state.
-     * Must be called on the EDT.
-     */
     private void updateConnectionStatus(boolean connected, String detail)
     {
         if (connectionIconLabel == null) return;
-
         Color colour = connected ? CONNECTED_GREEN : ERROR_RED;
         connectionIconLabel.setForeground(colour);
         connectionTitleLabel.setForeground(colour);
@@ -495,20 +468,19 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private JPanel buildBenefitsSection()
     {
-        JPanel p = RuneAlyticsUi.verticalPanel();
-
+        JPanel p = verticalPanel();
         addBenefitCard(p, "Real-time Boss & Drop Tracking",
                 "Track your kills, unique drops, and valuable loot in real time.");
-        p.add(RuneAlyticsUi.vSpace(5));
+        p.add(vSpace(5));
         addBenefitCard(p, "Performance Insights",
                 "Analyze your PvM performance with detailed stats and metrics.");
-        p.add(RuneAlyticsUi.vSpace(5));
+        p.add(vSpace(5));
         addBenefitCard(p, "Leaderboards",
                 "Compete with other players on global and server-specific rankings.");
-        p.add(RuneAlyticsUi.vSpace(5));
+        p.add(vSpace(5));
         addBenefitCard(p, "Session History",
                 "Review your past sessions, drops, and progress over time.");
-        p.add(RuneAlyticsUi.vSpace(5));
+        p.add(vSpace(5));
         addBenefitCard(p, "Community Driven",
                 "Join a community of players and share your achievements.");
         return p;
@@ -518,17 +490,15 @@ public class RuneAlyticsSettingsPanel extends JPanel
     {
         JPanel card = RuneAlyticsUi.cardPanel();
 
-        JLabel t = RuneAlyticsUi.bodyLabel(title);
-        t.setFont(t.getFont().deriveFont(Font.BOLD, 12f));
+        JLabel t = new JLabel(title);
+        t.setFont(cf(Font.BOLD, 12f));
+        t.setForeground(Color.WHITE);
+        t.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.add(t);
-        card.add(RuneAlyticsUi.vSpace(3));
+        card.add(vSpace(3));
 
-        JLabel d = new JLabel(
-                "<html><body style='width:175px'>"
-                + "<span style='color:#aaaaaa'>" + desc + "</span>"
-                + "</body></html>");
-        d.setFont(d.getFont().deriveFont(Font.PLAIN, 11f));
-        d.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel d = htmlLabel("<span style='color:#cccccc'>" + desc + "</span>", 148);
+        d.setFont(cf(Font.PLAIN, 11f));
         card.add(d);
         parent.add(card);
     }
@@ -539,37 +509,33 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private JPanel buildNeedHelpSection()
     {
-        JPanel p = RuneAlyticsUi.verticalPanel();
-
+        JPanel p = verticalPanel();
         p.add(sectionHeader("NEED HELP?"));
-        p.add(RuneAlyticsUi.vSpace(6));
+        p.add(vSpace(6));
 
-        JLabel helpText = new JLabel(
-                "<html><body style='width:195px'><span style='color:#cccccc'>"
-                + "Join our Discord or visit runealytics.com for support and more information."
-                + "</span></body></html>");
-        helpText.setFont(helpText.getFont().deriveFont(Font.PLAIN, 11f));
-        helpText.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel helpText = htmlLabel(
+                "<span style='color:#cccccc'>Join our Discord or visit runealytics.com for "
+                + "support and more information.</span>",
+                160);
+        helpText.setFont(cf(Font.PLAIN, 11f));
         p.add(helpText);
-        p.add(RuneAlyticsUi.vSpace(8));
+        p.add(vSpace(8));
 
         JButton discordBtn = buildTealButton("Discord");
         discordBtn.addActionListener(e -> LinkBrowser.browse(DISCORD_URL));
         p.add(discordBtn);
-        p.add(RuneAlyticsUi.vSpace(5));
+        p.add(vSpace(5));
 
         JButton websiteBtn = buildTealButton("Website");
         websiteBtn.addActionListener(e -> LinkBrowser.browse(RUNEALYTICS_URL));
         p.add(websiteBtn);
-
         return p;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Shared button builders
+    //  Button builders
     // ═════════════════════════════════════════════════════════════════════════
 
-    /** Full-width amber button used for the primary Verify Account CTA. */
     private JButton buildGoldButton(String text)
     {
         JButton btn = new JButton(text);
@@ -577,16 +543,14 @@ public class RuneAlyticsSettingsPanel extends JPanel
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         btn.setBackground(VERIFY_BTN_COLOR);
         btn.setForeground(Color.BLACK);
-        btn.setFont(btn.getFont().deriveFont(Font.BOLD, 13f));
+        btn.setFont(cf(Font.BOLD, 13f));
         btn.setBorder(new CompoundBorder(
                 new LineBorder(new Color(180, 140, 0), 1, true),
-                new EmptyBorder(6, 16, 6, 16)
-        ));
+                new EmptyBorder(6, 16, 6, 16)));
         btn.setAlignmentX(Component.LEFT_ALIGNMENT);
         return btn;
     }
 
-    /** Dark teal outline button used for Discord and Website links. */
     private JButton buildTealButton(String text)
     {
         JButton btn = new JButton(text);
@@ -594,38 +558,58 @@ public class RuneAlyticsSettingsPanel extends JPanel
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         btn.setBackground(new Color(30, 70, 70));
         btn.setForeground(TEAL_COLOR);
-        btn.setFont(btn.getFont().deriveFont(Font.BOLD, 12f));
+        btn.setFont(cf(Font.BOLD, 12f));
         btn.setBorder(new CompoundBorder(
                 new LineBorder(TEAL_COLOR.darker(), 1, true),
-                new EmptyBorder(5, 14, 5, 14)
-        ));
+                new EmptyBorder(5, 14, 5, 14)));
         btn.setAlignmentX(Component.LEFT_ALIGNMENT);
         btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
         return btn;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Shared teal section-header label
+    //  Shared label/layout helpers
     // ═════════════════════════════════════════════════════════════════════════
 
     private JLabel sectionHeader(String text)
     {
         JLabel lbl = new JLabel(text);
-        lbl.setFont(lbl.getFont().deriveFont(Font.BOLD, 10f));
+        lbl.setFont(cf(Font.BOLD, 10f));
         lbl.setForeground(TEAL_COLOR);
         lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
         return lbl;
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
-    //  Version label
-    // ═════════════════════════════════════════════════════════════════════════
-
     private JLabel buildVersionLabel()
     {
-        JLabel lbl = new JLabel("Runealytics v1.0.0");
-        lbl.setFont(lbl.getFont().deriveFont(Font.PLAIN, 10f));
+        JLabel lbl = new JLabel("RuneAlytics v1.0.0");
+        lbl.setFont(cf(Font.PLAIN, 10f));
         lbl.setForeground(new Color(90, 90, 90));
+        lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return lbl;
+    }
+
+    private static JPanel verticalPanel()
+    {
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setOpaque(false);
+        p.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return p;
+    }
+
+    private static Component vSpace(int px) { return Box.createRigidArea(new Dimension(0, px)); }
+    private static Component hSpace(int px) { return Box.createRigidArea(new Dimension(px, 0)); }
+
+    /**
+     * Creates an HTML JLabel that wraps text at {@code wrapWidth} pixels.
+     * Font must be set on the returned label separately.
+     */
+    private static JLabel htmlLabel(String htmlContent, int wrapWidth)
+    {
+        JLabel lbl = new JLabel(
+                "<html><body style='width:" + wrapWidth + "px'>"
+                + htmlContent + "</body></html>");
         lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
         return lbl;
     }
@@ -634,7 +618,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
     //  External API (called from RuneAlyticsPlugin)
     // ═════════════════════════════════════════════════════════════════════════
 
-    /** Called on login/logout state change to enable or disable the code field. */
     public void refreshLoginState()
     {
         SwingUtilities.invokeLater(() -> {
@@ -648,13 +631,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
         verificationPanel.refreshLoginState();
     }
 
-    /**
-     * Called by the plugin after server-side verification succeeds or fails.
-     * Updates the connection-status card.
-     *
-     * @param verified whether the account is now verified
-     * @param username the linked RSN, or {@code null} if not verified
-     */
     public void updateVerificationStatus(boolean verified, String username)
     {
         SwingUtilities.invokeLater(() -> {
@@ -666,11 +642,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         });
     }
 
-    /** No-op — kept for API compatibility; last-sync time is no longer shown here. */
-    public void updateLastSyncTime()
-    {
-        // Last sync time display removed in this design revision
-    }
+    public void updateLastSyncTime() { /* display removed in current design */ }
 
     private void handleVerificationStatusChange()
     {
@@ -678,13 +650,12 @@ public class RuneAlyticsSettingsPanel extends JPanel
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  UpperCaseFilter — forces the code field to 6 upper-case characters max
+    //  UpperCaseFilter — 6-char uppercase code field
     // ═════════════════════════════════════════════════════════════════════════
 
     private static final class UpperCaseFilter extends DocumentFilter
     {
         private final int maxLen;
-
         UpperCaseFilter(int maxLen) { this.maxLen = maxLen; }
 
         @Override
@@ -692,8 +663,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 throws BadLocationException
         {
             if (string == null) return;
-            String upper   = string.toUpperCase();
-            int    current = fb.getDocument().getLength();
+            String upper = string.toUpperCase();
+            int current = fb.getDocument().getLength();
             if (current + upper.length() > maxLen)
                 upper = upper.substring(0, Math.max(0, maxLen - current));
             super.insertString(fb, offset, upper, attr);
@@ -704,8 +675,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 throws BadLocationException
         {
             if (text == null) { super.replace(fb, offset, length, null, attrs); return; }
-            String upper   = text.toUpperCase();
-            int    current = fb.getDocument().getLength() - length;
+            String upper = text.toUpperCase();
+            int current = fb.getDocument().getLength() - length;
             if (current + upper.length() > maxLen)
                 upper = upper.substring(0, Math.max(0, maxLen - current));
             super.replace(fb, offset, length, upper, attrs);
