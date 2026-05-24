@@ -818,8 +818,11 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         scrollPane.revalidate();
                         scrollPane.getVerticalScrollBar().setValue(savedScroll);
                     }
-                    catch (Exception ex)
+                    catch (Throwable ex)
                     {
+                        // Catch Throwable (not just Exception) so AssertionError
+                        // and other Errors from deep RuneLite APIs are handled
+                        // rather than escaping and leaving refreshing=true forever.
                         log.error("Refresh EDT rebuild failed", ex);
                     }
                     finally
@@ -828,7 +831,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     }
                 });
             }
-            catch (Exception e)
+            catch (Throwable e)
             {
                 log.error("Refresh background thread failed", e);
                 refreshing.set(false);

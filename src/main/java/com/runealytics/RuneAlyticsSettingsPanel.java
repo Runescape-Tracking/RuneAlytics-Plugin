@@ -215,12 +215,13 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private void addFeatureRow(JPanel parent, String title, String description)
     {
-        JLabel t = RuneAlyticsUi.valueLabel(title);
-        t.setForeground(new Color(220, 220, 220));
+        JLabel t = RuneAlyticsUi.bodyLabel(title);
+        t.setForeground(java.awt.Color.WHITE);
         parent.add(t);
-        JLabel d = new JLabel("<html><span style='color:#888'>" + description.replace("\n", "<br>") + "</span></html>");
+        JLabel d = new JLabel("<html><span style='color:#aaaaaa'>" + description.replace("\n", "<br>") + "</span></html>");
+        d.setForeground(new java.awt.Color(170, 170, 170));
         d.setFont(d.getFont().deriveFont(11f));
-        d.setAlignmentX(Component.LEFT_ALIGNMENT);
+        d.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
         parent.add(d);
         parent.add(RuneAlyticsUi.vSpace(6));
     }

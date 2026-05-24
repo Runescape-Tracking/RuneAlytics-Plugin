@@ -21,6 +21,11 @@ public final class RuneAlyticsUi
     private static final Color MUTED_TEXT     = new Color(200, 200, 200);
     private static final Color CARD_BORDER    = new Color(60, 60, 60, 180);
 
+    // Hard-code white instead of ColorScheme.TEXT_COLOR — that constant's
+    // exact runtime value varies between RuneLite releases and can render
+    // as blue/cyan, making text unreadable on dark backgrounds.
+    private static final Color LABEL_WHITE    = Color.WHITE;
+
     private static final int CARD_CORNER_RADIUS = 6;
 
     // ---------- ROOT / PANELS ----------
@@ -108,7 +113,7 @@ public final class RuneAlyticsUi
     {
         JLabel label = new JLabel(text);
         label.setFont(label.getFont().deriveFont(Font.BOLD, 16f));
-        label.setForeground(ColorScheme.TEXT_COLOR);
+        label.setForeground(LABEL_WHITE);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
     }
@@ -126,12 +131,12 @@ public final class RuneAlyticsUi
     {
         JLabel label = new JLabel(text);
         label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
-        label.setForeground(ColorScheme.TEXT_COLOR);
+        label.setForeground(LABEL_WHITE);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
     }
 
-    /** For grey “value” labels like Username, Last Sync, etc. */
+    /** For grey "value" labels like Username, Last Sync, etc. */
     public static JLabel valueLabel(String text)
     {
         JLabel label = bodyLabel(text);
@@ -143,7 +148,7 @@ public final class RuneAlyticsUi
     {
         JLabel label = new JLabel(" ");
         label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
-        label.setForeground(ColorScheme.TEXT_COLOR);
+        label.setForeground(LABEL_WHITE);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         label.setHorizontalAlignment(SwingConstants.LEFT);
         return label;
@@ -166,8 +171,8 @@ public final class RuneAlyticsUi
         JTextField field = new JTextField();
 
         field.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        field.setForeground(ColorScheme.TEXT_COLOR);
-        field.setCaretColor(ColorScheme.TEXT_COLOR);
+        field.setForeground(LABEL_WHITE);
+        field.setCaretColor(LABEL_WHITE);
 
         Border border = new CompoundBorder(
                 new LineBorder(ColorScheme.DARKER_GRAY_COLOR.brighter(), 1, true),
@@ -214,7 +219,7 @@ public final class RuneAlyticsUi
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
         button.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        button.setForeground(ColorScheme.TEXT_COLOR);
+        button.setForeground(LABEL_WHITE);
 
         button.setBorder(new CompoundBorder(
                 new LineBorder(CARD_BORDER, 1, true),
@@ -252,7 +257,7 @@ public final class RuneAlyticsUi
 
         area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
         area.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        area.setForeground(ColorScheme.TEXT_COLOR);
+        area.setForeground(LABEL_WHITE);
         area.setBorder(new EmptyBorder(4, 4, 4, 4));
 
         area.setAlignmentX(Component.LEFT_ALIGNMENT);

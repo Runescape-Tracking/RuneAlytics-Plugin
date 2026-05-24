@@ -1484,25 +1484,22 @@ public class LootTrackerManager
                     agg.getDropCount(),
                     agg.getGePrice(),
                     agg.getHighAlch());
-            // Pet flag is stored on the persisted aggregated record.
             drop.setPet(agg.isPet());
 
-            // Untradeable lookup is via ItemComposition so it stays correct
-            // even for items that recently became tradeable (or vice versa).
-            try
-            {
-                net.runelite.api.ItemComposition comp = itemManager.getItemComposition(agg.getItemId());
-                if (comp != null) drop.setUntradeable(!comp.isTradeable());
-            }
-            catch (Exception ignored) { /* fall through – treated as tradeable */ }
+            // Use zero GE price + zero high-alch as an EDT-safe proxy for
+            // "untradeable" — avoids calling ItemManager.getItemComposition()
+            // which requires the client thread and throws AssertionError from
+            // the EDT (issue with the previous implementation).
+            boolean likelyUntradeable = !agg.isPet()
+                    && agg.getGePrice() == 0
+                    && agg.getHighAlch() == 0;
+            drop.setUntradeable(likelyUntradeable);
 
             result.add(drop);
         }
 
-        // Issue #9: pets always first, then any other untradeable item, then by
-        // total value descending.  This keeps rare cosmetic / quest drops at the
-        // top of the panel instead of buried at the bottom because their GE
-        // price is 0.
+        // Pets first, then likely-untradeables (zero GE + alch value), then
+        // by total value descending.
         result.sort((a, b) ->
         {
             if (a.isPet()         != b.isPet())         return a.isPet()         ? -1 : 1;
