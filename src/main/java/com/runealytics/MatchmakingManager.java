@@ -6,6 +6,8 @@ import net.runelite.api.InventoryID;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.client.game.ItemManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,17 +23,18 @@ public class MatchmakingManager
     private static final Logger log = LoggerFactory.getLogger(MatchmakingManager.class);
 
     private static final int POLL_INTERVAL_TICKS = 2;
-    private static final int RALLY_DISTANCE = 15;
+    private static final int RALLY_DISTANCE      = 15;
 
-    private final Client client;
-    private final RuneAlyticsState runeAlyticsState;
-    private final MatchmakingApiClient apiClient;
+    private final Client                   client;
+    private final RuneAlyticsState         runeAlyticsState;
+    private final MatchmakingApiClient     apiClient;
     private final ScheduledExecutorService executorService;
+    private final ItemManager              itemManager;
 
-    private MatchmakingSession session;
+    private MatchmakingSession       session;
     private MatchmakingUpdateListener listener;
 
-    private int tickCounter;
+    private int     tickCounter;
     private boolean requestInFlight;
     private boolean beginInFlight;
     private boolean reportInFlight;
@@ -39,29 +42,51 @@ public class MatchmakingManager
     private boolean resultReported;
     private boolean itemsReported;
     private WorldPoint lastRallyPoint;
-    private String lastHintPlayerName;
+    private String     lastHintPlayerName;
 
     /**
-     * Inventory / gear captured on the client thread (game tick) just before
-     * the first accept attempt.  The {@code /accept} endpoint requires these
-     * arrays so the server can store a gear snapshot for the match.
+     * Current enriched inventory snapshot — updated on every game tick and on
+     * every {@link ItemContainerChanged} event so the server always receives
+     * up-to-date item data for risk/gear validation.
+     *
+     * <p>Uses {@code ge_per}/{@code total} values so the server can compute
+     * the player's total risk without its own price lookup.</p>
      */
-    private JsonArray pendingAcceptInventory;
-    private JsonArray pendingAcceptGear;
+    private JsonArray currentInventorySnapshot;
+
+    /**
+     * Current enriched equipment snapshot — includes {@code slot}, {@code id},
+     * {@code qty}, {@code ge_per}, {@code total}.  The {@code slot} field lets
+     * the server identify the weapon slot (3) for gear-rule validation.
+     */
+    private JsonArray currentGearSnapshot;
+
+    /**
+     * Set to {@code true} on {@link ItemContainerChanged} while in a Fighting
+     * match, so {@link #reportItemsIfNeeded()} sends a fresh snapshot to
+     * {@code /report-items} on the next tick.
+     */
+    private boolean gearChangedDuringFight;
 
     @Inject
     public MatchmakingManager(
-            Client client,
-            RuneAlyticsState runeAlyticsState,
-            MatchmakingApiClient apiClient,
-            ScheduledExecutorService executorService
+            Client                   client,
+            RuneAlyticsState         runeAlyticsState,
+            MatchmakingApiClient     apiClient,
+            ScheduledExecutorService executorService,
+            ItemManager              itemManager
     )
     {
-        this.client = client;
+        this.client           = client;
         this.runeAlyticsState = runeAlyticsState;
-        this.apiClient = apiClient;
-        this.executorService = executorService;
+        this.apiClient        = apiClient;
+        this.executorService  = executorService;
+        this.itemManager      = itemManager;
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Public API
+    // ─────────────────────────────────────────────────────────────────────────
 
     public void setListener(MatchmakingUpdateListener listener)
     {
@@ -80,33 +105,33 @@ public class MatchmakingManager
 
     public void loadMatch(String matchCode)
     {
-        if (requestInFlight)
-        {
-            return;
-        }
+        if (requestInFlight) return;
 
         reset();
 
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
         if (verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
         {
             notifyListener(new MatchmakingUpdate(null,
                     "Missing verification or RSN. Please re-verify your account.",
-                    "",
-                    false,
-                    false));
+                    "", false, false));
             return;
         }
 
         requestInFlight = true;
 
+        // Snapshot captured before kicking off the load so the server gets
+        // an immediate validation result even on the first response.
+        final JsonArray inv  = currentInventorySnapshot;
+        final JsonArray gear = currentGearSnapshot;
+
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.getMatch(verificationCode, matchCode, rsn);
+                result = apiClient.getMatch(verificationCode, matchCode, rsn, inv, gear);
             }
             catch (IOException ex)
             {
@@ -118,8 +143,6 @@ public class MatchmakingManager
             if (result.isSuccess() && result.getSession() != null)
             {
                 session = result.getSession();
-                // Accept is driven by onGameTick() so that inventory/gear are
-                // captured on the client thread before the API call is made.
                 updateResultStatus();
             }
 
@@ -127,8 +150,21 @@ public class MatchmakingManager
         });
     }
 
+    /**
+     * Must be called on the <em>client thread</em> every game tick so that
+     * all {@link ItemContainer} reads happen safely.
+     */
     public void onGameTick()
     {
+        if (session == null && currentInventorySnapshot == null)
+        {
+            // No active match yet but still capture snapshots so the very
+            // first loadMatch() call already has item data to send.
+        }
+
+        // ── Always refresh gear snapshot on the client thread ─────────────────
+        refreshSnapshots();
+
         if (session == null || requestInFlight)
         {
             return;
@@ -138,19 +174,13 @@ public class MatchmakingManager
 
         updateHintArrow();
 
-        // Capture inventory/gear on the client thread before the first accept
-        // attempt.  The /accept endpoint requires these arrays — we must read
-        // ItemContainers here (client thread) and cache them for the background
-        // thread that will POST the accept request.
-        if (!session.isLocalJoined() && pendingAcceptInventory == null)
+        // ── Accept: done on first tick where snapshot is ready ────────────────
+        if (!session.isLocalJoined())
         {
-            pendingAcceptInventory = RuneAlyticsItemJson.fromContainer(
-                    client.getItemContainer(InventoryID.INVENTORY));
-            pendingAcceptGear = RuneAlyticsItemJson.fromContainer(
-                    client.getItemContainer(InventoryID.EQUIPMENT));
             attemptAcceptMatchIfNeeded();
         }
 
+        // ── Poll every 2 ticks — includes latest gear for continuous validation
         if (tickCounter % POLL_INTERVAL_TICKS == 0)
         {
             pollMatch();
@@ -160,32 +190,55 @@ public class MatchmakingManager
         reportItemsIfNeeded();
     }
 
+    /**
+     * Called from the plugin's {@code onItemContainerChanged} handler.
+     * Updates the local snapshot immediately so the next poll carries
+     * the freshest data.  Also flags that gear changed during a fight,
+     * which triggers a dedicated {@code /report-items} call.
+     */
+    public void onItemContainerChanged(ItemContainerChanged event)
+    {
+        int containerId = event.getContainerId();
+        if (containerId != InventoryID.INVENTORY.getId()
+                && containerId != InventoryID.EQUIPMENT.getId())
+        {
+            return;
+        }
+
+        // Snapshots are rebuilt on each tick anyway but calling it here
+        // ensures the next poll that fires off-thread has the latest data.
+        refreshSnapshots();
+
+        // Mark gear as changed during a fight so /report-items fires again
+        if (session != null && session.getStatus() != null
+                && session.getStatus().equalsIgnoreCase("Fighting"))
+        {
+            gearChangedDuringFight = true;
+            // Reset itemsReported so the next reportItemsIfNeeded() call fires
+            itemsReported = false;
+        }
+    }
+
     public void reset()
     {
-        session = null;
-        tickCounter = 0;
-        requestInFlight = false;
-        beginInFlight = false;
-        reportInFlight = false;
-        itemsReportInFlight = false;
-        resultReported = false;
-        itemsReported = false;
-        pendingAcceptInventory = null;
-        pendingAcceptGear = null;
+        session                 = null;
+        tickCounter             = 0;
+        requestInFlight         = false;
+        beginInFlight           = false;
+        reportInFlight          = false;
+        itemsReportInFlight     = false;
+        resultReported          = false;
+        itemsReported           = false;
+        gearChangedDuringFight  = false;
+        // Keep snapshots — they reflect the player's current state and are
+        // valid across match resets (e.g. New Match).
         clearHintArrow();
     }
 
     public void onActorDeath(Player player)
     {
-        if (session == null || reportInFlight || resultReported)
-        {
-            return;
-        }
-
-        if (player == null || player.getName() == null)
-        {
-            return;
-        }
+        if (session == null || reportInFlight || resultReported) return;
+        if (player == null || player.getName() == null) return;
 
         String deathName = player.getName();
         if (!deathName.equalsIgnoreCase(session.getPlayer1Username())
@@ -194,11 +247,13 @@ public class MatchmakingManager
             return;
         }
 
-        String token = session.getLocalToken();
+        String token            = session.getLocalToken();
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (token == null || token.isEmpty() || verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        if (token == null || token.isEmpty()
+                || verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty())
         {
             return;
         }
@@ -232,30 +287,55 @@ public class MatchmakingManager
         });
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Private: snapshot management
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Rebuilds {@link #currentInventorySnapshot} and {@link #currentGearSnapshot}
+     * from the live {@link ItemContainer}s.  Must be called on the client thread.
+     *
+     * <p>The inventory includes {@code ge_per}/{@code total} for risk validation.
+     * The equipment includes {@code slot} (weapon = 3) and {@code ge_per}/{@code total}
+     * for gear-rule validation, both computed via {@link ItemValueResolver}.</p>
+     */
+    private void refreshSnapshots()
+    {
+        ItemContainer inv  = client.getItemContainer(InventoryID.INVENTORY);
+        ItemContainer equip = client.getItemContainer(InventoryID.EQUIPMENT);
+
+        currentInventorySnapshot = RuneAlyticsItemJson.fromContainerWithValues(inv,   itemManager);
+        currentGearSnapshot      = RuneAlyticsItemJson.fromEquipmentWithValues(equip, itemManager);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Private: polling + state changes
+    // ─────────────────────────────────────────────────────────────────────────
+
     private void pollMatch()
     {
-        if (requestInFlight)
-        {
-            return;
-        }
+        if (requestInFlight) return;
 
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        if (verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty())
         {
             return;
         }
 
         requestInFlight = true;
 
-        String matchCode = session.getMatchCode();
+        String    matchCode = session.getMatchCode();
+        JsonArray inv       = currentInventorySnapshot;
+        JsonArray gear      = currentGearSnapshot;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.getMatch(verificationCode, matchCode, rsn);
+                result = apiClient.getMatch(verificationCode, matchCode, rsn, inv, gear);
             }
             catch (IOException ex)
             {
@@ -276,34 +356,30 @@ public class MatchmakingManager
 
     private void attemptAcceptMatchIfNeeded()
     {
-        if (session == null || session.isLocalJoined())
-        {
-            return;
-        }
+        if (session == null || session.isLocalJoined()) return;
 
-        String token = session.getLocalToken();
-        if (token == null || token.isEmpty())
-        {
-            return;
-        }
+        String token            = session.getLocalToken();
+        if (token == null || token.isEmpty()) return;
 
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        if (verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty())
         {
             return;
         }
 
-        // Gear should have been captured on the client thread before this call.
-        final JsonArray inventory = pendingAcceptInventory != null ? pendingAcceptInventory : new JsonArray();
-        final JsonArray gear      = pendingAcceptGear      != null ? pendingAcceptGear      : new JsonArray();
+        // Use current snapshot (always populated by refreshSnapshots above)
+        final JsonArray inventory = currentInventorySnapshot != null ? currentInventorySnapshot : new JsonArray();
+        final JsonArray gear      = currentGearSnapshot      != null ? currentGearSnapshot      : new JsonArray();
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.acceptMatch(verificationCode, session.getMatchCode(), rsn, token, inventory, gear);
+                result = apiClient.acceptMatch(
+                        verificationCode, session.getMatchCode(), rsn, token, inventory, gear);
             }
             catch (IOException ex)
             {
@@ -317,27 +393,14 @@ public class MatchmakingManager
                 session = result.getSession();
                 updateResultStatus();
             }
-            else if (result.isTokenRefresh())
-            {
-                // Token expired — clear the cached gear so it is re-captured on
-                // the next game tick with the refreshed token.
-                pendingAcceptInventory = null;
-                pendingAcceptGear = null;
-            }
-            // On any other failure we intentionally do NOT clear
-            // pendingAcceptInventory/pendingAcceptGear.  The next poll will
-            // update session.isLocalJoined() if the server already accepted
-            // the match, which stops further accept attempts naturally.
-            // Clearing on failure would cause an accept-retry loop every tick.
+            // On token_refresh, the snapshot is re-read on the next game tick
+            // before attemptAcceptMatchIfNeeded fires again — no explicit clear needed.
         });
     }
 
     private void attemptBeginMatchIfNeeded()
     {
-        if (session == null || beginInFlight || session.isLocalReadyToFight())
-        {
-            return;
-        }
+        if (session == null || beginInFlight || session.isLocalReadyToFight()) return;
 
         if (session.getStatus().equalsIgnoreCase("Fighting")
                 || session.getStatus().equalsIgnoreCase("Completed")
@@ -347,17 +410,11 @@ public class MatchmakingManager
         }
 
         Player localPlayer = client.getLocalPlayer();
-        if (localPlayer == null)
-        {
-            return;
-        }
+        if (localPlayer == null) return;
 
         String opponentRsn = session.getOpponentRsn();
-        Player opponent = findPlayerByName(opponentRsn);
-        if (opponent == null)
-        {
-            return;
-        }
+        Player opponent    = findPlayerByName(opponentRsn);
+        if (opponent == null) return;
 
         boolean shouldBegin = false;
         if (session.getRally() != null)
@@ -365,37 +422,34 @@ public class MatchmakingManager
             WorldPoint rallyPoint = new WorldPoint(
                     session.getRally().getX(),
                     session.getRally().getY(),
-                    session.getRally().getPlane()
-            );
+                    session.getRally().getPlane());
             shouldBegin = isWithinRally(localPlayer, opponent, rallyPoint);
         }
+        if (!shouldBegin) shouldBegin = isPlayerEngaged(localPlayer, opponent);
+        if (!shouldBegin) return;
 
-        if (!shouldBegin)
-        {
-            shouldBegin = isPlayerEngaged(localPlayer, opponent);
-        }
-
-        if (!shouldBegin)
-        {
-            return;
-        }
-
-        String token = session.getLocalToken();
+        String token            = session.getLocalToken();
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (token == null || token.isEmpty() || verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        if (token == null || token.isEmpty()
+                || verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty())
         {
             return;
         }
 
         beginInFlight = true;
 
+        final JsonArray inv  = currentInventorySnapshot;
+        final JsonArray gear = currentGearSnapshot;
+
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.beginMatch(verificationCode, session.getMatchCode(), rsn, token);
+                result = apiClient.beginMatch(
+                        verificationCode, session.getMatchCode(), rsn, token, inv, gear);
             }
             catch (IOException ex)
             {
@@ -414,47 +468,45 @@ public class MatchmakingManager
         });
     }
 
+    /**
+     * Sends the current gear snapshot to {@code /report-items}.
+     *
+     * <p>Fires when the match transitions to "Fighting" AND whenever the
+     * player's inventory or equipment changes mid-fight (detected via
+     * {@link #onItemContainerChanged}).</p>
+     */
     private void reportItemsIfNeeded()
     {
-        if (session == null || itemsReportInFlight || itemsReported)
-        {
-            return;
-        }
+        if (session == null || itemsReportInFlight || itemsReported) return;
 
-        if (!session.getStatus().equalsIgnoreCase("Fighting"))
-        {
-            return;
-        }
+        if (!session.getStatus().equalsIgnoreCase("Fighting")) return;
 
-        String token = session.getLocalToken();
+        String token            = session.getLocalToken();
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (token == null || token.isEmpty() || verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        if (token == null || token.isEmpty()
+                || verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty())
         {
             return;
         }
 
-        ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
-        ItemContainer gear      = client.getItemContainer(InventoryID.EQUIPMENT);
+        final JsonArray inventoryItems = currentInventorySnapshot != null
+                ? currentInventorySnapshot : new JsonArray();
+        final JsonArray gearItems      = currentGearSnapshot != null
+                ? currentGearSnapshot : new JsonArray();
 
-        JsonArray inventoryItems = RuneAlyticsItemJson.fromContainer(inventory);
-        JsonArray gearItems      = RuneAlyticsItemJson.fromContainer(gear);
-
-        itemsReportInFlight = true;
+        itemsReportInFlight    = true;
+        gearChangedDuringFight = false;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
                 result = apiClient.reportItems(
-                        verificationCode,
-                        session.getMatchCode(),
-                        rsn,
-                        token,
-                        inventoryItems,
-                        gearItems
-                );
+                        verificationCode, session.getMatchCode(), rsn,
+                        token, inventoryItems, gearItems);
             }
             catch (IOException ex)
             {
@@ -466,6 +518,11 @@ public class MatchmakingManager
             if (result.isSuccess())
             {
                 itemsReported = true;
+                if (result.getSession() != null)
+                {
+                    session = result.getSession();
+                    updateResultStatus();
+                }
             }
             else if (result.isTokenRefresh())
             {
@@ -479,18 +536,22 @@ public class MatchmakingManager
     private void refreshToken()
     {
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty() || session == null)
+        if (verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty() || session == null)
         {
             return;
         }
+
+        final JsonArray inv  = currentInventorySnapshot;
+        final JsonArray gear = currentGearSnapshot;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.getMatch(verificationCode, session.getMatchCode(), rsn);
+                result = apiClient.getMatch(verificationCode, session.getMatchCode(), rsn, inv, gear);
             }
             catch (IOException ex)
             {
@@ -507,13 +568,13 @@ public class MatchmakingManager
         });
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Private: state + UI helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
     private void updateResultStatus()
     {
-        if (session == null)
-        {
-            return;
-        }
-
+        if (session == null) return;
         if (session.getStatus().equalsIgnoreCase("Completed")
                 || session.getStatus().equalsIgnoreCase("Canceled"))
         {
@@ -523,50 +584,31 @@ public class MatchmakingManager
 
     private void updateHintArrow()
     {
-        if (session == null)
-        {
-            clearHintArrow();
-            return;
-        }
-
-        if (isMatchCompletedOrCanceled())
-        {
-            clearHintArrow();
-            return;
-        }
+        if (session == null) { clearHintArrow(); return; }
+        if (isMatchCompletedOrCanceled()) { clearHintArrow(); return; }
 
         if (isMatchFighting())
         {
             Player opponent = findPlayerByName(session.getOpponentRsn());
-            if (opponent == null)
-            {
-                clearHintArrow();
-                return;
-            }
-
-            String opponentName = opponent.getName();
-            if (opponentName != null && !opponentName.equalsIgnoreCase(lastHintPlayerName))
+            if (opponent == null) { clearHintArrow(); return; }
+            String name = opponent.getName();
+            if (name != null && !name.equalsIgnoreCase(lastHintPlayerName))
             {
                 client.setHintArrow(opponent);
-                lastHintPlayerName = opponentName;
-                lastRallyPoint = null;
+                lastHintPlayerName = name;
+                lastRallyPoint     = null;
             }
             return;
         }
 
         MatchmakingRally rally = session.getRally();
-        if (rally == null)
-        {
-            clearHintArrow();
-            return;
-        }
+        if (rally == null) { clearHintArrow(); return; }
 
         WorldPoint rallyPoint = new WorldPoint(rally.getX(), rally.getY(), rally.getPlane());
-
         if (!rallyPoint.equals(lastRallyPoint) || lastHintPlayerName != null)
         {
             client.setHintArrow(rallyPoint);
-            lastRallyPoint = rallyPoint;
+            lastRallyPoint     = rallyPoint;
             lastHintPlayerName = null;
         }
     }
@@ -576,33 +618,23 @@ public class MatchmakingManager
         if (lastRallyPoint != null || lastHintPlayerName != null)
         {
             client.clearHintArrow();
-            lastRallyPoint = null;
+            lastRallyPoint     = null;
             lastHintPlayerName = null;
         }
     }
 
     public WorldPoint getMinimapTarget()
     {
-        if (session == null || isMatchCompletedOrCanceled())
-        {
-            return null;
-        }
+        if (session == null || isMatchCompletedOrCanceled()) return null;
 
         if (isMatchFighting())
         {
             Player opponent = findPlayerByName(session.getOpponentRsn());
-            if (opponent != null)
-            {
-                return opponent.getWorldLocation();
-            }
+            if (opponent != null) return opponent.getWorldLocation();
         }
 
         MatchmakingRally rally = session.getRally();
-        if (rally == null)
-        {
-            return null;
-        }
-
+        if (rally == null) return null;
         return new WorldPoint(rally.getX(), rally.getY(), rally.getPlane());
     }
 
@@ -620,49 +652,27 @@ public class MatchmakingManager
 
     private boolean isWithinRally(Player localPlayer, Player opponent, WorldPoint rallyPoint)
     {
-        if (localPlayer == null || opponent == null || rallyPoint == null)
-        {
-            return false;
-        }
-
-        WorldPoint localPoint = localPlayer.getWorldLocation();
-        WorldPoint opponentPoint = opponent.getWorldLocation();
-
-        if (localPoint.getPlane() != rallyPoint.getPlane()
-                || opponentPoint.getPlane() != rallyPoint.getPlane())
-        {
-            return false;
-        }
-
-        return localPoint.distanceTo(rallyPoint) <= RALLY_DISTANCE
-                && opponentPoint.distanceTo(rallyPoint) <= RALLY_DISTANCE;
+        if (localPlayer == null || opponent == null || rallyPoint == null) return false;
+        WorldPoint lp = localPlayer.getWorldLocation();
+        WorldPoint op = opponent.getWorldLocation();
+        if (lp.getPlane() != rallyPoint.getPlane() || op.getPlane() != rallyPoint.getPlane()) return false;
+        return lp.distanceTo(rallyPoint) <= RALLY_DISTANCE
+                && op.distanceTo(rallyPoint) <= RALLY_DISTANCE;
     }
 
     private boolean isPlayerEngaged(Player localPlayer, Player opponent)
     {
-        if (localPlayer.getInteracting() == opponent)
-        {
-            return true;
-        }
-
-        return opponent.getInteracting() == localPlayer;
+        return localPlayer.getInteracting() == opponent
+                || opponent.getInteracting() == localPlayer;
     }
 
     private Player findPlayerByName(String name)
     {
-        if (name == null || name.isEmpty())
-        {
-            return null;
-        }
-
+        if (name == null || name.isEmpty()) return null;
         for (Player player : client.getPlayers())
         {
-            if (player != null && name.equalsIgnoreCase(player.getName()))
-            {
-                return player;
-            }
+            if (player != null && name.equalsIgnoreCase(player.getName())) return player;
         }
-
         return null;
     }
 
@@ -687,27 +697,20 @@ public class MatchmakingManager
 
     private void notifyListener(MatchmakingUpdate update)
     {
-        if (listener == null)
-        {
-            return;
-        }
-
+        if (listener == null) return;
         SwingUtilities.invokeLater(() -> listener.onMatchmakingUpdate(update));
     }
 
     private String resolveVerificationCode()
     {
-        String verificationCode = runeAlyticsState.getVerificationCode();
-        if (verificationCode == null || verificationCode.isEmpty())
-        {
-            return null;
-        }
-        return verificationCode;
+        String code = runeAlyticsState.getVerificationCode();
+        return (code == null || code.isEmpty()) ? null : code;
     }
 
     private String resolveLocalRsn()
     {
-        if (runeAlyticsState.getVerifiedUsername() != null && !runeAlyticsState.getVerifiedUsername().isEmpty())
+        if (runeAlyticsState.getVerifiedUsername() != null
+                && !runeAlyticsState.getVerifiedUsername().isEmpty())
         {
             return runeAlyticsState.getVerifiedUsername();
         }

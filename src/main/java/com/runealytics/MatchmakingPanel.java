@@ -77,6 +77,15 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     private final JLabel  p1Status         = readyLabel();
     private final JLabel  p2Status         = readyLabel();
 
+    // ── validation badge per player ───────────────────────────────────────────
+    // Shows server-computed compliance state (risk, gear rules).  Colour-coded:
+    //   green ✓  — fully compliant
+    //   yellow ⚠ — warnings only (honor rules)
+    //   red ✗    — one or more errors (e.g. insufficient risk)
+    // The text comes directly from the server so the plugin has zero rule logic.
+    private final JLabel  p1Validation     = validationLabel();
+    private final JLabel  p2Validation     = validationLabel();
+
     // ── result-card widgets ───────────────────────────────────────────────────
     private final JPanel  resultCard       = vertPanel();
     private final JLabel  resultName       = new JLabel();
@@ -207,32 +216,36 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         p2Avatar = new AvatarLabel("?");
 
         JPanel body = vertPanel();
-        body.add(buildPlayerRow(p1Avatar, p1Name, p1Tag, p1Status));
+        body.add(buildPlayerRow(p1Avatar, p1Name, p1Tag, p1Status, p1Validation));
         body.add(RuneAlyticsUi.vSpace(4));
-        body.add(buildPlayerRow(p2Avatar, p2Name, p2Tag, p2Status));
+        body.add(buildPlayerRow(p2Avatar, p2Name, p2Tag, p2Status, p2Validation));
 
         playersCard.add(sectionCard("⚐", "Players", body));
         return playersCard;
     }
 
-    private JPanel buildPlayerRow(AvatarLabel avatar, JLabel name, JLabel tag, JLabel status)
+    private JPanel buildPlayerRow(AvatarLabel avatar, JLabel name, JLabel tag,
+                                   JLabel status, JLabel validation)
     {
         JPanel row = new JPanel(new BorderLayout(8, 0));
         row.setOpaque(false);
         row.setAlignmentX(LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 54));
 
         // left: avatar
         row.add(avatar, BorderLayout.WEST);
 
-        // centre: name + tag
+        // centre: name + tag + validation
         JPanel centre = vertPanel();
         centre.setAlignmentY(Component.CENTER_ALIGNMENT);
         name.setAlignmentX(LEFT_ALIGNMENT);
         tag.setAlignmentX(LEFT_ALIGNMENT);
+        validation.setAlignmentX(LEFT_ALIGNMENT);
         centre.add(name);
         centre.add(RuneAlyticsUi.vSpace(1));
         centre.add(tag);
+        centre.add(RuneAlyticsUi.vSpace(2));
+        centre.add(validation);
         row.add(centre, BorderLayout.CENTER);
 
         // right: ready status
@@ -441,6 +454,14 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         applyPlayerStatus(p1Status, myJoined,  myReady,  status);
         applyPlayerStatus(p2Status, oppJoined, oppReady, status);
 
+        // ── validation badges (server-driven — zero rule logic here) ─────────
+        MatchmakingSession.PlayerValidation myVal  = localIsP1
+                ? s.getPlayer1Validation() : s.getPlayer2Validation();
+        MatchmakingSession.PlayerValidation oppVal = localIsP1
+                ? s.getPlayer2Validation() : s.getPlayer1Validation();
+        applyValidation(p1Validation, myVal);
+        applyValidation(p2Validation, oppVal);
+
         // ── result card ──────────────────────────────────────────────────────
         boolean terminal = status.equalsIgnoreCase("Completed")
                 || status.equalsIgnoreCase("Canceled");
@@ -489,6 +510,45 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             default:          bg = STATUS_CANCELED;  icon = "?"; break;
         }
         styleStatusBadge(badge, icon + "  " + capitalize(status), bg);
+    }
+
+    /**
+     * Updates the validation label for one player from the server's compliance
+     * result.  The plugin contains zero rule logic — it simply renders what
+     * the server returns.
+     *
+     * <ul>
+     *   <li>Green  ✓  — no issues (or only warnings)  → valid</li>
+     *   <li>Yellow ⚠  — warnings only (honor rules)    → technically valid</li>
+     *   <li>Red    ✗  — one or more errors             → invalid</li>
+     * </ul>
+     */
+    private void applyValidation(JLabel lbl, MatchmakingSession.PlayerValidation validation)
+    {
+        if (validation == null || validation == MatchmakingSession.VALIDATION_UNKNOWN)
+        {
+            lbl.setText("");
+            return;
+        }
+
+        String firstError   = validation.firstErrorMessage();
+        String firstWarning = validation.firstWarningMessage();
+
+        if (firstError != null)
+        {
+            lbl.setText("✗ " + firstError);
+            lbl.setForeground(COL_RED);
+        }
+        else if (firstWarning != null)
+        {
+            lbl.setText("⚠ " + firstWarning);
+            lbl.setForeground(new Color(230, 180, 40));
+        }
+        else
+        {
+            lbl.setText("✓ Rules met");
+            lbl.setForeground(COL_GREEN);
+        }
     }
 
     private void applyPlayerStatus(JLabel lbl, boolean joined, boolean ready, String matchStatus)
@@ -602,6 +662,14 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     }
 
     // ── static factory helpers ────────────────────────────────────────────────
+
+    private static JLabel validationLabel()
+    {
+        JLabel lbl = new JLabel("");
+        lbl.setFont(cf(Font.PLAIN, 10f));
+        lbl.setForeground(COL_DIM);
+        return lbl;
+    }
 
     private static JPanel vertPanel()
     {

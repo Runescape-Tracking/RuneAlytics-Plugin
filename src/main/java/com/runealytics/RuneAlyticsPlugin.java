@@ -634,6 +634,11 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onItemContainerChanged(ItemContainerChanged event)
     {
+        // ── Matchmaking: refresh gear snapshot and report on change ──────────
+        // Runs on the client thread, so ItemContainer reads inside the manager
+        // are safe.  The manager only acts if a match is active.
+        matchmakingManager.onItemContainerChanged(event);
+
         // ── Bank sync ─────────────────────────────────────────────────────────
         if (event.getContainerId() == InventoryID.BANK.getId()
                 && config.enableBankSync()
