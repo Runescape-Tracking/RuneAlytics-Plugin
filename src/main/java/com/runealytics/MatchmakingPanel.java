@@ -113,17 +113,23 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     private void buildUi()
     {
-        addSectionTitle("Match Finder");
-        addSubtitle("PvP Match Tracker");
+        // Use inline title/subtitle so we can control the gap tightly —
+        // addSectionTitle/addSubtitle add generous spacing suited for taller panels.
+        JLabel title = RuneAlyticsUi.titleLabel("Match Finder");
+        add(title);
+        add(RuneAlyticsUi.vSpace(2));
+        JLabel subtitle = RuneAlyticsUi.subtitleLabel("PvP Match Tracker");
+        add(subtitle);
+        add(RuneAlyticsUi.vSpace(6));
 
         add(buildLoadCard());
-        add(RuneAlyticsUi.vSpace(8));
+        add(RuneAlyticsUi.vSpace(5));
         add(buildMatchCard());
-        add(RuneAlyticsUi.vSpace(8));
+        add(RuneAlyticsUi.vSpace(5));
         add(buildPlayersCard());
-        add(RuneAlyticsUi.vSpace(8));
+        add(RuneAlyticsUi.vSpace(5));
         add(buildResultCard());
-        add(RuneAlyticsUi.vSpace(8));
+        add(RuneAlyticsUi.vSpace(5));
         add(newMatchButton);
         add(Box.createVerticalGlue());
 
@@ -153,11 +159,11 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         entryStatus.setAlignmentX(LEFT_ALIGNMENT);
 
         body.add(desc);
-        body.add(RuneAlyticsUi.vSpace(6));
-        body.add(codeInput);
-        body.add(RuneAlyticsUi.vSpace(6));
-        body.add(loadButton);
         body.add(RuneAlyticsUi.vSpace(4));
+        body.add(codeInput);
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(loadButton);
+        body.add(RuneAlyticsUi.vSpace(3));
         body.add(entryStatus);
 
         return sectionCard("⊟", "Load Match", body);
@@ -170,19 +176,19 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         JPanel body = vertPanel();
 
         body.add(infoRow("#",   "Match Code", matchCodeVal));
-        body.add(RuneAlyticsUi.vSpace(6));
+        body.add(RuneAlyticsUi.vSpace(4));
         body.add(infoRow("⊕",  "World",      worldVal));
-        body.add(RuneAlyticsUi.vSpace(6));
+        body.add(RuneAlyticsUi.vSpace(4));
         body.add(infoRow("◉",  "Location",   locationVal));
-        body.add(RuneAlyticsUi.vSpace(6));
+        body.add(RuneAlyticsUi.vSpace(4));
         body.add(infoRow("◎",  "Stake",      stakeVal));
-        body.add(RuneAlyticsUi.vSpace(8));
+        body.add(RuneAlyticsUi.vSpace(5));
 
         // gear rules strip
         rulesStrip.setOpaque(false);
         rulesStrip.setAlignmentX(LEFT_ALIGNMENT);
         body.add(rulesStrip);
-        body.add(RuneAlyticsUi.vSpace(10));
+        body.add(RuneAlyticsUi.vSpace(6));
 
         // status badge row
         styleStatusBadge(statusBadge, "Pending", STATUS_PENDING);
@@ -202,7 +208,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
         JPanel body = vertPanel();
         body.add(buildPlayerRow(p1Avatar, p1Name, p1Tag, p1Status));
-        body.add(RuneAlyticsUi.vSpace(6));
+        body.add(RuneAlyticsUi.vSpace(4));
         body.add(buildPlayerRow(p2Avatar, p2Name, p2Tag, p2Status));
 
         playersCard.add(sectionCard("⚐", "Players", body));
@@ -211,10 +217,10 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     private JPanel buildPlayerRow(AvatarLabel avatar, JLabel name, JLabel tag, JLabel status)
     {
-        JPanel row = new JPanel(new BorderLayout(10, 0));
+        JPanel row = new JPanel(new BorderLayout(8, 0));
         row.setOpaque(false);
         row.setAlignmentX(LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 46));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
 
         // left: avatar
         row.add(avatar, BorderLayout.WEST);
@@ -225,7 +231,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         name.setAlignmentX(LEFT_ALIGNMENT);
         tag.setAlignmentX(LEFT_ALIGNMENT);
         centre.add(name);
-        centre.add(RuneAlyticsUi.vSpace(2));
+        centre.add(RuneAlyticsUi.vSpace(1));
         centre.add(tag);
         row.add(centre, BorderLayout.CENTER);
 
@@ -251,7 +257,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
         TrophyIcon trophy = new TrophyIcon();
         trophyRow.add(trophy);
-        trophyRow.add(RuneAlyticsUi.hSpace(12));
+        trophyRow.add(RuneAlyticsUi.hSpace(8));
 
         JPanel textCol = vertPanel();
         resultName.setFont(cf(Font.BOLD, 14f));
@@ -537,7 +543,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         card.setAlignmentX(LEFT_ALIGNMENT);
         card.setBorder(new CompoundBorder(
                 new LineBorder(CARD_BORDER, 1, true),
-                new EmptyBorder(12, 12, 12, 12)));
+                new EmptyBorder(8, 10, 8, 10)));
 
         if (!title.isEmpty())
         {
@@ -560,7 +566,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             header.add(titleLbl);
 
             card.add(header);
-            card.add(RuneAlyticsUi.vSpace(10));
+            card.add(RuneAlyticsUi.vSpace(6));
         }
 
         card.add(body);

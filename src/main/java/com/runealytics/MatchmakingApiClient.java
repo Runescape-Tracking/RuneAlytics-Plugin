@@ -161,11 +161,25 @@ public class MatchmakingApiClient
 
         try
         {
-            return gson.fromJson(responseBody, JsonObject.class);
+            // Parse to JsonElement first.  Using JsonObject.class directly
+            // throws JsonSyntaxException when the server returns a top-level
+            // primitive (e.g. "true", "1") instead of an object, which happens
+            // on some error/short-circuit paths.
+            JsonElement element = gson.fromJson(responseBody, JsonElement.class);
+            if (element == null || element.isJsonNull())
+            {
+                return null;
+            }
+            if (element.isJsonObject())
+            {
+                return element.getAsJsonObject();
+            }
+            log.debug("Matchmaking response was not a JSON object: {}", responseBody);
+            return null;
         }
         catch (Exception ex)
         {
-            log.debug("Failed to parse matchmaking response", ex);
+            log.debug("Failed to parse matchmaking response: {}", ex.getMessage());
             return null;
         }
     }

@@ -317,12 +317,18 @@ public class MatchmakingManager
                 session = result.getSession();
                 updateResultStatus();
             }
-            else if (!result.isSuccess())
+            else if (result.isTokenRefresh())
             {
-                // Allow a retry on next tick if the accept failed.
+                // Token expired — clear the cached gear so it is re-captured on
+                // the next game tick with the refreshed token.
                 pendingAcceptInventory = null;
                 pendingAcceptGear = null;
             }
+            // On any other failure we intentionally do NOT clear
+            // pendingAcceptInventory/pendingAcceptGear.  The next poll will
+            // update session.isLocalJoined() if the server already accepted
+            // the match, which stops further accept attempts naturally.
+            // Clearing on failure would cause an accept-retry loop every tick.
         });
     }
 
