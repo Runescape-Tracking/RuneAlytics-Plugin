@@ -42,20 +42,27 @@ public class MatchmakingApiClient
     }
 
     /**
-     * Poll / load a match.  Inventory and gear are sent on every poll so the
-     * server can run real-time validation and return updated compliance results
-     * in each response — zero rule logic lives in the plugin.
+     * Poll / load a match.  Inventory, gear, overhead prayer, and skull status
+     * are sent on every poll so the server can run real-time validation and
+     * return updated compliance results — zero rule logic lives in the plugin.
+     *
+     * @param overheadIconOrdinal {@code HeadIcon.ordinal()} of the active
+     *                            overhead prayer, or {@code -1} for none.
+     * @param isSkulled           {@code true} if the local player is currently
+     *                            skulled (skull icon visible).
      */
     public MatchmakingApiResult getMatch(
             String verificationCode,
             String matchCode,
             String osrsRsn,
             JsonArray playerInventory,
-            JsonArray playerGear
+            JsonArray playerGear,
+            int overheadIconOrdinal,
+            boolean isSkulled
     ) throws IOException
     {
         JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
-        addGearToPayload(payload, playerInventory, playerGear);
+        addPlayerStateToPayload(payload, playerInventory, playerGear, overheadIconOrdinal, isSkulled);
         return executeRequest(GET_MATCH_PATH, payload, matchCode, osrsRsn);
     }
 
@@ -63,7 +70,7 @@ public class MatchmakingApiClient
     public MatchmakingApiResult getMatch(String verificationCode, String matchCode, String osrsRsn)
             throws IOException
     {
-        return getMatch(verificationCode, matchCode, osrsRsn, null, null);
+        return getMatch(verificationCode, matchCode, osrsRsn, null, null, -1, false);
     }
 
     /**
@@ -76,13 +83,17 @@ public class MatchmakingApiClient
             String osrsRsn,
             String authenticationToken,
             JsonArray playerInventory,
-            JsonArray playerGear
+            JsonArray playerGear,
+            int overheadIconOrdinal,
+            boolean isSkulled
     ) throws IOException
     {
         JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
         payload.addProperty("authentication_token", authenticationToken);
-        payload.add("player_inventory", playerInventory != null ? playerInventory : new JsonArray());
-        payload.add("player_gear",      playerGear      != null ? playerGear      : new JsonArray());
+        addPlayerStateToPayload(payload,
+                playerInventory != null ? playerInventory : new JsonArray(),
+                playerGear      != null ? playerGear      : new JsonArray(),
+                overheadIconOrdinal, isSkulled);
         return executeRequest(ACCEPT_MATCH_PATH, payload, matchCode, osrsRsn);
     }
 
@@ -97,12 +108,14 @@ public class MatchmakingApiClient
             String osrsRsn,
             String authenticationToken,
             JsonArray playerInventory,
-            JsonArray playerGear
+            JsonArray playerGear,
+            int overheadIconOrdinal,
+            boolean isSkulled
     ) throws IOException
     {
         JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
         payload.addProperty("authentication_token", authenticationToken);
-        addGearToPayload(payload, playerInventory, playerGear);
+        addPlayerStateToPayload(payload, playerInventory, playerGear, overheadIconOrdinal, isSkulled);
         return executeRequest(BEGIN_MATCH_PATH, payload, matchCode, osrsRsn);
     }
 
@@ -114,7 +127,7 @@ public class MatchmakingApiClient
             String authenticationToken
     ) throws IOException
     {
-        return beginMatch(verificationCode, matchCode, osrsRsn, authenticationToken, null, null);
+        return beginMatch(verificationCode, matchCode, osrsRsn, authenticationToken, null, null, -1, false);
     }
 
     /**
@@ -144,13 +157,17 @@ public class MatchmakingApiClient
             String osrsRsn,
             String authenticationToken,
             JsonElement playerInventory,
-            JsonElement playerGear
+            JsonElement playerGear,
+            int overheadIconOrdinal,
+            boolean isSkulled
     ) throws IOException
     {
         JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
         payload.addProperty("authentication_token", authenticationToken);
-        payload.add("player_inventory", playerInventory);
-        payload.add("player_gear",      playerGear);
+        addPlayerStateToPayload(payload,
+                playerInventory != null && playerInventory.isJsonArray() ? playerInventory.getAsJsonArray() : null,
+                playerGear      != null && playerGear.isJsonArray()      ? playerGear.getAsJsonArray()      : null,
+                overheadIconOrdinal, isSkulled);
         return executeRequest(REPORT_ITEMS_PATH, payload, matchCode, osrsRsn);
     }
 
@@ -167,11 +184,21 @@ public class MatchmakingApiClient
         return payload;
     }
 
-    /** Adds player_inventory and player_gear if non-null. */
-    private void addGearToPayload(JsonObject payload, JsonArray inventory, JsonArray gear)
+    /**
+     * Adds player_inventory, player_gear, overhead_icon, and is_skulled to a
+     * payload.  {@code overheadIconOrdinal} of {@code -1} means no overhead.
+     */
+    private void addPlayerStateToPayload(
+            JsonObject payload,
+            JsonArray inventory,
+            JsonArray gear,
+            int overheadIconOrdinal,
+            boolean isSkulled)
     {
-        if (inventory != null) payload.add("player_inventory", inventory);
-        if (gear      != null) payload.add("player_gear",      gear);
+        if (inventory != null)          payload.add("player_inventory",  inventory);
+        if (gear      != null)          payload.add("player_gear",       gear);
+        if (overheadIconOrdinal >= 0)   payload.addProperty("overhead_icon", overheadIconOrdinal);
+        payload.addProperty("is_skulled", isSkulled);
     }
 
     private MatchmakingApiResult executeRequest(

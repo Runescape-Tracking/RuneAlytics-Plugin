@@ -645,14 +645,15 @@ public class RuneAlyticsPlugin extends Plugin
                 && state.isLoggedIn()
                 && state.isVerified())
         {
-            final String token    = state.getVerificationCode();
-            final String username = state.getVerifiedUsername();
+            final String token          = state.getVerificationCode();
+            final String username       = state.getVerifiedUsername();
+            // Capture containers HERE on the client thread; passing them into
+            // the executor lambda avoids AssertionError from off-thread reads.
+            final ItemContainer bankSnap  = event.getItemContainer();
+            final ItemContainer invSnap   = client.getItemContainer(InventoryID.INVENTORY);
+            final ItemContainer equipSnap = client.getItemContainer(InventoryID.EQUIPMENT);
             executorService.execute(() ->
-                    bankDataManager.syncBankData(
-                            token, username,
-                            event.getItemContainer(),
-                            client.getItemContainer(InventoryID.INVENTORY),
-                            client.getItemContainer(InventoryID.EQUIPMENT)));
+                    bankDataManager.syncBankData(token, username, bankSnap, invSnap, equipSnap));
             return;
         }
 

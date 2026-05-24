@@ -387,8 +387,23 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         if (!update.isSuccess() || update.getSession() == null)
         {
             String msg = update.getMessage();
-            if (msg == null || msg.isEmpty()) msg = "Failed to load match.";
-            setEntryStatus(msg, COL_RED);
+            if (msg == null) msg = "";
+
+            // If a match is already active, a transient poll or background-call
+            // failure should be shown in the entry status bar but MUST NOT hide
+            // the active match cards — that would make the whole UI disappear on
+            // every blip (the root cause of the "death not reported" UX problem).
+            if (matchmakingManager.hasActiveMatch())
+            {
+                if (!msg.isEmpty())
+                {
+                    setEntryStatus(msg, COL_RED);
+                }
+                return;
+            }
+
+            // No active match — this is an explicit load failure; reset to idle.
+            setEntryStatus(msg.isEmpty() ? "Failed to load match." : msg, COL_RED);
             hideActiveCards();
             updateEntryCard();
             return;

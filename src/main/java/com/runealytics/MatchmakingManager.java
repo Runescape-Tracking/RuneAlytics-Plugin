@@ -2,6 +2,7 @@ package com.runealytics;
 
 import com.google.gson.JsonArray;
 import net.runelite.api.Client;
+import net.runelite.api.HeadIcon;
 import net.runelite.api.InventoryID;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
@@ -61,6 +62,21 @@ public class MatchmakingManager
      * the server identify the weapon slot (3) for gear-rule validation.
      */
     private JsonArray currentGearSnapshot;
+
+    /**
+     * Ordinal of the local player's active overhead prayer (HeadIcon.ordinal())
+     * or {@code -1} if no overhead is active.  Sent to the server so it can
+     * enforce "No Overheads" rules in real-time without any rule logic in the
+     * plugin.
+     */
+    private int currentOverheadIconOrdinal = -1;
+
+    /**
+     * Whether the local player currently has a skull icon (is skulled).
+     * Sent to the server so it can calculate effective risk for unskulled
+     * players who would keep their 3 most valuable items on death.
+     */
+    private boolean currentIsSkulled;
 
     /**
      * Set to {@code true} on {@link ItemContainerChanged} while in a Fighting
@@ -125,14 +141,16 @@ public class MatchmakingManager
 
         // Snapshot captured before kicking off the load so the server gets
         // an immediate validation result even on the first response.
-        final JsonArray inv  = currentInventorySnapshot;
-        final JsonArray gear = currentGearSnapshot;
+        final JsonArray inv      = currentInventorySnapshot;
+        final JsonArray gear     = currentGearSnapshot;
+        final int       overhead = currentOverheadIconOrdinal;
+        final boolean   skulled  = currentIsSkulled;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.getMatch(verificationCode, matchCode, rsn, inv, gear);
+                result = apiClient.getMatch(verificationCode, matchCode, rsn, inv, gear, overhead, skulled);
             }
             catch (IOException ex)
             {
@@ -157,10 +175,17 @@ public class MatchmakingManager
      */
     public void onGameTick()
     {
-        // Always refresh gear snapshot on the client thread so every outbound
-        // call (poll, accept, begin-match) carries up-to-date item data for
-        // server-side validation.  Safe even when there is no active match.
-        refreshSnapshots();
+        // Refresh entire player state (inventory, gear, overhead, skull) on the
+        // client thread so every outbound call carries current data.
+        // Safe even when there is no active match.
+        refreshPlayerState();
+
+        // Always update the hint arrow regardless of in-flight state so the
+        // arrow is never stale while waiting for a network response to return.
+        if (session != null)
+        {
+            updateHintArrow();
+        }
 
         if (session == null || requestInFlight)
         {
@@ -168,8 +193,6 @@ public class MatchmakingManager
         }
 
         tickCounter++;
-
-        updateHintArrow();
 
         // ── Accept: done on first tick where snapshot is ready ────────────────
         if (!session.isLocalJoined())
@@ -202,9 +225,9 @@ public class MatchmakingManager
             return;
         }
 
-        // Snapshots are rebuilt on each tick anyway but calling it here
-        // ensures the next poll that fires off-thread has the latest data.
-        refreshSnapshots();
+        // Player state is rebuilt on each tick anyway; calling it here ensures
+        // the next poll fired off-thread has the latest inventory/gear/status.
+        refreshPlayerState();
 
         // Mark gear as changed during a fight so /report-items fires again
         if (session != null && session.getStatus() != null
@@ -297,14 +320,30 @@ public class MatchmakingManager
      * The equipment includes {@code slot} (weapon = 3) and {@code ge_per}/{@code total}
      * for gear-rule validation, both computed via {@link ItemValueResolver}.</p>
      */
-    private void refreshSnapshots()
+    private void refreshPlayerState()
     {
-        ItemContainer inv  = client.getItemContainer(InventoryID.INVENTORY);
+        ItemContainer inv   = client.getItemContainer(InventoryID.INVENTORY);
         ItemContainer equip = client.getItemContainer(InventoryID.EQUIPMENT);
 
         currentInventorySnapshot = RuneAlyticsItemJson.fromContainerWithValues(inv,   itemManager);
         currentGearSnapshot      = RuneAlyticsItemJson.fromEquipmentWithValues(equip, itemManager);
+
+        // Overhead prayer and skull status — captured here (client thread) so
+        // every outbound API call can include them for server-side validation.
+        Player local = client.getLocalPlayer();
+        if (local != null)
+        {
+            HeadIcon overhead         = local.getOverheadIcon();
+            currentOverheadIconOrdinal = (overhead != null) ? overhead.ordinal() : -1;
+            currentIsSkulled           = local.getSkullIcon() >= 0;
+        }
+        else
+        {
+            currentOverheadIconOrdinal = -1;
+            currentIsSkulled           = false;
+        }
     }
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  Private: polling + state changes
@@ -328,12 +367,14 @@ public class MatchmakingManager
         String    matchCode = session.getMatchCode();
         JsonArray inv       = currentInventorySnapshot;
         JsonArray gear      = currentGearSnapshot;
+        int       overhead  = currentOverheadIconOrdinal;
+        boolean   skulled   = currentIsSkulled;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.getMatch(verificationCode, matchCode, rsn, inv, gear);
+                result = apiClient.getMatch(verificationCode, matchCode, rsn, inv, gear, overhead, skulled);
             }
             catch (IOException ex)
             {
@@ -368,9 +409,11 @@ public class MatchmakingManager
             return;
         }
 
-        // Use current snapshot (always populated by refreshSnapshots above)
+        // Use current snapshot (always populated by refreshPlayerState above)
         final JsonArray inventory = currentInventorySnapshot != null ? currentInventorySnapshot : new JsonArray();
         final JsonArray gear      = currentGearSnapshot      != null ? currentGearSnapshot      : new JsonArray();
+        final int       overhead  = currentOverheadIconOrdinal;
+        final boolean   skulled   = currentIsSkulled;
 
         acceptInFlight = true;
 
@@ -379,7 +422,7 @@ public class MatchmakingManager
             try
             {
                 result = apiClient.acceptMatch(
-                        verificationCode, session.getMatchCode(), rsn, token, inventory, gear);
+                        verificationCode, session.getMatchCode(), rsn, token, inventory, gear, overhead, skulled);
             }
             catch (IOException ex)
             {
@@ -453,15 +496,17 @@ public class MatchmakingManager
 
         beginInFlight = true;
 
-        final JsonArray inv  = currentInventorySnapshot;
-        final JsonArray gear = currentGearSnapshot;
+        final JsonArray inv      = currentInventorySnapshot;
+        final JsonArray gear     = currentGearSnapshot;
+        final int       overhead = currentOverheadIconOrdinal;
+        final boolean   skulled  = currentIsSkulled;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
                 result = apiClient.beginMatch(
-                        verificationCode, session.getMatchCode(), rsn, token, inv, gear);
+                        verificationCode, session.getMatchCode(), rsn, token, inv, gear, overhead, skulled);
             }
             catch (IOException ex)
             {
@@ -508,6 +553,8 @@ public class MatchmakingManager
                 ? currentInventorySnapshot : new JsonArray();
         final JsonArray gearItems      = currentGearSnapshot != null
                 ? currentGearSnapshot : new JsonArray();
+        final int     overhead = currentOverheadIconOrdinal;
+        final boolean skulled  = currentIsSkulled;
 
         itemsReportInFlight    = true;
         gearChangedDuringFight = false;
@@ -518,14 +565,14 @@ public class MatchmakingManager
             {
                 result = apiClient.reportItems(
                         verificationCode, session.getMatchCode(), rsn,
-                        token, inventoryItems, gearItems);
+                        token, inventoryItems, gearItems, overhead, skulled);
             }
             catch (IOException ex)
             {
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
-            handleResult(result);
+            handleResult(result);  // handles token refresh internally
 
             if (result.isSuccess())
             {
@@ -535,10 +582,6 @@ public class MatchmakingManager
                     session = result.getSession();
                     updateResultStatus();
                 }
-            }
-            else if (result.isTokenRefresh())
-            {
-                refreshToken();
             }
 
             itemsReportInFlight = false;
@@ -556,14 +599,16 @@ public class MatchmakingManager
             return;
         }
 
-        final JsonArray inv  = currentInventorySnapshot;
-        final JsonArray gear = currentGearSnapshot;
+        final JsonArray inv      = currentInventorySnapshot;
+        final JsonArray gear     = currentGearSnapshot;
+        final int       overhead = currentOverheadIconOrdinal;
+        final boolean   skulled  = currentIsSkulled;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.getMatch(verificationCode, session.getMatchCode(), rsn, inv, gear);
+                result = apiClient.getMatch(verificationCode, session.getMatchCode(), rsn, inv, gear, overhead, skulled);
             }
             catch (IOException ex)
             {
