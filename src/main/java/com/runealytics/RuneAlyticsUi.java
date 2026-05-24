@@ -13,6 +13,9 @@ public final class RuneAlyticsUi
 {
     private RuneAlyticsUi() {}
 
+    /** Calibri font helper — falls back to SansSerif on non-Windows systems. */
+    private static Font cf(int style, float size) { return new Font("Calibri", style, Math.round(size)); }
+
     // ---------- PALETTE / CONSTANTS ----------
 
     // Slightly softer accent colors for statuses
@@ -112,7 +115,7 @@ public final class RuneAlyticsUi
     public static JLabel titleLabel(String text)
     {
         JLabel label = new JLabel(text);
-        label.setFont(label.getFont().deriveFont(Font.BOLD, 16f));
+        label.setFont(cf(Font.BOLD, 17f));
         label.setForeground(LABEL_WHITE);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
@@ -121,7 +124,7 @@ public final class RuneAlyticsUi
     public static JLabel subtitleLabel(String text)
     {
         JLabel label = new JLabel(text);
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 11f));
+        label.setFont(cf(Font.PLAIN, 12f));
         label.setForeground(MUTED_TEXT);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
@@ -130,7 +133,7 @@ public final class RuneAlyticsUi
     public static JLabel bodyLabel(String text)
     {
         JLabel label = new JLabel(text);
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
+        label.setFont(cf(Font.PLAIN, 13f));
         label.setForeground(LABEL_WHITE);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
@@ -147,7 +150,7 @@ public final class RuneAlyticsUi
     public static JLabel statusLabel()
     {
         JLabel label = new JLabel(" ");
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
+        label.setFont(cf(Font.PLAIN, 13f));
         label.setForeground(LABEL_WHITE);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         label.setHorizontalAlignment(SwingConstants.LEFT);
@@ -169,7 +172,7 @@ public final class RuneAlyticsUi
     public static JTextField inputField()
     {
         JTextField field = new JTextField();
-
+        field.setFont(cf(Font.PLAIN, 13f));
         field.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         field.setForeground(LABEL_WHITE);
         field.setCaretColor(LABEL_WHITE);
@@ -193,9 +196,11 @@ public final class RuneAlyticsUi
     public static JButton primaryButton(String text)
     {
         JButton button = new JButton(text);
-
+        button.setFont(cf(Font.BOLD, 13f));
         button.setMargin(new Insets(3, 12, 3, 12));
         button.setFocusPainted(false);
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
         button.setBackground(ColorScheme.BRAND_ORANGE);
@@ -213,9 +218,11 @@ public final class RuneAlyticsUi
     public static JButton secondaryButton(String text)
     {
         JButton button = new JButton(text);
-
+        button.setFont(cf(Font.PLAIN, 12f));
         button.setMargin(new Insets(3, 10, 3, 10));
         button.setFocusPainted(false);
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
         button.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -243,7 +250,7 @@ public final class RuneAlyticsUi
         infoText.setForeground(MUTED_TEXT);
         infoText.setBorder(new EmptyBorder(10, 10, 10, 10));
         infoText.setAlignmentX(Component.LEFT_ALIGNMENT);
-        infoText.setFont(infoText.getFont().deriveFont(Font.PLAIN, 11f));
+        infoText.setFont(cf(Font.PLAIN, 12f));
         return infoText;
     }
 
@@ -269,7 +276,7 @@ public final class RuneAlyticsUi
         JPanel card = cardPanel();
 
         JLabel header = bodyLabel(title);
-        header.setFont(header.getFont().deriveFont(Font.BOLD, 12f));
+        header.setFont(cf(Font.BOLD, 13f));
 
         JScrollPane scroll = new JScrollPane(area);
         scroll.setAlignmentX(Component.LEFT_ALIGNMENT);

@@ -117,7 +117,7 @@ public class RuneAlyticsPanel extends PluginPanel
         };
         tabbedPane.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         tabbedPane.setForeground(Color.WHITE);
-        tabbedPane.setFont(new Font("Calibri", Font.PLAIN, 10));
+        tabbedPane.setFont(new Font("Calibri", Font.PLAIN, 11));
         tabbedPane.setBorder(new EmptyBorder(0, 0, 0, 0));
 
         tabbedPane.addChangeListener(e -> saveLastTab());

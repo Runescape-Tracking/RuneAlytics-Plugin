@@ -29,23 +29,21 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private static final String RUNEALYTICS_URL = "https://www.runealytics.com";
     private static final String DISCORD_URL     = "https://runealytics.com/discord";
 
-    // ── Font helper (Calibri, falls back to SansSerif on non-Windows) ─────────
+    // ── Calibri font helper ───────────────────────────────────────────────────
     private static Font cf(int style, float size) { return new Font("Calibri", style, Math.round(size)); }
 
     // ── Colour palette ────────────────────────────────────────────────────────
-    private static final Color GOLD_COLOR      = new Color(215, 175, 55);
-    private static final Color TEAL_COLOR      = new Color(82, 196, 196);
+    private static final Color GOLD_COLOR       = new Color(215, 175, 55);
+    private static final Color TEAL_COLOR       = new Color(82, 196, 196);
     private static final Color VERIFY_BTN_COLOR = new Color(200, 160, 0);
-    private static final Color CONNECTED_GREEN = new Color(105, 220, 140);
-    private static final Color ERROR_RED       = new Color(255, 110, 110);
-    private static final Color STEP_CARD_BG    = new Color(40, 40, 42);
-    private static final Color STEP_ICON_BG    = new Color(55, 55, 60);
-    /** Main body text — high contrast against the dark background. */
-    private static final Color BODY_TEXT       = new Color(204, 204, 204);
-    /** Secondary / detail text. */
-    private static final Color DIM_TEXT        = new Color(180, 180, 180);
+    private static final Color CONNECTED_GREEN  = new Color(105, 220, 140);
+    private static final Color ERROR_RED        = new Color(255, 110, 110);
+    private static final Color STEP_CARD_BG     = new Color(40, 40, 42);
+    private static final Color STEP_ICON_BG     = new Color(55, 55, 60);
+    private static final Color BODY_TEXT        = new Color(204, 204, 204);
+    private static final Color DIM_TEXT         = new Color(185, 185, 185);
 
-    // ── Injected dependencies ─────────────────────────────────────────────────
+    // ── Dependencies ──────────────────────────────────────────────────────────
     private final RuneAlyticsVerificationPanel verificationPanel;
     private final RunealyticsConfig            config;
     private final RuneAlyticsState             state;
@@ -81,7 +79,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         setBackground(ColorScheme.DARK_GRAY_COLOR);
         setOpaque(true);
 
-        this.verificationPanel.setVerificationStatusListener(this::handleVerificationStatusChange);
+        verificationPanel.setVerificationStatusListener(this::handleVerificationStatusChange);
         add(buildScrollPane(), BorderLayout.CENTER);
     }
 
@@ -104,8 +102,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
     {
         JScrollPane scroll = new JScrollPane(buildContent());
         scroll.setBorder(null);
-        // Fixed 8-px scrollbar so the viewport width is always predictable;
-        // avoids content jittering when the scrollbar appears/disappears.
+        // Fixed 8-px scrollbar keeps the viewport width constant so text never
+        // reflows when the scrollbar appears or disappears.
         scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
         scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
@@ -121,8 +119,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
         panel.setOpaque(true);
-        // Extra right padding (14 px) ensures content never bleeds against the scrollbar.
-        panel.setBorder(new EmptyBorder(10, 10, 10, 14));
+        // 12 px even left/right so content is centred within the viewport.
+        panel.setBorder(new EmptyBorder(10, 12, 10, 12));
 
         panel.add(buildLogoSection());
         panel.add(vSpace(14));
@@ -145,8 +143,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private JPanel buildLogoSection()
     {
-        // FlowLayout.CENTER horizontally centres the inner stack without
-        // breaking the LEFT_ALIGNMENT contract with sibling sections.
+        // FlowLayout.CENTER centres the inner stack without disturbing the
+        // LEFT_ALIGNMENT required by sibling sections in the root BoxLayout.
         JPanel outer = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
         outer.setOpaque(false);
         outer.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -156,8 +154,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
         inner.setOpaque(false);
 
-        // Prefer the full branding logo (contains "RuneAlytics" text in image).
-        // Place runealytics_logo.png in src/main/resources/ to activate this path.
+        // Full branding logo (place runealytics_logo.png in src/main/resources/).
         BufferedImage fullLogo = tryLoadImage("/runealytics_logo.png");
         if (fullLogo != null)
         {
@@ -169,14 +166,14 @@ public class RuneAlyticsSettingsPanel extends JPanel
             inner.add(lbl);
             inner.add(vSpace(4));
             JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
-            tagline.setFont(cf(Font.BOLD, 9f));
+            tagline.setFont(cf(Font.BOLD, 10f));
             tagline.setForeground(TEAL_COLOR);
             tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
             inner.add(tagline);
         }
         else
         {
-            // Fallback: 32x32 icon + text labels.
+            // Fallback: small icon + title/tagline text.
             BufferedImage icon = tryLoadImage("/runealytics_icon.png");
             JLabel logo;
             if (icon != null)
@@ -198,13 +195,13 @@ public class RuneAlyticsSettingsPanel extends JPanel
             inner.add(vSpace(8));
 
             JLabel title = new JLabel("RUNEALYTICS", SwingConstants.CENTER);
-            title.setFont(cf(Font.BOLD, 20f));
+            title.setFont(cf(Font.BOLD, 21f));
             title.setForeground(GOLD_COLOR);
             title.setAlignmentX(Component.CENTER_ALIGNMENT);
             inner.add(title);
 
             JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
-            tagline.setFont(cf(Font.BOLD, 10f));
+            tagline.setFont(cf(Font.BOLD, 11f));
             tagline.setForeground(TEAL_COLOR);
             tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
             inner.add(tagline);
@@ -214,14 +211,12 @@ public class RuneAlyticsSettingsPanel extends JPanel
         return outer;
     }
 
-    /** Loads a classpath image; returns {@code null} silently on failure. */
     private static BufferedImage tryLoadImage(String resource)
     {
         try { return ImageUtil.loadImageResource(RuneAlyticsSettingsPanel.class, resource); }
         catch (Exception e) { return null; }
     }
 
-    /** Scales {@code src} to exactly {@code w × h} using bicubic interpolation. */
     private static JLabel scaledImageLabel(BufferedImage src, int w, int h)
     {
         BufferedImage dest = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
@@ -248,12 +243,14 @@ public class RuneAlyticsSettingsPanel extends JPanel
         p.add(sectionHeader("ACCOUNT VERIFICATION"));
         p.add(vSpace(6));
 
-        JLabel desc = htmlLabel(
-                "<span style='color:#cccccc'>Connect your <b>RuneLite</b> client with your "
+        // Description uses HTML for bold keywords; plain body text uses JTextArea.
+        JLabel desc = new JLabel(
+                "<html><body style='width:155px'>"
+                + "<span style='color:#cccccc'>Connect your <b>RuneLite</b> client with your "
                 + "<b>RuneAlytics</b> account to unlock powerful tracking and analytics "
-                + "features.</span>",
-                160);
-        desc.setFont(cf(Font.PLAIN, 11f));
+                + "features.</span></body></html>");
+        desc.setFont(cf(Font.PLAIN, 12f));
+        desc.setAlignmentX(Component.LEFT_ALIGNMENT);
         p.add(desc);
         p.add(vSpace(10));
 
@@ -277,14 +274,14 @@ public class RuneAlyticsSettingsPanel extends JPanel
         p.add(vSpace(4));
 
         codeField = RuneAlyticsUi.inputField();
-        codeField.setFont(cf(Font.PLAIN, 12f));
-        ((AbstractDocument) codeField.getDocument()).setDocumentFilter(new UpperCaseFilter(6));
+        codeField.setFont(cf(Font.PLAIN, 13f));
+        ((AbstractDocument) codeField.getDocument()).setDocumentFilter(new UpperCaseFilter(20));
         codeField.addActionListener(e -> triggerVerification());
         p.add(codeField);
         p.add(vSpace(6));
 
         verifyButton = buildGoldButton("Verify Account");
-        verifyButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
+        verifyButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
         verifyButton.addActionListener(e -> triggerVerification());
         p.add(verifyButton);
         p.add(vSpace(8));
@@ -309,12 +306,13 @@ public class RuneAlyticsSettingsPanel extends JPanel
         JPanel textCol = verticalPanel();
 
         JLabel t = new JLabel(title);
-        t.setFont(cf(Font.BOLD, 12f));
+        t.setFont(cf(Font.BOLD, 13f));
         t.setForeground(Color.WHITE);
         textCol.add(t);
 
-        JLabel b = htmlLabel("<span style='color:#cccccc'>" + body + "</span>", 108);
-        b.setFont(cf(Font.PLAIN, 10f));
+        // JTextArea wraps naturally to whatever width BoxLayout gives it —
+        // no fixed pixel hint needed, eliminating the HTML-width cut-off issue.
+        JTextArea b = wrapText(body, BODY_TEXT, cf(Font.PLAIN, 11f));
         textCol.add(b);
 
         card.add(textCol);
@@ -369,12 +367,12 @@ public class RuneAlyticsSettingsPanel extends JPanel
         JPanel textCol = verticalPanel();
 
         connectionTitleLabel = new JLabel("Not Connected");
-        connectionTitleLabel.setFont(cf(Font.BOLD, 13f));
+        connectionTitleLabel.setFont(cf(Font.BOLD, 14f));
         connectionTitleLabel.setForeground(ERROR_RED);
         textCol.add(connectionTitleLabel);
 
         connectionBodyLabel = new JLabel("Your account is not linked.");
-        connectionBodyLabel.setFont(cf(Font.PLAIN, 11f));
+        connectionBodyLabel.setFont(cf(Font.PLAIN, 12f));
         connectionBodyLabel.setForeground(DIM_TEXT);
         textCol.add(connectionBodyLabel);
 
@@ -383,26 +381,23 @@ public class RuneAlyticsSettingsPanel extends JPanel
         return card;
     }
 
-    // ── Verification API call ─────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Verification logic
+    // ═════════════════════════════════════════════════════════════════════════
 
     private void triggerVerification()
     {
-        if (client.getGameState() != GameState.LOGGED_IN
-                || client.getLocalPlayer() == null)
-        {
-            updateConnectionStatus(false, "Log into RuneScape first to link your account.");
-            return;
-        }
-
         String code = codeField.getText().trim().toUpperCase();
         if (code.isEmpty())
         {
             updateConnectionStatus(false, "Enter the code from RuneAlytics.com.");
             return;
         }
-        if (code.length() != 6)
+
+        if (client.getGameState() != GameState.LOGGED_IN
+                || client.getLocalPlayer() == null)
         {
-            updateConnectionStatus(false, "Code must be exactly 6 characters.");
+            updateConnectionStatus(false, "Log into RuneScape first to link your account.");
             return;
         }
 
@@ -491,14 +486,14 @@ public class RuneAlyticsSettingsPanel extends JPanel
         JPanel card = RuneAlyticsUi.cardPanel();
 
         JLabel t = new JLabel(title);
-        t.setFont(cf(Font.BOLD, 12f));
+        t.setFont(cf(Font.BOLD, 13f));
         t.setForeground(Color.WHITE);
         t.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.add(t);
         card.add(vSpace(3));
 
-        JLabel d = htmlLabel("<span style='color:#cccccc'>" + desc + "</span>", 148);
-        d.setFont(cf(Font.PLAIN, 11f));
+        // JTextArea fills the card width and wraps naturally — no fixed HTML width.
+        JTextArea d = wrapText(desc, BODY_TEXT, cf(Font.PLAIN, 12f));
         card.add(d);
         parent.add(card);
     }
@@ -513,23 +508,54 @@ public class RuneAlyticsSettingsPanel extends JPanel
         p.add(sectionHeader("NEED HELP?"));
         p.add(vSpace(6));
 
-        JLabel helpText = htmlLabel(
-                "<span style='color:#cccccc'>Join our Discord or visit runealytics.com for "
-                + "support and more information.</span>",
-                160);
-        helpText.setFont(cf(Font.PLAIN, 11f));
+        JTextArea helpText = wrapText(
+                "Join our Discord or visit runealytics.com for support and more information.",
+                BODY_TEXT, cf(Font.PLAIN, 12f));
         p.add(helpText);
         p.add(vSpace(8));
 
         JButton discordBtn = buildTealButton("Discord");
-        discordBtn.addActionListener(e -> LinkBrowser.browse(DISCORD_URL));
+        discordBtn.addActionListener(e ->
+                openExternalLink(DISCORD_URL, "RuneAlytics Discord"));
         p.add(discordBtn);
         p.add(vSpace(5));
 
         JButton websiteBtn = buildTealButton("Website");
-        websiteBtn.addActionListener(e -> LinkBrowser.browse(RUNEALYTICS_URL));
+        websiteBtn.addActionListener(e ->
+                openExternalLink(RUNEALYTICS_URL, "RuneAlytics.com"));
         p.add(websiteBtn);
         return p;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  External link warning
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void openExternalLink(String url, String siteName)
+    {
+        String message =
+                "<html><body style='width:270px; font-family:Calibri; font-size:12pt'>"
+                + "<b style='font-size:13pt'>&#9888; External Website</b><br><br>"
+                + "You are about to open <b>" + siteName + "</b>, a third-party website."
+                + "<br><br>"
+                + "<b>RuneLite is not affiliated with RuneAlytics</b> and takes no "
+                + "responsibility for its content or services.<br><br>"
+                + "<b>By continuing you acknowledge:</b><ul style='margin:4px 0 0 16px'>"
+                + "<li>This site may set <b>cookies</b> and can see your <b>IP address</b></li>"
+                + "<li><b>Do NOT</b> reuse passwords — especially your OSRS, email, "
+                + "or banking passwords</li>"
+                + "<li>You are solely responsible for your own account security</li>"
+                + "</ul></body></html>";
+
+        int choice = JOptionPane.showConfirmDialog(
+                SwingUtilities.getWindowAncestor(this),
+                message,
+                "External Website — RuneAlytics",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+
+        if (choice == JOptionPane.OK_OPTION)
+            LinkBrowser.browse(url);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -540,10 +566,12 @@ public class RuneAlyticsSettingsPanel extends JPanel
     {
         JButton btn = new JButton(text);
         btn.setFocusPainted(false);
+        btn.setOpaque(true);
+        btn.setContentAreaFilled(true);
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         btn.setBackground(VERIFY_BTN_COLOR);
         btn.setForeground(Color.BLACK);
-        btn.setFont(cf(Font.BOLD, 13f));
+        btn.setFont(cf(Font.BOLD, 14f));
         btn.setBorder(new CompoundBorder(
                 new LineBorder(new Color(180, 140, 0), 1, true),
                 new EmptyBorder(6, 16, 6, 16)));
@@ -555,26 +583,28 @@ public class RuneAlyticsSettingsPanel extends JPanel
     {
         JButton btn = new JButton(text);
         btn.setFocusPainted(false);
+        btn.setOpaque(true);
+        btn.setContentAreaFilled(true);
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         btn.setBackground(new Color(30, 70, 70));
         btn.setForeground(TEAL_COLOR);
-        btn.setFont(cf(Font.BOLD, 12f));
+        btn.setFont(cf(Font.BOLD, 13f));
         btn.setBorder(new CompoundBorder(
                 new LineBorder(TEAL_COLOR.darker(), 1, true),
                 new EmptyBorder(5, 14, 5, 14)));
         btn.setAlignmentX(Component.LEFT_ALIGNMENT);
-        btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
         return btn;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Shared label/layout helpers
+    //  Shared helpers
     // ═════════════════════════════════════════════════════════════════════════
 
     private JLabel sectionHeader(String text)
     {
         JLabel lbl = new JLabel(text);
-        lbl.setFont(cf(Font.BOLD, 10f));
+        lbl.setFont(cf(Font.BOLD, 11f));
         lbl.setForeground(TEAL_COLOR);
         lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
         return lbl;
@@ -583,10 +613,34 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private JLabel buildVersionLabel()
     {
         JLabel lbl = new JLabel("RuneAlytics v1.0.0");
-        lbl.setFont(cf(Font.PLAIN, 10f));
+        lbl.setFont(cf(Font.PLAIN, 11f));
         lbl.setForeground(new Color(90, 90, 90));
         lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
         return lbl;
+    }
+
+    /**
+     * A read-only, transparent JTextArea that wraps naturally to the width
+     * BoxLayout allocates for it — eliminates the fixed-pixel HTML-width
+     * cut-off issue entirely.
+     */
+    private static JTextArea wrapText(String text, Color fg, Font font)
+    {
+        JTextArea area = new JTextArea(text);
+        area.setEditable(false);
+        area.setFocusable(false);
+        area.setOpaque(false);
+        area.setLineWrap(true);
+        area.setWrapStyleWord(true);
+        area.setForeground(fg);
+        area.setFont(font);
+        area.setAlignmentX(Component.LEFT_ALIGNMENT);
+        area.setBorder(null);
+        area.setMargin(new Insets(0, 0, 0, 0));
+        // Allow BoxLayout to shrink this area; without a zero minimum,
+        // the preferred width (full text on one line) would overflow containers.
+        area.setMinimumSize(new Dimension(0, 0));
+        return area;
     }
 
     private static JPanel verticalPanel()
@@ -601,19 +655,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private static Component vSpace(int px) { return Box.createRigidArea(new Dimension(0, px)); }
     private static Component hSpace(int px) { return Box.createRigidArea(new Dimension(px, 0)); }
 
-    /**
-     * Creates an HTML JLabel that wraps text at {@code wrapWidth} pixels.
-     * Font must be set on the returned label separately.
-     */
-    private static JLabel htmlLabel(String htmlContent, int wrapWidth)
-    {
-        JLabel lbl = new JLabel(
-                "<html><body style='width:" + wrapWidth + "px'>"
-                + htmlContent + "</body></html>");
-        lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-        return lbl;
-    }
-
     // ═════════════════════════════════════════════════════════════════════════
     //  External API (called from RuneAlyticsPlugin)
     // ═════════════════════════════════════════════════════════════════════════
@@ -623,9 +664,9 @@ public class RuneAlyticsSettingsPanel extends JPanel
         SwingUtilities.invokeLater(() -> {
             boolean loggedIn = (client.getGameState() == GameState.LOGGED_IN
                     && client.getLocalPlayer() != null);
-            if (codeField    != null) codeField.setEnabled(loggedIn);
-            if (verifyButton != null) verifyButton.setEnabled(loggedIn);
-            if (!loggedIn && codeField != null)
+            // Controls stay enabled always; triggerVerification() handles
+            // the not-logged-in case with a clear status message.
+            if (!loggedIn)
                 updateConnectionStatus(false, "Log into RuneScape to link your account.");
         });
         verificationPanel.refreshLoginState();
@@ -642,7 +683,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         });
     }
 
-    public void updateLastSyncTime() { /* display removed in current design */ }
+    public void updateLastSyncTime() { /* display removed */ }
 
     private void handleVerificationStatusChange()
     {
@@ -650,7 +691,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  UpperCaseFilter — 6-char uppercase code field
+    //  UpperCaseFilter
     // ═════════════════════════════════════════════════════════════════════════
 
     private static final class UpperCaseFilter extends DocumentFilter
