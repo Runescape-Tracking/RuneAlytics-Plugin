@@ -155,6 +155,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         scrollContent.setBackground(ColorScheme.DARK_GRAY_COLOR);
         scrollContent.add(bossListPanel, BorderLayout.NORTH);
 
+        // Preferred-size inflation is now suppressed at the JTabbedPane level in
+        // RuneAlyticsPanel (the parent PluginPanel), so no override is needed here.
         scrollPane = new JScrollPane(scrollContent);
         scrollPane.setBorder(null);
         scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);

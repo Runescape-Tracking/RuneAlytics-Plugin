@@ -99,7 +99,20 @@ public class RuneAlyticsPanel extends PluginPanel
         setLayout(new BorderLayout());
         setBackground(ColorScheme.DARK_GRAY_COLOR);
 
-        tabbedPane = new JTabbedPane(JTabbedPane.TOP);
+        // Override getPreferredSize() on the JTabbedPane so it never bubbles a
+        // huge preferred height (max-of-all-tabs) up to RuneAlyticsPanel.
+        // This is what prevents the sidebar from inflating the client window to
+        // fit every boss card in the LootTrackerPanel.
+        tabbedPane = new JTabbedPane(JTabbedPane.TOP)
+        {
+            @Override
+            public Dimension getPreferredSize()
+            {
+                Container p = getParent();
+                int h = (p != null && p.getHeight() > 0) ? p.getHeight() : 400;
+                return new Dimension(PluginPanel.PANEL_WIDTH, h);
+            }
+        };
         tabbedPane.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         tabbedPane.setForeground(Color.WHITE);
         tabbedPane.setFont(tabbedPane.getFont().deriveFont(Font.PLAIN, 11f));
@@ -108,6 +121,34 @@ public class RuneAlyticsPanel extends PluginPanel
         tabbedPane.addChangeListener(e -> saveLastTab());
 
         add(tabbedPane, BorderLayout.CENTER);
+    }
+
+    /**
+     * Returns the parent container's current height as our preferred height.
+     *
+     * <p>Why this matters on macOS (Retina):
+     * <ul>
+     *   <li>A fixed small value (e.g. 10) differs from the actual rendered height.
+     *       When {@code revalidate()} cascades to the root frame (e.g. during
+     *       verification), RuneLite briefly resizes the window to match the small
+     *       preferred height.  On a Retina display the 2× scale factor makes even
+     *       a 1-pixel resize look like a full-screen zoom flash.</li>
+     *   <li>When the plugin is popped out to a floating window, RuneLite calls
+     *       {@code pack()} which uses the preferred size.  A 10-pixel height
+     *       collapses the window onto whatever UI sits below it (nav toolbar).</li>
+     * </ul>
+     *
+     * <p>By mirroring the parent's current height, the preferred size is always
+     * equal to the actual rendered size, so revalidation never produces a size
+     * delta and therefore never triggers a resize flash.  For floating windows
+     * (no parent or parent not yet laid out) we fall back to 400 px.
+     */
+    @Override
+    public Dimension getPreferredSize()
+    {
+        Container p = getParent();
+        int h = (p != null && p.getHeight() > 0) ? p.getHeight() : 400;
+        return new Dimension(PluginPanel.PANEL_WIDTH, h);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -231,7 +272,11 @@ public class RuneAlyticsPanel extends PluginPanel
         if (count > 0 && tabbedPane.getSelectedIndex() >= count)
             tabbedPane.setSelectedIndex(count - 1);
 
-        tabbedPane.revalidate();
+        // Use validate() rather than revalidate().  revalidate() marks this
+        // component invalid and schedules layout from the JFrame root — on
+        // macOS Retina that root-level resize produces a visible zoom flash.
+        // validate() runs layout only within this component's subtree.
+        tabbedPane.validate();
         tabbedPane.repaint();
     }
 
