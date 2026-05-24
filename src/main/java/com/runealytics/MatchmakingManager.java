@@ -41,6 +41,14 @@ public class MatchmakingManager
     private WorldPoint lastRallyPoint;
     private String lastHintPlayerName;
 
+    /**
+     * Inventory / gear captured on the client thread (game tick) just before
+     * the first accept attempt.  The {@code /accept} endpoint requires these
+     * arrays so the server can store a gear snapshot for the match.
+     */
+    private JsonArray pendingAcceptInventory;
+    private JsonArray pendingAcceptGear;
+
     @Inject
     public MatchmakingManager(
             Client client,
@@ -110,7 +118,8 @@ public class MatchmakingManager
             if (result.isSuccess() && result.getSession() != null)
             {
                 session = result.getSession();
-                attemptAcceptMatchIfNeeded();
+                // Accept is driven by onGameTick() so that inventory/gear are
+                // captured on the client thread before the API call is made.
                 updateResultStatus();
             }
 
@@ -128,6 +137,19 @@ public class MatchmakingManager
         tickCounter++;
 
         updateHintArrow();
+
+        // Capture inventory/gear on the client thread before the first accept
+        // attempt.  The /accept endpoint requires these arrays — we must read
+        // ItemContainers here (client thread) and cache them for the background
+        // thread that will POST the accept request.
+        if (!session.isLocalJoined() && pendingAcceptInventory == null)
+        {
+            pendingAcceptInventory = RuneAlyticsItemJson.fromContainer(
+                    client.getItemContainer(InventoryID.INVENTORY));
+            pendingAcceptGear = RuneAlyticsItemJson.fromContainer(
+                    client.getItemContainer(InventoryID.EQUIPMENT));
+            attemptAcceptMatchIfNeeded();
+        }
 
         if (tickCounter % POLL_INTERVAL_TICKS == 0)
         {
@@ -148,6 +170,8 @@ public class MatchmakingManager
         itemsReportInFlight = false;
         resultReported = false;
         itemsReported = false;
+        pendingAcceptInventory = null;
+        pendingAcceptGear = null;
         clearHintArrow();
     }
 
@@ -243,7 +267,6 @@ public class MatchmakingManager
             if (result.isSuccess() && result.getSession() != null)
             {
                 session = result.getSession();
-                attemptAcceptMatchIfNeeded();
                 updateResultStatus();
             }
 
@@ -272,11 +295,15 @@ public class MatchmakingManager
             return;
         }
 
+        // Gear should have been captured on the client thread before this call.
+        final JsonArray inventory = pendingAcceptInventory != null ? pendingAcceptInventory : new JsonArray();
+        final JsonArray gear      = pendingAcceptGear      != null ? pendingAcceptGear      : new JsonArray();
+
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.acceptMatch(verificationCode, session.getMatchCode(), rsn, token);
+                result = apiClient.acceptMatch(verificationCode, session.getMatchCode(), rsn, token, inventory, gear);
             }
             catch (IOException ex)
             {
@@ -290,6 +317,18 @@ public class MatchmakingManager
                 session = result.getSession();
                 updateResultStatus();
             }
+            else if (result.isTokenRefresh())
+            {
+                // Token expired — clear the cached gear so it is re-captured on
+                // the next game tick with the refreshed token.
+                pendingAcceptInventory = null;
+                pendingAcceptGear = null;
+            }
+            // On any other failure we intentionally do NOT clear
+            // pendingAcceptInventory/pendingAcceptGear.  The next poll will
+            // update session.isLocalJoined() if the server already accepted
+            // the match, which stops further accept attempts naturally.
+            // Clearing on failure would cause an accept-retry loop every tick.
         });
     }
 

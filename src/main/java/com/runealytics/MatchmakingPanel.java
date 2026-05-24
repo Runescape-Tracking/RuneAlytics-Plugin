@@ -5,353 +5,903 @@ import net.runelite.client.ui.ColorScheme;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.swing.*;
+import javax.swing.border.CompoundBorder;
+import javax.swing.border.EmptyBorder;
+import javax.swing.border.LineBorder;
 import java.awt.*;
+import java.awt.geom.RoundRectangle2D;
 
+/**
+ * Match Finder sidebar panel.
+ *
+ * <p>Phase-driven layout:</p>
+ * <ol>
+ *   <li><b>Idle</b> — code entry + Load Match button</li>
+ *   <li><b>Active</b> — Current Match card + Players card</li>
+ *   <li><b>Terminal</b> — result trophy card + New Match button</li>
+ * </ol>
+ */
 @Singleton
 public class MatchmakingPanel extends RuneAlyticsPanelBase implements MatchmakingUpdateListener
 {
-    private final MatchmakingManager matchmakingManager;
-    private final RuneAlyticsState runeAlyticsState;
+    // ── colour palette (consistent with RuneAlyticsUi) ──────────────────────
+    private static final Color BG           = ColorScheme.DARK_GRAY_COLOR;
+    private static final Color CARD_BG      = ColorScheme.DARKER_GRAY_COLOR;
+    private static final Color CARD_BORDER  = new Color(60, 60, 60, 200);
+    private static final Color COL_WHITE    = Color.WHITE;
+    private static final Color COL_MUTED    = new Color(170, 170, 170);
+    private static final Color COL_DIM      = new Color(120, 120, 120);
 
-    private final JTextField matchCodeField = RuneAlyticsUi.inputField();
-    private final JButton loadButton = RuneAlyticsUi.primaryButton("Load match");
-    private final JLabel statusLabel = RuneAlyticsUi.statusLabel();
-    private final JLabel playersLabel = RuneAlyticsUi.valueLabel("Players: -");
-    private final JLabel matchStatusLabel = RuneAlyticsUi.valueLabel("Status: -");
-    private final JLabel worldLabel = RuneAlyticsUi.valueLabel("World: -");
-    private final JLabel zoneLabel = RuneAlyticsUi.valueLabel("Zone: -");
-    private final JLabel riskLabel = RuneAlyticsUi.valueLabel("Risk: -");
-    private final JLabel gearRulesLabel = RuneAlyticsUi.valueLabel("Gear Rules: -");
-    private final JLabel player1JoinedLabel = RuneAlyticsUi.valueLabel("Player 1 Joined: -");
-    private final JLabel player2JoinedLabel = RuneAlyticsUi.valueLabel("Player 2 Joined: -");
-    private final JLabel player1ReadyLabel = RuneAlyticsUi.valueLabel("Player 1 Ready: -");
-    private final JLabel player2ReadyLabel = RuneAlyticsUi.valueLabel("Player 2 Ready: -");
-    private final JLabel rallyLabel = RuneAlyticsUi.valueLabel("Rally: -");
-    private final JLabel winnerLabel = RuneAlyticsUi.valueLabel("Winner: -");
-    private final JLabel winnerCombatLabel = RuneAlyticsUi.valueLabel("Winner Combat Level: -");
-    private final JLabel winnerEloLabel = RuneAlyticsUi.valueLabel("Winner ELO: -");
-    private final JLabel serverMessageLabel = RuneAlyticsUi.valueLabel("Message: -");
-    private final JLabel rawResponseLabel = RuneAlyticsUi.valueLabel("Raw Response: -");
+    private static final Color COL_GREEN    = new Color(72, 199, 116);
+    private static final Color COL_RED      = new Color(220, 80,  80);
+    private static final Color COL_BLUE     = new Color(13,  110, 253);
+    private static final Color COL_ORANGE   = ColorScheme.BRAND_ORANGE;
+    private static final Color COL_GRAY_TAG = new Color(80,  80,  80);
+
+    // status badge colours
+    private static final Color STATUS_PENDING   = new Color(200, 140,   0);
+    private static final Color STATUS_READY     = new Color( 50, 160,  90);
+    private static final Color STATUS_FIGHTING  = new Color(200,  55,  55);
+    private static final Color STATUS_COMPLETED = new Color( 30, 130, 200);
+    private static final Color STATUS_CANCELED  = new Color( 90,  90,  90);
+
+    // font helper (matches RuneAlyticsUi / RuneAlyticsSettingsPanel)
+    private static Font cf(int style, float size)
+    { return new Font("Calibri", style, Math.round(size)); }
+
+    // ── dependencies ─────────────────────────────────────────────────────────
+    private final MatchmakingManager matchmakingManager;
+    private final RuneAlyticsState   state;
+
+    // ── entry-card widgets ────────────────────────────────────────────────────
+    private final JTextField codeInput     = RuneAlyticsUi.inputField();
+    private final JButton    loadButton    = buildBlueButton("Load Match");
+    private final JLabel     entryStatus   = new JLabel(" ");
+
+    // ── current-match-card widgets ────────────────────────────────────────────
+    private final JPanel  matchCard        = vertPanel();
+    private final JLabel  matchCodeVal     = infoValue("-");
+    private final JLabel  worldVal         = infoValue("-");
+    private final JLabel  locationVal      = infoValue("-");
+    private final JLabel  stakeVal         = infoValue("-");
+    private final JLabel  statusBadge      = new JLabel();
+
+    // ── players-card widgets ──────────────────────────────────────────────────
+    private final JPanel  playersCard      = vertPanel();
+    private AvatarLabel   p1Avatar;
+    private AvatarLabel   p2Avatar;
+    private final JLabel  p1Name           = playerName("-");
+    private final JLabel  p2Name           = playerName("-");
+    private final JLabel  p1Tag            = playerTag("You");
+    private final JLabel  p2Tag            = playerTag("Opponent");
+    private final JLabel  p1Status         = readyLabel();
+    private final JLabel  p2Status         = readyLabel();
+
+    // ── result-card widgets ───────────────────────────────────────────────────
+    private final JPanel  resultCard       = vertPanel();
+    private final JLabel  resultName       = new JLabel();
+    private final JLabel  resultElo        = new JLabel();
+
+    // ── gear-rules strip ─────────────────────────────────────────────────────
+    private final JPanel  rulesStrip       = new JPanel(
+            new WrapLayout(FlowLayout.LEFT, 4, 3));
+
+    private final JButton newMatchButton   = buildSecondaryButton("New Match");
 
     private boolean loading;
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Constructor
+    // ═════════════════════════════════════════════════════════════════════════
+
     @Inject
-    public MatchmakingPanel(
-            MatchmakingManager matchmakingManager,
-            RuneAlyticsState runeAlyticsState
-    )
+    public MatchmakingPanel(MatchmakingManager matchmakingManager,
+                            RuneAlyticsState   state)
     {
         this.matchmakingManager = matchmakingManager;
-        this.runeAlyticsState = runeAlyticsState;
+        this.state              = state;
 
         matchmakingManager.setListener(this);
-
         buildUi();
         wireEvents();
-
         refreshLoginState();
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  UI construction
+    // ═════════════════════════════════════════════════════════════════════════
+
     private void buildUi()
     {
-        addSectionTitle("Matchmaking");
-        addSubtitle("RuneAlytics Match Linker");
+        // Use inline title/subtitle so we can control the gap tightly —
+        // addSectionTitle/addSubtitle add generous spacing suited for taller panels.
+        JLabel title = RuneAlyticsUi.titleLabel("Match Finder");
+        add(title);
+        add(RuneAlyticsUi.vSpace(2));
+        JLabel subtitle = RuneAlyticsUi.subtitleLabel("PvP Match Tracker");
+        add(subtitle);
+        add(RuneAlyticsUi.vSpace(6));
 
-        JPanel formCard = RuneAlyticsUi.cardPanel();
-
-        JLabel label = RuneAlyticsUi.bodyLabel("Match Code:");
-        label.setAlignmentX(LEFT_ALIGNMENT);
-
-        matchCodeField.setMaximumSize(
-                new Dimension(Integer.MAX_VALUE, matchCodeField.getPreferredSize().height)
-        );
-
-        JPanel buttonRow = new JPanel();
-        buttonRow.setLayout(new BoxLayout(buttonRow, BoxLayout.X_AXIS));
-        buttonRow.setOpaque(false);
-        buttonRow.setAlignmentX(LEFT_ALIGNMENT);
-        buttonRow.add(Box.createHorizontalGlue());
-        buttonRow.add(loadButton);
-        buttonRow.add(Box.createHorizontalGlue());
-
-        statusLabel.setAlignmentX(LEFT_ALIGNMENT);
-
-        formCard.add(label);
-        formCard.add(RuneAlyticsUi.vSpace(4));
-        formCard.add(matchCodeField);
-        formCard.add(RuneAlyticsUi.vSpace(6));
-        formCard.add(buttonRow);
-        formCard.add(RuneAlyticsUi.vSpace(6));
-        formCard.add(statusLabel);
-
-        JPanel detailsCard = RuneAlyticsUi.cardPanel();
-        JLabel detailsHeader = RuneAlyticsUi.bodyLabel("Match Details");
-        detailsHeader.setFont(detailsHeader.getFont().deriveFont(Font.BOLD, 12f));
-        detailsCard.add(detailsHeader);
-        detailsCard.add(RuneAlyticsUi.vSpace(6));
-        detailsCard.add(playersLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(matchStatusLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(worldLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(zoneLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(riskLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(gearRulesLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(6));
-        detailsCard.add(player1JoinedLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(player2JoinedLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(player1ReadyLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(player2ReadyLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(6));
-        detailsCard.add(rallyLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(6));
-        detailsCard.add(winnerLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(winnerCombatLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(winnerEloLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(6));
-        detailsCard.add(serverMessageLabel);
-        detailsCard.add(RuneAlyticsUi.vSpace(4));
-        detailsCard.add(rawResponseLabel);
-
-        add(formCard);
-        add(RuneAlyticsUi.vSpace(8));
-        add(detailsCard);
+        add(buildLoadCard());
+        add(RuneAlyticsUi.vSpace(5));
+        add(buildMatchCard());
+        add(RuneAlyticsUi.vSpace(5));
+        add(buildPlayersCard());
+        add(RuneAlyticsUi.vSpace(5));
+        add(buildResultCard());
+        add(RuneAlyticsUi.vSpace(5));
+        add(newMatchButton);
         add(Box.createVerticalGlue());
 
-        clearMatchDetails();
+        hideActiveCards();
     }
+
+    // ── Load card ─────────────────────────────────────────────────────────────
+
+    private JPanel buildLoadCard()
+    {
+        JPanel body = vertPanel();
+
+        JLabel desc = new JLabel("Enter a match code from runeanalytics.com/pvp");
+        desc.setFont(cf(Font.PLAIN, 11f));
+        desc.setForeground(COL_MUTED);
+        desc.setAlignmentX(LEFT_ALIGNMENT);
+
+        codeInput.setFont(cf(Font.PLAIN, 13f));
+        codeInput.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        codeInput.setAlignmentX(LEFT_ALIGNMENT);
+
+        loadButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        loadButton.setAlignmentX(LEFT_ALIGNMENT);
+
+        entryStatus.setFont(cf(Font.PLAIN, 11f));
+        entryStatus.setForeground(COL_MUTED);
+        entryStatus.setAlignmentX(LEFT_ALIGNMENT);
+
+        body.add(desc);
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(codeInput);
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(loadButton);
+        body.add(RuneAlyticsUi.vSpace(3));
+        body.add(entryStatus);
+
+        return sectionCard("⊟", "Load Match", body);
+    }
+
+    // ── Current Match card ────────────────────────────────────────────────────
+
+    private JPanel buildMatchCard()
+    {
+        JPanel body = vertPanel();
+
+        body.add(infoRow("#",   "Match Code", matchCodeVal));
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(infoRow("⊕",  "World",      worldVal));
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(infoRow("◉",  "Location",   locationVal));
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(infoRow("◎",  "Stake",      stakeVal));
+        body.add(RuneAlyticsUi.vSpace(5));
+
+        // gear rules strip
+        rulesStrip.setOpaque(false);
+        rulesStrip.setAlignmentX(LEFT_ALIGNMENT);
+        body.add(rulesStrip);
+        body.add(RuneAlyticsUi.vSpace(6));
+
+        // status badge row
+        styleStatusBadge(statusBadge, "Pending", STATUS_PENDING);
+        statusBadge.setAlignmentX(LEFT_ALIGNMENT);
+        body.add(statusBadge);
+
+        matchCard.add(sectionCard("⛨", "Current Match", body));
+        return matchCard;
+    }
+
+    // ── Players card ──────────────────────────────────────────────────────────
+
+    private JPanel buildPlayersCard()
+    {
+        p1Avatar = new AvatarLabel("?");
+        p2Avatar = new AvatarLabel("?");
+
+        JPanel body = vertPanel();
+        body.add(buildPlayerRow(p1Avatar, p1Name, p1Tag, p1Status));
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(buildPlayerRow(p2Avatar, p2Name, p2Tag, p2Status));
+
+        playersCard.add(sectionCard("⚐", "Players", body));
+        return playersCard;
+    }
+
+    private JPanel buildPlayerRow(AvatarLabel avatar, JLabel name, JLabel tag, JLabel status)
+    {
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+
+        // left: avatar
+        row.add(avatar, BorderLayout.WEST);
+
+        // centre: name + tag
+        JPanel centre = vertPanel();
+        centre.setAlignmentY(Component.CENTER_ALIGNMENT);
+        name.setAlignmentX(LEFT_ALIGNMENT);
+        tag.setAlignmentX(LEFT_ALIGNMENT);
+        centre.add(name);
+        centre.add(RuneAlyticsUi.vSpace(1));
+        centre.add(tag);
+        row.add(centre, BorderLayout.CENTER);
+
+        // right: ready status
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        right.setOpaque(false);
+        right.add(status);
+        row.add(right, BorderLayout.EAST);
+
+        return row;
+    }
+
+    // ── Result card ───────────────────────────────────────────────────────────
+
+    private JPanel buildResultCard()
+    {
+        JPanel body = vertPanel();
+
+        // large trophy circle
+        JPanel trophyRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        trophyRow.setOpaque(false);
+        trophyRow.setAlignmentX(LEFT_ALIGNMENT);
+
+        TrophyIcon trophy = new TrophyIcon();
+        trophyRow.add(trophy);
+        trophyRow.add(RuneAlyticsUi.hSpace(8));
+
+        JPanel textCol = vertPanel();
+        resultName.setFont(cf(Font.BOLD, 14f));
+        resultName.setForeground(COL_GREEN);
+        resultName.setAlignmentX(LEFT_ALIGNMENT);
+        resultElo.setFont(cf(Font.PLAIN, 11f));
+        resultElo.setForeground(COL_MUTED);
+        resultElo.setAlignmentX(LEFT_ALIGNMENT);
+        textCol.add(resultName);
+        textCol.add(RuneAlyticsUi.vSpace(2));
+        textCol.add(resultElo);
+
+        trophyRow.add(textCol);
+        body.add(trophyRow);
+
+        resultCard.add(sectionCard("", "", body));
+        return resultCard;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Event wiring
+    // ═════════════════════════════════════════════════════════════════════════
 
     private void wireEvents()
     {
-        loadButton.addActionListener(e -> submitMatchCode());
-        matchCodeField.addActionListener(e -> submitMatchCode());
+        loadButton.addActionListener(e  -> submitMatchCode());
+        codeInput.addActionListener(e   -> submitMatchCode());
+        newMatchButton.addActionListener(e -> resetToIdle());
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Login state (called by plugin on every login / logout)
+    // ═════════════════════════════════════════════════════════════════════════
 
     public void refreshLoginState()
     {
-        updateUi();
+        SwingUtilities.invokeLater(this::updateEntryCard);
     }
 
-    private void updateUi()
+    private void updateEntryCard()
     {
-        boolean loggedIn = runeAlyticsState.isLoggedIn();
-        boolean verified = runeAlyticsState.isVerified();
-
-        if (!loggedIn)
+        if (!state.isLoggedIn())
         {
-            setControlsEnabled(false);
-            statusLabel.setText("Please log into RuneLite to load a match.");
-            statusLabel.setForeground(ColorScheme.TEXT_COLOR);
+            setEntryEnabled(false);
+            setEntryStatus("Log in to RuneLite to use Match Finder.", COL_DIM);
             return;
         }
-
-        if (!verified)
+        if (!state.isVerified())
         {
-            setControlsEnabled(false);
-            statusLabel.setText("Verify your RuneAlytics account before loading a match.");
-            statusLabel.setForeground(ColorScheme.TEXT_COLOR);
+            setEntryEnabled(false);
+            setEntryStatus("Verify your account on the Settings tab first.", COL_DIM);
             return;
         }
-
         if (loading)
         {
-            setControlsEnabled(false);
-            statusLabel.setText("Loading match...");
-            statusLabel.setForeground(ColorScheme.TEXT_COLOR);
+            setEntryEnabled(false);
+            setEntryStatus("Loading match…", COL_ORANGE);
+            return;
+        }
+        if (matchmakingManager.hasActiveMatch())
+        {
+            setEntryEnabled(false);
+            setEntryStatus("Match active — see below.", COL_GREEN);
             return;
         }
 
-        setControlsEnabled(true);
-        if (matchmakingManager.hasActiveMatch())
-        {
-            MatchmakingSession session = matchmakingManager.getSession();
-            if (session != null)
-            {
-                statusLabel.setText("Match status: " + session.getStatus());
-                RuneAlyticsUi.stylePositiveStatus(statusLabel);
-                return;
-            }
-        }
-
-        statusLabel.setText("Enter a match code to load your matchmaking details.");
-        statusLabel.setForeground(ColorScheme.TEXT_COLOR);
+        setEntryEnabled(true);
+        setEntryStatus("Ready.", COL_DIM);
     }
 
-    private void setControlsEnabled(boolean enabled)
-    {
-        matchCodeField.setEnabled(enabled);
-        loadButton.setEnabled(enabled);
-    }
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Submit / reset
+    // ═════════════════════════════════════════════════════════════════════════
 
     private void submitMatchCode()
     {
-        if (!runeAlyticsState.isLoggedIn())
+        if (!state.isLoggedIn() || !state.isVerified())
         {
-            updateUi();
+            updateEntryCard();
             return;
         }
 
-        if (!runeAlyticsState.isVerified())
+        String code = codeInput.getText().trim();
+        if (code.isEmpty())
         {
-            statusLabel.setText("Verify your RuneAlytics account before loading a match.");
-            statusLabel.setForeground(ColorScheme.TEXT_COLOR);
-            return;
-        }
-
-        final String matchCode = matchCodeField.getText().trim();
-
-        if (matchCode.isEmpty())
-        {
-            statusLabel.setText("Please enter a match code.");
-            RuneAlyticsUi.styleNegativeStatus(statusLabel);
+            setEntryStatus("Please enter a match code.", COL_RED);
             return;
         }
 
         loading = true;
-        clearMatchDetails();
-        updateUi();
-
-        matchmakingManager.loadMatch(matchCode);
+        hideActiveCards();
+        updateEntryCard();
+        matchmakingManager.loadMatch(code);
     }
+
+    private void resetToIdle()
+    {
+        matchmakingManager.reset();
+        hideActiveCards();
+        codeInput.setText("");
+        loading = false;
+        updateEntryCard();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  MatchmakingUpdateListener
+    // ═════════════════════════════════════════════════════════════════════════
 
     @Override
     public void onMatchmakingUpdate(MatchmakingUpdate update)
     {
         loading = false;
 
-        if (update.isSuccess() && update.getSession() != null)
+        if (!update.isSuccess() || update.getSession() == null)
         {
-            MatchmakingSession session = update.getSession();
-            statusLabel.setText("Match status: " + session.getStatus());
-            RuneAlyticsUi.stylePositiveStatus(statusLabel);
-            updateMatchDetails(session, update);
+            String msg = update.getMessage();
+            if (msg == null || msg.isEmpty()) msg = "Failed to load match.";
+            setEntryStatus(msg, COL_RED);
+            hideActiveCards();
+            updateEntryCard();
+            return;
         }
-        else
+
+        applySession(update.getSession());
+        updateEntryCard();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Session rendering
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void applySession(MatchmakingSession s)
+    {
+        // ── match info card ──────────────────────────────────────────────────
+        matchCodeVal.setText(s.getMatchCode() != null ? s.getMatchCode() : "-");
+        worldVal.setText(s.getWorld() > 0 ? String.valueOf(s.getWorld()) : "-");
+        locationVal.setText(s.getZone() != null && !s.getZone().isEmpty() ? s.getZone() : "-");
+        stakeVal.setText(formatRisk(s.getRisk()));
+
+        // gear rules pills
+        rulesStrip.removeAll();
+        String rules = s.getGearRules();
+        if (rules != null && !rules.isEmpty())
         {
-            String message = update.getMessage();
-            if (message == null || message.isEmpty())
+            // gear_rules arrives as a JSON array string like ["No Overheads","DDS Only"]
+            // Strip brackets/quotes and split
+            rules = rules.replaceAll("[\\[\\]\"]", "");
+            for (String rule : rules.split(","))
             {
-                message = "Matchmaking request failed.";
+                rule = rule.trim();
+                if (!rule.isEmpty())
+                    rulesStrip.add(rulePill(rule));
             }
-            statusLabel.setText(message);
-            RuneAlyticsUi.styleNegativeStatus(statusLabel);
+        }
+        rulesStrip.revalidate();
+        rulesStrip.repaint();
 
-            updateErrorDetails(message, update.getRawResponse());
+        String status = s.getStatus() != null ? s.getStatus() : "Unknown";
+        applyStatus(statusBadge, status);
+
+        // ── players card ─────────────────────────────────────────────────────
+        String localRsn = s.getLocalRsn();
+        boolean localIsP1 = s.getPlayer1Username() != null
+                && s.getPlayer1Username().equalsIgnoreCase(localRsn);
+
+        String myName   = localIsP1 ? s.getPlayer1Username() : s.getPlayer2Username();
+        String oppName  = localIsP1 ? s.getPlayer2Username() : s.getPlayer1Username();
+        boolean myJoined  = localIsP1 ? s.isPlayer1Joined()          : s.isPlayer2Joined();
+        boolean oppJoined = localIsP1 ? s.isPlayer2Joined()          : s.isPlayer1Joined();
+        boolean myReady   = localIsP1 ? s.isPlayer1ReadyToFight()    : s.isPlayer2ReadyToFight();
+        boolean oppReady  = localIsP1 ? s.isPlayer2ReadyToFight()    : s.isPlayer1ReadyToFight();
+
+        String p1n = myName  != null && !myName.isEmpty()  ? myName  : "—";
+        String p2n = oppName != null && !oppName.isEmpty() ? oppName : "—";
+
+        p1Name.setText(p1n);
+        p2Name.setText(p2n);
+        p1Avatar.setInitial(p1n.charAt(0));
+        p2Avatar.setInitial(p2n.charAt(0));
+
+        applyPlayerStatus(p1Status, myJoined,  myReady,  status);
+        applyPlayerStatus(p2Status, oppJoined, oppReady, status);
+
+        // ── result card ──────────────────────────────────────────────────────
+        boolean terminal = status.equalsIgnoreCase("Completed")
+                || status.equalsIgnoreCase("Canceled");
+
+        if (terminal && s.getWinner() != null
+                && s.getWinner().getOsrsRsn() != null
+                && !s.getWinner().getOsrsRsn().isEmpty())
+        {
+            resultName.setText(s.getWinner().getOsrsRsn() + " wins!");
+            resultName.setForeground(COL_GREEN);
+            int elo = s.getWinner().getElo();
+            resultElo.setText(elo > 0 ? "ELO: " + elo : "");
+            resultCard.setVisible(true);
+        }
+        else if (status.equalsIgnoreCase("Canceled"))
+        {
+            resultName.setText("Match canceled");
+            resultName.setForeground(COL_MUTED);
+            resultElo.setText("");
+            resultCard.setVisible(true);
+        }
+        else
+        {
+            resultCard.setVisible(false);
         }
 
-        updateUi();
+        newMatchButton.setVisible(terminal);
+        matchCard.setVisible(true);
+        playersCard.setVisible(true);
+
+        revalidate();
+        repaint();
     }
 
-    private void updateMatchDetails(MatchmakingSession session, MatchmakingUpdate update)
+    private void applyStatus(JLabel badge, String status)
     {
-        playersLabel.setText("Players: " + session.getPlayer1Username() + " vs " + session.getPlayer2Username());
-        matchStatusLabel.setText("Status: " + session.getStatus());
-        worldLabel.setText("World: " + session.getWorld());
-        zoneLabel.setText("Zone: " + session.getZone());
-        riskLabel.setText("Risk: " + session.getRisk());
-        gearRulesLabel.setText("Gear Rules: " + session.getGearRules());
-        player1JoinedLabel.setText("Player 1 Joined: " + session.isPlayer1Joined());
-        player2JoinedLabel.setText("Player 2 Joined: " + session.isPlayer2Joined());
-        player1ReadyLabel.setText("Player 1 Ready: " + session.isPlayer1ReadyToFight());
-        player2ReadyLabel.setText("Player 2 Ready: " + session.isPlayer2ReadyToFight());
-
-        if (session.getRally() != null)
+        Color bg;
+        String icon;
+        switch (status.toLowerCase())
         {
-            rallyLabel.setText("Rally: " + session.getRally().getX()
-                    + ", " + session.getRally().getY()
-                    + " (plane " + session.getRally().getPlane() + ")");
+            case "pending":   bg = STATUS_PENDING;   icon = "●"; break;
+            case "ready":     bg = STATUS_READY;     icon = "↗"; break;
+            case "fighting":  bg = STATUS_FIGHTING;  icon = "⚔"; break;
+            case "completed": bg = STATUS_COMPLETED; icon = "✓"; break;
+            case "canceled":  bg = STATUS_CANCELED;  icon = "✕"; break;
+            default:          bg = STATUS_CANCELED;  icon = "?"; break;
+        }
+        styleStatusBadge(badge, icon + "  " + capitalize(status), bg);
+    }
+
+    private void applyPlayerStatus(JLabel lbl, boolean joined, boolean ready, String matchStatus)
+    {
+        if (matchStatus.equalsIgnoreCase("Fighting")
+                || matchStatus.equalsIgnoreCase("Completed")
+                || matchStatus.equalsIgnoreCase("Canceled"))
+        {
+            lbl.setText("● Ready");
+            lbl.setForeground(COL_GREEN);
+            return;
+        }
+        if (ready)
+        {
+            lbl.setText("● Ready");
+            lbl.setForeground(COL_GREEN);
+        }
+        else if (joined)
+        {
+            lbl.setText("● Joined");
+            lbl.setForeground(COL_ORANGE);
         }
         else
         {
-            rallyLabel.setText("Rally: none");
-        }
-
-        MatchmakingWinner winner = session.getWinner();
-        if (winner != null && winner.getOsrsRsn() != null && !winner.getOsrsRsn().isEmpty())
-        {
-            winnerLabel.setText("Winner: " + winner.getOsrsRsn());
-            winnerCombatLabel.setText("Winner Combat Level: " + winner.getCombatLevel());
-            winnerEloLabel.setText("Winner ELO: " + winner.getElo());
-        }
-        else
-        {
-            winnerLabel.setText("Winner: -");
-            winnerCombatLabel.setText("Winner Combat Level: -");
-            winnerEloLabel.setText("Winner ELO: -");
-        }
-
-        if (update.getMessage() != null && !update.getMessage().isEmpty())
-        {
-            serverMessageLabel.setText("Message: " + update.getMessage());
-            serverMessageLabel.setVisible(true);
-        }
-        else
-        {
-            serverMessageLabel.setText("Message: -");
-            serverMessageLabel.setVisible(false);
-        }
-
-        if (update.getRawResponse() != null && !update.getRawResponse().isEmpty())
-        {
-            rawResponseLabel.setText("Raw Response: " + update.getRawResponse());
-            rawResponseLabel.setVisible(true);
-        }
-        else
-        {
-            rawResponseLabel.setText("Raw Response: -");
-            rawResponseLabel.setVisible(false);
+            lbl.setText("○ Waiting");
+            lbl.setForeground(COL_DIM);
         }
     }
 
-    private void updateErrorDetails(String message, String rawResponse)
+    private void hideActiveCards()
     {
-        clearMatchDetails();
-        serverMessageLabel.setText("Message: " + message);
-        serverMessageLabel.setVisible(true);
+        matchCard.setVisible(false);
+        playersCard.setVisible(false);
+        resultCard.setVisible(false);
+        newMatchButton.setVisible(false);
+    }
 
-        if (rawResponse != null && !rawResponse.isEmpty())
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Builder helpers
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Wraps content in a card panel with an icon + title section header,
+     * consistent with the RuneAlyticsSettingsPanel step-card style.
+     */
+    private JPanel sectionCard(String icon, String title, JPanel body)
+    {
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBackground(CARD_BG);
+        card.setOpaque(true);
+        card.setAlignmentX(LEFT_ALIGNMENT);
+        card.setBorder(new CompoundBorder(
+                new LineBorder(CARD_BORDER, 1, true),
+                new EmptyBorder(8, 10, 8, 10)));
+
+        if (!title.isEmpty())
         {
-            rawResponseLabel.setText("Raw Response: " + rawResponse);
-            rawResponseLabel.setVisible(true);
+            JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+            header.setOpaque(false);
+            header.setAlignmentX(LEFT_ALIGNMENT);
+
+            if (!icon.isEmpty())
+            {
+                JLabel iconLbl = new JLabel(icon);
+                iconLbl.setFont(cf(Font.BOLD, 13f));
+                iconLbl.setForeground(COL_MUTED);
+                header.add(iconLbl);
+                header.add(RuneAlyticsUi.hSpace(6));
+            }
+
+            JLabel titleLbl = new JLabel(title);
+            titleLbl.setFont(cf(Font.BOLD, 13f));
+            titleLbl.setForeground(COL_WHITE);
+            header.add(titleLbl);
+
+            card.add(header);
+            card.add(RuneAlyticsUi.vSpace(6));
         }
-        else
+
+        card.add(body);
+        return card;
+    }
+
+    private JPanel infoRow(String icon, String label, JLabel value)
+    {
+        JPanel row = new JPanel(new BorderLayout(6, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        left.setOpaque(false);
+
+        JLabel iconLbl = new JLabel(icon);
+        iconLbl.setFont(cf(Font.PLAIN, 11f));
+        iconLbl.setForeground(COL_DIM);
+        iconLbl.setPreferredSize(new Dimension(14, 16));
+
+        JLabel keyLbl = new JLabel(label);
+        keyLbl.setFont(cf(Font.PLAIN, 12f));
+        keyLbl.setForeground(COL_MUTED);
+
+        left.add(iconLbl);
+        left.add(RuneAlyticsUi.hSpace(4));
+        left.add(keyLbl);
+
+        row.add(left, BorderLayout.WEST);
+        row.add(value, BorderLayout.EAST);
+        return row;
+    }
+
+    // ── static factory helpers ────────────────────────────────────────────────
+
+    private static JPanel vertPanel()
+    {
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setOpaque(false);
+        p.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return p;
+    }
+
+    private static JLabel infoValue(String text)
+    {
+        JLabel l = new JLabel(text);
+        l.setFont(cf(Font.BOLD, 12f));
+        l.setForeground(COL_WHITE);
+        return l;
+    }
+
+    private static JLabel playerName(String text)
+    {
+        JLabel l = new JLabel(text);
+        l.setFont(cf(Font.BOLD, 13f));
+        l.setForeground(COL_WHITE);
+        return l;
+    }
+
+    private static JLabel playerTag(String text)
+    {
+        JLabel l = new JLabel(text)
         {
-            rawResponseLabel.setVisible(false);
+            @Override
+            protected void paintComponent(Graphics g)
+            {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON);
+                Color bg = text.equalsIgnoreCase("You") ? COL_BLUE : COL_GRAY_TAG;
+                g2.setColor(bg);
+                g2.fill(new RoundRectangle2D.Float(0, 0, getWidth(), getHeight(), 10, 10));
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        l.setFont(cf(Font.BOLD, 10f));
+        l.setForeground(COL_WHITE);
+        l.setOpaque(false);
+        l.setBorder(new EmptyBorder(1, 6, 1, 6));
+        return l;
+    }
+
+    private static JLabel readyLabel()
+    {
+        JLabel l = new JLabel("○ Waiting");
+        l.setFont(cf(Font.PLAIN, 11f));
+        l.setForeground(COL_DIM);
+        return l;
+    }
+
+    private static void styleStatusBadge(JLabel badge, String text, Color bg)
+    {
+        badge.setText("  " + text + "  ");
+        badge.setFont(cf(Font.BOLD, 11f));
+        badge.setForeground(COL_WHITE);
+        badge.setOpaque(true);
+        badge.setBackground(bg);
+        badge.setBorder(new CompoundBorder(
+                new LineBorder(bg.darker(), 1, true),
+                new EmptyBorder(2, 6, 2, 6)));
+    }
+
+    private static JLabel rulePill(String text)
+    {
+        JLabel l = new JLabel(text);
+        l.setFont(cf(Font.PLAIN, 10f));
+        l.setForeground(new Color(200, 200, 200));
+        l.setOpaque(true);
+        l.setBackground(new Color(55, 55, 60));
+        l.setBorder(new CompoundBorder(
+                new LineBorder(new Color(70, 70, 75), 1, true),
+                new EmptyBorder(1, 5, 1, 5)));
+        return l;
+    }
+
+    private static JButton buildBlueButton(String text)
+    {
+        JButton btn = new JButton(text);
+        btn.setFont(cf(Font.BOLD, 13f));
+        btn.setFocusPainted(false);
+        btn.setOpaque(true);
+        btn.setContentAreaFilled(true);
+        btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        btn.setBackground(COL_BLUE);
+        btn.setForeground(COL_WHITE);
+        btn.setBorder(new CompoundBorder(
+                new LineBorder(COL_BLUE.darker(), 1, true),
+                new EmptyBorder(5, 12, 5, 12)));
+        return btn;
+    }
+
+    private static JButton buildSecondaryButton(String text)
+    {
+        JButton btn = new JButton(text);
+        btn.setFont(cf(Font.PLAIN, 12f));
+        btn.setFocusPainted(false);
+        btn.setOpaque(true);
+        btn.setContentAreaFilled(true);
+        btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        btn.setBackground(new Color(50, 50, 50));
+        btn.setForeground(COL_WHITE);
+        btn.setAlignmentX(LEFT_ALIGNMENT);
+        btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        btn.setBorder(new CompoundBorder(
+                new LineBorder(new Color(80, 80, 80), 1, true),
+                new EmptyBorder(5, 12, 5, 12)));
+        return btn;
+    }
+
+    // ── entry card helpers ────────────────────────────────────────────────────
+
+    private void setEntryEnabled(boolean enabled)
+    {
+        codeInput.setEnabled(enabled);
+        loadButton.setEnabled(enabled);
+    }
+
+    private void setEntryStatus(String msg, Color color)
+    {
+        entryStatus.setText(msg);
+        entryStatus.setForeground(color);
+    }
+
+    // ── formatting ────────────────────────────────────────────────────────────
+
+    private static String formatRisk(String raw)
+    {
+        if (raw == null || raw.isEmpty() || raw.equals("0") || raw.equals("0.0"))
+            return "No stake";
+        try
+        {
+            long v = (long) Double.parseDouble(raw);
+            if (v == 0)    return "No stake";
+            if (v >= 1_000_000) return String.format("%.1fM gp", v / 1_000_000.0);
+            if (v >= 1_000)     return String.format("%,d k gp", v / 1_000);
+            return v + " gp";
+        }
+        catch (NumberFormatException ignored) { return raw; }
+    }
+
+    private static String capitalize(String s)
+    {
+        if (s == null || s.isEmpty()) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1).toLowerCase();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Inner classes
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** Circular avatar with a single initial letter, matching the mockup style. */
+    private static class AvatarLabel extends JComponent
+    {
+        private char initial;
+        private static final int SIZE = 36;
+
+        AvatarLabel(String name)
+        {
+            this.initial = name != null && !name.isEmpty() ? Character.toUpperCase(name.charAt(0)) : '?';
+            Dimension d = new Dimension(SIZE, SIZE);
+            setPreferredSize(d);
+            setMinimumSize(d);
+            setMaximumSize(d);
+        }
+
+        void setInitial(char c)
+        {
+            this.initial = Character.toUpperCase(c);
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g)
+        {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                    RenderingHints.VALUE_ANTIALIAS_ON);
+
+            // circle background
+            g2.setColor(new Color(55, 55, 65));
+            g2.fillOval(0, 0, SIZE, SIZE);
+            g2.setColor(new Color(80, 80, 95));
+            g2.setStroke(new BasicStroke(1.5f));
+            g2.drawOval(0, 0, SIZE - 1, SIZE - 1);
+
+            // initial letter
+            g2.setColor(COL_WHITE);
+            g2.setFont(new Font("Calibri", Font.BOLD, 15));
+            FontMetrics fm = g2.getFontMetrics();
+            String s = String.valueOf(initial);
+            int x = (SIZE - fm.stringWidth(s)) / 2;
+            int y = (SIZE - fm.getHeight()) / 2 + fm.getAscent();
+            g2.drawString(s, x, y);
+            g2.dispose();
         }
     }
 
-    private void clearMatchDetails()
+    /** Green trophy circle, drawn entirely in code (no image dependency). */
+    private static class TrophyIcon extends JComponent
     {
-        playersLabel.setText("Players: -");
-        matchStatusLabel.setText("Status: -");
-        worldLabel.setText("World: -");
-        zoneLabel.setText("Zone: -");
-        riskLabel.setText("Risk: -");
-        gearRulesLabel.setText("Gear Rules: -");
-        player1JoinedLabel.setText("Player 1 Joined: -");
-        player2JoinedLabel.setText("Player 2 Joined: -");
-        player1ReadyLabel.setText("Player 1 Ready: -");
-        player2ReadyLabel.setText("Player 2 Ready: -");
-        rallyLabel.setText("Rally: -");
-        winnerLabel.setText("Winner: -");
-        winnerCombatLabel.setText("Winner Combat Level: -");
-        winnerEloLabel.setText("Winner ELO: -");
-        serverMessageLabel.setText("Message: -");
-        serverMessageLabel.setVisible(false);
-        rawResponseLabel.setText("Raw Response: -");
-        rawResponseLabel.setVisible(false);
+        private static final int SIZE = 40;
+
+        TrophyIcon()
+        {
+            Dimension d = new Dimension(SIZE, SIZE);
+            setPreferredSize(d);
+            setMinimumSize(d);
+            setMaximumSize(d);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g)
+        {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                    RenderingHints.VALUE_ANTIALIAS_ON);
+
+            g2.setColor(new Color(30, 80, 50));
+            g2.fillOval(0, 0, SIZE, SIZE);
+            g2.setColor(COL_GREEN);
+            g2.setStroke(new BasicStroke(1.5f));
+            g2.drawOval(0, 0, SIZE - 1, SIZE - 1);
+
+            g2.setColor(COL_GREEN);
+            g2.setFont(new Font("Calibri", Font.BOLD, 20));
+            FontMetrics fm = g2.getFontMetrics();
+            String s = "🏆";
+            // fallback to text glyph for environments without emoji font
+            if (fm.stringWidth(s) == 0) s = "W";
+            int x = (SIZE - fm.stringWidth(s)) / 2;
+            int y = (SIZE - fm.getHeight()) / 2 + fm.getAscent();
+            g2.drawString(s, x, y);
+            g2.dispose();
+        }
+    }
+
+    /**
+     * FlowLayout variant that wraps items to a new row when the container
+     * is too narrow, rather than clipping.  Used for the gear-rules pill strip.
+     */
+    private static class WrapLayout extends FlowLayout
+    {
+        WrapLayout(int align, int hgap, int vgap)
+        { super(align, hgap, vgap); }
+
+        @Override
+        public Dimension preferredLayoutSize(Container target)
+        { return layoutSize(target, true); }
+
+        @Override
+        public Dimension minimumLayoutSize(Container target)
+        { return layoutSize(target, false); }
+
+        private Dimension layoutSize(Container target, boolean preferred)
+        {
+            synchronized (target.getTreeLock())
+            {
+                int targetWidth = target.getSize().width;
+                if (targetWidth == 0) targetWidth = Integer.MAX_VALUE;
+
+                int hgap = getHgap(), vgap = getVgap();
+                Insets insets = target.getInsets();
+                int maxWidth = targetWidth - (insets.left + insets.right + hgap * 2);
+
+                Dimension dim = new Dimension(0, 0);
+                int rowWidth = 0, rowHeight = 0;
+
+                int nmembers = target.getComponentCount();
+                for (int i = 0; i < nmembers; i++)
+                {
+                    Component m = target.getComponent(i);
+                    if (m.isVisible())
+                    {
+                        Dimension d = preferred ? m.getPreferredSize() : m.getMinimumSize();
+                        if (rowWidth + d.width > maxWidth && rowWidth > 0)
+                        {
+                            dim.width = Math.max(dim.width, rowWidth);
+                            dim.height += rowHeight + vgap;
+                            rowWidth = 0;
+                            rowHeight = 0;
+                        }
+                        rowWidth += d.width + hgap;
+                        rowHeight = Math.max(rowHeight, d.height);
+                    }
+                }
+                dim.width  = Math.max(dim.width, rowWidth);
+                dim.height += rowHeight + insets.top + insets.bottom + vgap * 2;
+                return dim;
+            }
+        }
     }
 
     @Override
-    public void onDataRefresh() {
-
-    }
+    public void onDataRefresh() { }
 }

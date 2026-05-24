@@ -57,6 +57,15 @@ public class RuneAlyticsPanel extends PluginPanel
     // ── Dependencies ─────────────────────────────────────────────────────────
     private final ConfigManager configManager;
 
+    // ── Last-applied feature flags ────────────────────────────────────────────
+    /**
+     * The most recent flags passed to {@link #applyFeatureFlags}.  Stored so
+     * that tabs registered <em>after</em> the first flag fetch (which happens
+     * asynchronously in startUp) immediately start in the correct
+     * visible/hidden state instead of always defaulting to visible.
+     */
+    private Map<String, Boolean> lastAppliedFlags = null;
+
     // ── Internal tab registry ─────────────────────────────────────────────────
     private static class TabEntry
     {
@@ -177,6 +186,15 @@ public class RuneAlyticsPanel extends PluginPanel
             tabRegistry.add(entry);
             tabbedPane.addTab(title, content);
             log.debug("Tab added: '{}' (feature={})", title, featureKey);
+
+            // If feature flags were already applied before this tab was
+            // registered (race between async tab construction and the initial
+            // flag fetch), re-apply the stored flags so the tab starts hidden
+            // rather than defaulting to visible.
+            if (lastAppliedFlags != null)
+            {
+                applyFeatureFlags(lastAppliedFlags);
+            }
         });
     }
 
@@ -233,6 +251,7 @@ public class RuneAlyticsPanel extends PluginPanel
         }
 
         log.info("Applying feature flags: {}", flags);
+        lastAppliedFlags = new HashMap<>(flags); // snapshot for late-registering tabs
 
         for (TabEntry entry : tabRegistry)
         {
