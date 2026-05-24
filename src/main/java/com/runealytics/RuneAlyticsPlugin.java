@@ -5,8 +5,6 @@ import com.google.inject.Provides;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
-import net.runelite.api.AccountType;
-import net.runelite.api.WorldType;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.*;
 import java.util.EnumSet;
@@ -1526,36 +1524,28 @@ public class RuneAlyticsPlugin extends Plugin
         EnumSet<WorldType> worldTypes = client.getWorldType();
         if (worldTypes != null)
         {
-            if (worldTypes.contains(WorldType.DEADMAN))           return "deadman";
-            if (worldTypes.contains(WorldType.SEASONAL))          return "leagues";
-            if (worldTypes.contains(WorldType.FRESH_START_WORLD)) return "fresh_start";
+            if (worldTypes.contains(WorldType.DEADMAN))  return "deadman";
+            if (worldTypes.contains(WorldType.SEASONAL)) return "leagues";
+            // FRESH_START_WORLD was added in a later RuneLite version; guard with valueOf.
+            try
+            {
+                WorldType fsr = WorldType.valueOf("FRESH_START_WORLD");
+                if (worldTypes.contains(fsr)) return "fresh_start";
+            }
+            catch (IllegalArgumentException ignored) {}
         }
 
-        AccountType accountType = client.getAccountType();
-        if (accountType != null)
-        {
-            switch (accountType)
-            {
-                case IRONMAN:
-                case HARDCORE_IRONMAN:
-                case ULTIMATE_IRONMAN:
-                case GROUP_IRONMAN:
-                case HARDCORE_GROUP_IRONMAN:
-                case UNRANKED_GROUP_IRONMAN:
-                    return "ironman";
-                default:
-                    return "regular";
-            }
-        }
-        return "regular";
+        String subtype = determineAccountSubtype();
+        return "normal".equals(subtype) ? "regular" : "ironman";
     }
 
     /**
      * Returns the specific OSRS account subtype for fine-grained server-side
      * filtering, independent of the current world mode.
      *
-     * <p>For example, an Ironman on a Leagues world has
-     * {@code game_mode="leagues"} but {@code account_type="ironman"}.</p>
+     * <p>Uses reflection so the plugin compiles against any RuneLite version —
+     * {@code AccountType} was added to {@code net.runelite.api} in a later
+     * release and may not be present in all cached JARs.</p>
      *
      * @return one of "normal", "ironman", "hardcore_ironman",
      *         "ultimate_ironman", "group_ironman",
@@ -1563,17 +1553,26 @@ public class RuneAlyticsPlugin extends Plugin
      */
     private String determineAccountSubtype()
     {
-        AccountType accountType = client.getAccountType();
-        if (accountType == null) return "normal";
-        switch (accountType)
+        try
         {
-            case IRONMAN:                return "ironman";
-            case HARDCORE_IRONMAN:       return "hardcore_ironman";
-            case ULTIMATE_IRONMAN:       return "ultimate_ironman";
-            case GROUP_IRONMAN:          return "group_ironman";
-            case HARDCORE_GROUP_IRONMAN: return "hardcore_group_ironman";
-            case UNRANKED_GROUP_IRONMAN: return "unranked_group_ironman";
-            default:                     return "normal";
+            Object accountType = client.getClass()
+                    .getMethod("getAccountType")
+                    .invoke(client);
+            if (accountType == null) return "normal";
+            switch (accountType.toString())
+            {
+                case "IRONMAN":                return "ironman";
+                case "HARDCORE_IRONMAN":       return "hardcore_ironman";
+                case "ULTIMATE_IRONMAN":       return "ultimate_ironman";
+                case "GROUP_IRONMAN":          return "group_ironman";
+                case "HARDCORE_GROUP_IRONMAN": return "hardcore_group_ironman";
+                case "UNRANKED_GROUP_IRONMAN": return "unranked_group_ironman";
+                default:                       return "normal";
+            }
+        }
+        catch (Exception e)
+        {
+            return "normal";
         }
     }
 
