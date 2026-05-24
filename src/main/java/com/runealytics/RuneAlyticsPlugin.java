@@ -1166,6 +1166,7 @@ public class RuneAlyticsPlugin extends Plugin
             SwingUtilities.invokeLater(() -> {
                 mainPanel.showLoggedOutState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
+                injector.getInstance(MatchmakingPanel.class).refreshLoginState();
             });
             return;
         }
@@ -1175,15 +1176,27 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGGED_IN)
         {
             state.setLoggedIn(true);
-            // Refresh verification + settings panels so code field enables on login
-            SwingUtilities.invokeLater(() -> {
-                injector.getInstance(RuneAlyticsVerificationPanel.class).refreshLoginState();
-                injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
-            });
 
+            // Resolve the player's RSN.  getLocalPlayer() can briefly return null
+            // during the early LOGGED_IN transition (before the character fully
+            // spawns), so fall back to the stored verified username so we never
+            // bail out and leave tabs in their logged-out (hidden) state.
             String username = client.getLocalPlayer() != null
                     ? client.getLocalPlayer().getName()
                     : null;
+            if ((username == null || username.isEmpty()) && state.getVerifiedUsername() != null)
+            {
+                username = state.getVerifiedUsername();
+            }
+
+            // Refresh all sidebar panels that show login-state-dependent controls.
+            // MatchmakingPanel is included here so its input/button enable correctly
+            // as soon as the player is recognised as logged-in + verified.
+            SwingUtilities.invokeLater(() -> {
+                injector.getInstance(RuneAlyticsVerificationPanel.class).refreshLoginState();
+                injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
+                injector.getInstance(MatchmakingPanel.class).refreshLoginState();
+            });
 
             if (username == null || username.isEmpty()) return;
 
@@ -1199,9 +1212,14 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
                 SwingUtilities.invokeLater(() ->
-                        mainPanel.showMainFeatures(
-                                flags.getOrDefault(FEATURE_LOOT, false),
-                                flags.getOrDefault(FEATURE_MATCHES, false)));
+                {
+                    mainPanel.showMainFeatures(
+                            flags.getOrDefault(FEATURE_LOOT, false),
+                            flags.getOrDefault(FEATURE_MATCHES, false));
+                    // Re-refresh matchmaking panel AFTER the tab becomes visible,
+                    // so the input and button reflect the now-enabled state.
+                    injector.getInstance(MatchmakingPanel.class).refreshLoginState();
+                });
             });
         }
     }
@@ -1504,6 +1522,27 @@ public class RuneAlyticsPlugin extends Plugin
             sp.updateVerificationStatus(verified, verified ? rsn : null);
             vp.refreshLoginState();
         });
+
+        // If the account is now verified, fetch feature flags and show the full
+        // UI.  This path is needed because onGameStateChanged(LOGGED_IN) fires
+        // before checkVerificationStatus() completes — at that point
+        // state.isVerified() is still false, so the flag fetch and showMainFeatures
+        // call are skipped.  Once verification is confirmed here we replay that
+        // logic so every tab (including Match Finder) appears correctly.
+        if (verified)
+        {
+            executorService.submit(() ->
+            {
+                Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
+                SwingUtilities.invokeLater(() ->
+                {
+                    mainPanel.showMainFeatures(
+                            flags.getOrDefault(FEATURE_LOOT, false),
+                            flags.getOrDefault(FEATURE_MATCHES, false));
+                    injector.getInstance(MatchmakingPanel.class).refreshLoginState();
+                });
+            });
+        }
     }
 
     private void logConfiguration()
