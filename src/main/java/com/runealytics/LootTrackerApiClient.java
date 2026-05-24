@@ -74,6 +74,8 @@ public class LootTrackerApiClient
         if (killsByBoss == null || killsByBoss.isEmpty()) return true;
 
         List<JsonObject> killPayloads = new ArrayList<>();
+        int skippedZeroLoot = 0;
+
         for (Map.Entry<String, List<LootStorageData.KillRecord>> e : killsByBoss.entrySet())
         {
             String npcName = e.getKey();
@@ -84,9 +86,24 @@ public class LootTrackerApiClient
 
             for (LootStorageData.KillRecord kill : e.getValue())
             {
+                // The server requires a non-empty drops array (HTTP 422 otherwise).
+                // Zero-loot kills are tracked locally for kill-count accuracy but
+                // are not sent to the server — they carry no drop data to store.
+                List<LootStorageData.DropRecord> drops = kill.getDrops();
+                if (drops == null || drops.isEmpty())
+                {
+                    skippedZeroLoot++;
+                    // Mark synced so they are not retried on the next batch pass.
+                    kill.setSyncedToServer(true);
+                    continue;
+                }
+
                 killPayloads.add(LootKillJsonBuilder.buildKill(kill, npcName, npcId, prestige));
             }
         }
+
+        if (skippedZeroLoot > 0)
+            log.debug("[bulk-sync] skipped {} zero-loot kill(s) — counted locally only", skippedZeroLoot);
 
         if (killPayloads.isEmpty()) return true;
 

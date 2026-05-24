@@ -127,13 +127,21 @@ public interface RunealyticsConfig extends Config
     String lootSection = "loot";
 
     /**
-     * Loot tracking is the core feature of RuneAlytics and is always on.
-     * The setter is retained as a no-op so old config files that toggled it
-     * off don't disable tracking on upgrade.
+     * Loot tracking is always enabled — it is the core feature of RuneAlytics.
      *
-     * <p>Kept as an interface method so existing callers compile unchanged —
-     * it now always returns {@code true}.</p>
+     * <p>The {@code @ConfigItem} annotation is kept so RuneLite's config proxy
+     * can generate a valid implementation (removing it causes the proxy to
+     * return {@code null}, which crashes with NPE on every call). The item is
+     * hidden from the settings UI so users cannot accidentally turn it off.</p>
      */
+    @ConfigItem(
+            keyName = "enableLootTracking",
+            name = "Enable Loot Tracking",
+            description = "Always on — loot tracking is a core RuneAlytics feature.",
+            section = lootSection,
+            position = 0,
+            hidden = true
+    )
     default boolean enableLootTracking()
     {
         return true;
