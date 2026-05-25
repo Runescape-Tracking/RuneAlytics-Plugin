@@ -23,8 +23,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateListener
 {
     private static final int  ITEMS_PER_ROW    = 5;
-    private static final int  ITEM_SIZE        = 42;
-    private static final int  ITEM_GAP         = 3;
+    private static final int  ITEM_SIZE        = 36;
+    private static final int  ITEM_GAP         = 2;
     private static final int  PAD              = 6;
     private static final int  HIGHLIGHT_TIMEOUT_MS = 10_000;
     private static final long SYNC_COOLDOWN_MS = 5 * 60 * 1_000L;
@@ -1064,7 +1064,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 qtyLabel.setFont(new Font("Calibri", Font.BOLD, 9));
                 qtyLabel.setForeground(new Color(255, 224, 80));
                 qtyLabel.setOpaque(false);
-                qtyLabel.setBounds(1, ITEM_SIZE - 12, ITEM_SIZE - 2, 11);
+                qtyLabel.setBounds(1, ITEM_SIZE - 13, ITEM_SIZE - 2, 11);
                 layers.add(qtyLabel, JLayeredPane.PALETTE_LAYER);
             }
 

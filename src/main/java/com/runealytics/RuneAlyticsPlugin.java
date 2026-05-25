@@ -343,8 +343,8 @@ public class RuneAlyticsPlugin extends Plugin
                     {
                         // Loot Tracker has no feature gate — local tracking is always available.
                         // Sync availability is controlled separately via setSyncEnabled().
-                        mainPanel.addTab("Loot Tracker", null,            lootPanel);
-                        mainPanel.addTab("Match Finder", FEATURE_MATCHES, matchmakingPanel);
+                        mainPanel.addTab("Loot Tracker", null,             lootPanel);
+                        mainPanel.addTab("Matches",      FEATURE_MATCHES,  matchmakingPanel);
                         mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
                         log.info("RuneAlytics tabs populated");
                     }
