@@ -739,17 +739,34 @@ public class MatchmakingManager
         }
     }
 
+    /**
+     * Manages the in-world hint arrow.  Behaviour:
+     *
+     * <ul>
+     *   <li>No session or match Completed/Canceled → arrow cleared.</li>
+     *   <li>Opponent is rendered (Pending, Ready, or Fighting) → arrow tracks
+     *       the opponent player so the local player can see exactly where the
+     *       other RuneLite client is in the world.</li>
+     *   <li>Opponent is NOT rendered (still travelling, in a different region)
+     *       and the server has issued a rally point → arrow falls back to the
+     *       rally tile so the player has somewhere to head toward.</li>
+     *   <li>Neither available → arrow cleared.</li>
+     * </ul>
+     *
+     * The cached {@code lastHintPlayerName} / {@code lastRallyPoint} avoids
+     * spamming {@code setHintArrow} every game tick.
+     */
     private void updateHintArrow()
     {
-        if (session == null) { clearHintArrow(); return; }
+        if (session == null)              { clearHintArrow(); return; }
         if (isMatchCompletedOrCanceled()) { clearHintArrow(); return; }
 
-        if (isMatchFighting())
+        // ── 1. Always prefer the opponent in Pending, Ready, and Fighting ────
+        Player opponent = findPlayerByName(session.getOpponentRsn());
+        if (opponent != null)
         {
-            Player opponent = findPlayerByName(session.getOpponentRsn());
-            if (opponent == null) { clearHintArrow(); return; }
-            String name = opponent.getName();
-            if (name != null && !name.equalsIgnoreCase(lastHintPlayerName))
+            String name = normalizeRsn(opponent.getName());
+            if (!name.equalsIgnoreCase(lastHintPlayerName))
             {
                 client.setHintArrow(opponent);
                 lastHintPlayerName = name;
@@ -758,6 +775,7 @@ public class MatchmakingManager
             return;
         }
 
+        // ── 2. Opponent not in render distance — fall back to the rally tile ─
         MatchmakingRally rally = session.getRally();
         if (rally == null) { clearHintArrow(); return; }
 
@@ -825,10 +843,16 @@ public class MatchmakingManager
 
     private Player findPlayerByName(String name)
     {
-        if (name == null || name.isEmpty()) return null;
+        String target = normalizeRsn(name);
+        if (target.isEmpty()) return null;
+        // Use normalized comparison: RuneLite's Actor.getName() returns NBSP
+        // (U+00A0) while server-side RSNs use regular spaces or underscores.
+        // Without this normalization the opponent lookup silently returns null
+        // and the hint arrow / engagement check never fire.
         for (Player player : client.getPlayers())
         {
-            if (player != null && name.equalsIgnoreCase(player.getName())) return player;
+            if (player == null) continue;
+            if (normalizeRsn(player.getName()).equalsIgnoreCase(target)) return player;
         }
         return null;
     }
