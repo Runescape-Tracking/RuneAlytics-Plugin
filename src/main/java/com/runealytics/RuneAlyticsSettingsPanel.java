@@ -408,17 +408,19 @@ public class RuneAlyticsSettingsPanel extends JPanel
         updateConnectionStatus(false, "Verifying with server...");
 
         executorService.submit(() -> {
-            boolean success = false;
+            String errorMsg = null;
             try
             {
-                success = apiClient.verifyToken(code, rsn);
+                errorMsg = apiClient.verifyTokenWithDetail(code, rsn);
             }
             catch (Exception e)
             {
+                errorMsg = e.getMessage() != null ? e.getMessage() : "Network error — check your connection.";
                 log.warn("Verification request failed: {}", e.getMessage());
             }
 
-            final boolean verified = success;
+            final boolean verified = (errorMsg == null);
+            final String finalError = errorMsg;
             SwingUtilities.invokeLater(() -> {
                 verifyButton.setText("Verify Account");
                 verifyButton.setEnabled(true);
@@ -440,8 +442,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
                     state.setVerified(false);
                     state.setVerifiedUsername(null);
                     state.setVerificationCode(null);
-                    updateConnectionStatus(false, "Invalid code — check and try again.");
-                    log.warn("Verification failed for '{}'", rsn);
+                    updateConnectionStatus(false, finalError);
+                    log.warn("Verification failed for '{}': {}", rsn, finalError);
                 }
             });
         });
