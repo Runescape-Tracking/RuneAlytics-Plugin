@@ -258,13 +258,33 @@ public class MatchmakingManager
 
     public void onActorDeath(Player player)
     {
-        if (session == null || reportInFlight || resultReported) return;
-        if (player == null || player.getName() == null) return;
+        if (session == null)
+        {
+            log.debug("[death] ignored — no active match session");
+            return;
+        }
+        if (reportInFlight)
+        {
+            log.debug("[death] ignored — reportInFlight=true (duplicate/race)");
+            return;
+        }
+        if (resultReported)
+        {
+            log.debug("[death] ignored — resultReported=true (already completed)");
+            return;
+        }
+        if (player == null || player.getName() == null)
+        {
+            log.debug("[death] ignored — null player/name");
+            return;
+        }
 
         String deathName = player.getName();
         if (!deathName.equalsIgnoreCase(session.getPlayer1Username())
                 && !deathName.equalsIgnoreCase(session.getPlayer2Username()))
         {
+            log.debug("[death] ignored — '{}' is not a match participant (p1='{}' p2='{}')",
+                    deathName, session.getPlayer1Username(), session.getPlayer2Username());
             return;
         }
 
@@ -272,12 +292,24 @@ public class MatchmakingManager
         String verificationCode = resolveVerificationCode();
         String rsn              = resolveLocalRsn();
 
-        if (token == null || token.isEmpty()
-                || verificationCode == null || verificationCode.isEmpty()
-                || rsn == null || rsn.isEmpty())
+        if (token == null || token.isEmpty())
         {
+            log.warn("[death] skipping — local auth token is null/empty");
             return;
         }
+        if (verificationCode == null || verificationCode.isEmpty())
+        {
+            log.warn("[death] skipping — verification code is null/empty");
+            return;
+        }
+        if (rsn == null || rsn.isEmpty())
+        {
+            log.warn("[death] skipping — local RSN is null/empty");
+            return;
+        }
+
+        log.info("[death] reporting death of '{}' (match={} status={})",
+                deathName, session.getMatchCode(), session.getStatus());
 
         reportInFlight = true;
 
@@ -289,6 +321,7 @@ public class MatchmakingManager
             }
             catch (IOException ex)
             {
+                log.error("[death] reportMatch IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
@@ -296,12 +329,21 @@ public class MatchmakingManager
 
             if (result.isSuccess() && result.getSession() != null)
             {
+                log.info("[death] match reported — new status: {}", result.getSession().getStatus());
                 session = result.getSession();
                 updateResultStatus();
             }
             else if (result.isTokenRefresh())
             {
                 refreshToken();
+            }
+            else
+            {
+                log.warn("[death] reportMatch failed — success={} msg='{}' body={}",
+                        result.isSuccess(), result.getMessage(),
+                        result.getRawResponse().length() > 200
+                                ? result.getRawResponse().substring(0, 200)
+                                : result.getRawResponse());
             }
 
             reportInFlight = false;

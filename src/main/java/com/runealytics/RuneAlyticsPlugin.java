@@ -1,6 +1,7 @@
 package com.runealytics;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import com.google.inject.Provides;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -654,13 +655,16 @@ public class RuneAlyticsPlugin extends Plugin
         {
             final String token          = state.getVerificationCode();
             final String username       = state.getVerifiedUsername();
-            // Capture containers HERE on the client thread; passing them into
-            // the executor lambda avoids AssertionError from off-thread reads.
-            final ItemContainer bankSnap  = event.getItemContainer();
-            final ItemContainer invSnap   = client.getItemContainer(InventoryID.INVENTORY);
-            final ItemContainer equipSnap = client.getItemContainer(InventoryID.EQUIPMENT);
-            executorService.execute(() ->
-                    bankDataManager.syncBankData(token, username, bankSnap, invSnap, equipSnap));
+            // Build the complete JSON snapshot HERE on the client thread because
+            // fromContainerWithValues calls ItemManager.getItemComposition which
+            // requires client.getItemDefinition — a client-thread-only API.
+            // Only the HTTP call is handed off to the background executor.
+            final JsonObject bankSnapshot = bankDataManager.buildBankSnapshot(
+                    username,
+                    event.getItemContainer(),
+                    client.getItemContainer(InventoryID.INVENTORY),
+                    client.getItemContainer(InventoryID.EQUIPMENT));
+            executorService.execute(() -> bankDataManager.syncBankData(token, username, bankSnapshot));
             return;
         }
 
