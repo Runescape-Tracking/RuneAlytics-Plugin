@@ -195,10 +195,15 @@ public class MatchmakingApiClient
             int overheadIconOrdinal,
             boolean isSkulled)
     {
-        if (inventory != null)          payload.add("player_inventory",  inventory);
-        if (gear      != null)          payload.add("player_gear",       gear);
-        if (overheadIconOrdinal >= 0)   payload.addProperty("overhead_icon", overheadIconOrdinal);
-        payload.addProperty("is_skulled", isSkulled);
+        if (inventory != null) payload.add("player_inventory", inventory);
+        if (gear      != null) payload.add("player_gear",      gear);
+
+        // ALWAYS send overhead_icon (even -1 = no overhead) so the server
+        // clears stale state when the player turns the prayer off.  Previously
+        // we omitted the field when it was -1, which made the server hold the
+        // last-known value forever.
+        payload.addProperty("overhead_icon", overheadIconOrdinal);
+        payload.addProperty("is_skulled",    isSkulled);
     }
 
     private MatchmakingApiResult executeRequest(

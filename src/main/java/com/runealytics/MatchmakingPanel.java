@@ -549,21 +549,30 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         String firstError   = validation.firstErrorMessage();
         String firstWarning = validation.firstWarningMessage();
 
+        // Wrap in <html><div width=...> so the JLabel actually word-wraps
+        // instead of truncating with an ellipsis.  Width is sized for the
+        // narrow plugin panel; tweak if the panel ever widens.
         if (firstError != null)
         {
-            lbl.setText("<html>✗ " + firstError + "</html>");
+            lbl.setText("<html><div width=\"180\">\u2717 " + escapeHtml(firstError) + "</div></html>");
             lbl.setForeground(COL_RED);
         }
         else if (firstWarning != null)
         {
-            lbl.setText("<html>⚠ " + firstWarning + "</html>");
+            lbl.setText("<html><div width=\"180\">\u26A0 " + escapeHtml(firstWarning) + "</div></html>");
             lbl.setForeground(new Color(230, 180, 40));
         }
         else
         {
-            lbl.setText("✓ Rules met");
+            lbl.setText("\u2713 Rules met");
             lbl.setForeground(COL_GREEN);
         }
+    }
+
+    private static String escapeHtml(String s)
+    {
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     private void applyPlayerStatus(JLabel lbl, boolean joined, boolean ready, String matchStatus)

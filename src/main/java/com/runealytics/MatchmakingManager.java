@@ -24,6 +24,9 @@ public class MatchmakingManager
     private static final Logger log = LoggerFactory.getLogger(MatchmakingManager.class);
 
     private static final int POLL_INTERVAL_TICKS = 2;
+
+    /** Ticks to wait after a failed accept/begin call before retrying. */
+    private static final int RETRY_BACKOFF_TICKS = 5;
     private static final int RALLY_DISTANCE      = 15;
 
     private final Client                   client;
@@ -39,6 +42,10 @@ public class MatchmakingManager
     private boolean requestInFlight;
     private boolean acceptInFlight;
     private boolean beginInFlight;
+
+    /** Tick number when the next accept/begin retry is allowed (back-off). */
+    private int     acceptCooldownUntilTick;
+    private int     beginCooldownUntilTick;
     private boolean reportInFlight;
     private boolean itemsReportInFlight;
     private boolean resultReported;
@@ -241,16 +248,18 @@ public class MatchmakingManager
 
     public void reset()
     {
-        session                 = null;
-        tickCounter             = 0;
-        requestInFlight         = false;
-        acceptInFlight          = false;
-        beginInFlight           = false;
-        reportInFlight          = false;
-        itemsReportInFlight     = false;
-        resultReported          = false;
-        itemsReported           = false;
-        gearChangedDuringFight  = false;
+        session                  = null;
+        tickCounter              = 0;
+        requestInFlight          = false;
+        acceptInFlight           = false;
+        beginInFlight            = false;
+        reportInFlight           = false;
+        itemsReportInFlight      = false;
+        resultReported           = false;
+        itemsReported            = false;
+        gearChangedDuringFight   = false;
+        acceptCooldownUntilTick  = 0;
+        beginCooldownUntilTick   = 0;
         // Keep snapshots — they reflect the player's current state and are
         // valid across match resets (e.g. New Match).
         clearHintArrow();
@@ -279,12 +288,18 @@ public class MatchmakingManager
             return;
         }
 
-        String deathName = player.getName();
-        if (!deathName.equalsIgnoreCase(session.getPlayer1Username())
-                && !deathName.equalsIgnoreCase(session.getPlayer2Username()))
+        // RuneLite's Actor.getName() returns names with a non-breaking space
+        // (U+00A0); OSRS profiles often store regular space or underscore.
+        // Normalize ALL three to plain spaces before comparison so the death
+        // is correctly attributed to the right participant.
+        String deathName = normalizeRsn(player.getName());
+        String p1Name    = normalizeRsn(session.getPlayer1Username());
+        String p2Name    = normalizeRsn(session.getPlayer2Username());
+
+        if (!deathName.equalsIgnoreCase(p1Name) && !deathName.equalsIgnoreCase(p2Name))
         {
             log.debug("[death] ignored — '{}' is not a match participant (p1='{}' p2='{}')",
-                    deathName, session.getPlayer1Username(), session.getPlayer2Username());
+                    deathName, p1Name, p2Name);
             return;
         }
 
@@ -308,8 +323,10 @@ public class MatchmakingManager
             return;
         }
 
+        final String reportedDeath = deathName; // already normalized above
+
         log.info("[death] reporting death of '{}' (match={} status={})",
-                deathName, session.getMatchCode(), session.getStatus());
+                reportedDeath, session.getMatchCode(), session.getStatus());
 
         reportInFlight = true;
 
@@ -317,7 +334,7 @@ public class MatchmakingManager
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.reportMatch(verificationCode, session.getMatchCode(), rsn, token, deathName);
+                result = apiClient.reportMatch(verificationCode, session.getMatchCode(), rsn, token, reportedDeath);
             }
             catch (IOException ex)
             {
@@ -439,6 +456,12 @@ public class MatchmakingManager
     {
         if (session == null || session.isLocalJoined() || acceptInFlight) return;
 
+        // Honour back-off after a previous failure so we don't slam the server
+        // with one request per tick.  The flag is cleared after the response,
+        // and the natural short-circuit (isLocalJoined()) prevents spam after
+        // success — but we still need this for repeated 4xx/5xx scenarios.
+        if (tickCounter < acceptCooldownUntilTick) return;
+
         String token            = session.getLocalToken();
         if (token == null || token.isEmpty()) return;
 
@@ -451,13 +474,13 @@ public class MatchmakingManager
             return;
         }
 
-        // Use current snapshot (always populated by refreshPlayerState above)
         final JsonArray inventory = currentInventorySnapshot != null ? currentInventorySnapshot : new JsonArray();
         final JsonArray gear      = currentGearSnapshot      != null ? currentGearSnapshot      : new JsonArray();
         final int       overhead  = currentOverheadIconOrdinal;
         final boolean   skulled   = currentIsSkulled;
 
         acceptInFlight = true;
+        log.debug("[accept] sending — status={} rsn={}", session.getStatus(), rsn);
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
@@ -468,6 +491,7 @@ public class MatchmakingManager
             }
             catch (IOException ex)
             {
+                log.warn("[accept] IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
@@ -475,23 +499,26 @@ public class MatchmakingManager
 
             if (result.isSuccess() && result.getSession() != null)
             {
+                log.info("[accept] success — status now {}", result.getSession().getStatus());
                 session = result.getSession();
                 updateResultStatus();
             }
-            else if (result.isTokenRefresh())
+            else
             {
-                // Token expired — allow re-attempt on next tick with refreshed token
-                acceptInFlight = false;
+                // ALWAYS schedule a retry on failure so a transient error
+                // (422, 5xx, network drop) doesn't permanently latch the
+                // match in "Pending".  Without this back-off + clear, the
+                // first 422 would freeze the state machine forever.
+                String body = result.getRawResponse();
+                log.warn("[accept] failed — success={} tokenRefresh={} msg='{}' body={}",
+                        result.isSuccess(), result.isTokenRefresh(), result.getMessage(),
+                        body.length() > 200 ? body.substring(0, 200) : body);
+                acceptCooldownUntilTick = tickCounter + RETRY_BACKOFF_TICKS;
             }
-            // On other failures: keep acceptInFlight=true to prevent retry loop.
-            // The next poll will update session.isLocalJoined() if server already
-            // accepted, which will naturally stop further attempts.
-            // acceptInFlight is cleared in reset() when user starts a new match.
 
-            if (result.isSuccess())
-            {
-                acceptInFlight = false;
-            }
+            // ALWAYS clear the flag — the natural !isLocalJoined() guard
+            // (updated by the next poll) handles the success-no-retry case.
+            acceptInFlight = false;
         });
     }
 
@@ -506,24 +533,42 @@ public class MatchmakingManager
             return;
         }
 
-        Player localPlayer = client.getLocalPlayer();
-        if (localPlayer == null) return;
-
-        String opponentRsn = session.getOpponentRsn();
-        Player opponent    = findPlayerByName(opponentRsn);
-        if (opponent == null) return;
-
-        boolean shouldBegin = false;
-        if (session.getRally() != null)
+        // We can only ready-up after BOTH players have joined and the server
+        // has unlocked the match (status=Ready, rally generated).  Bailing
+        // earlier just spams 4xx responses.
+        if (!session.isLocalJoined()) return;
+        if (!session.getStatus().equalsIgnoreCase("Ready"))
         {
-            WorldPoint rallyPoint = new WorldPoint(
-                    session.getRally().getX(),
-                    session.getRally().getY(),
-                    session.getRally().getPlane());
-            shouldBegin = isWithinRally(localPlayer, opponent, rallyPoint);
+            // Still Pending → opponent hasn't accepted yet; wait for the next
+            // poll to flip status to Ready.
+            return;
         }
-        if (!shouldBegin) shouldBegin = isPlayerEngaged(localPlayer, opponent);
-        if (!shouldBegin) return;
+
+        if (tickCounter < beginCooldownUntilTick) return;
+
+        // Original behaviour required the player to be physically at the rally
+        // point OR already engaged with the opponent.  That gating was too
+        // restrictive — if neither check ever returned true (rally tolerance
+        // off, opponent not rendered yet, etc.) the status would stay Ready
+        // forever.  Now: once status=Ready and the local player has joined,
+        // we always send /begin-match.  The proximity check is still used as
+        // a hint but never blocks the call.
+        Player localPlayer = client.getLocalPlayer();
+        Player opponent    = (localPlayer != null)
+                ? findPlayerByName(session.getOpponentRsn()) : null;
+        boolean rallyOrEngaged = false;
+        if (localPlayer != null && opponent != null)
+        {
+            if (session.getRally() != null)
+            {
+                WorldPoint rallyPoint = new WorldPoint(
+                        session.getRally().getX(),
+                        session.getRally().getY(),
+                        session.getRally().getPlane());
+                rallyOrEngaged = isWithinRally(localPlayer, opponent, rallyPoint);
+            }
+            if (!rallyOrEngaged) rallyOrEngaged = isPlayerEngaged(localPlayer, opponent);
+        }
 
         String token            = session.getLocalToken();
         String verificationCode = resolveVerificationCode();
@@ -537,6 +582,8 @@ public class MatchmakingManager
         }
 
         beginInFlight = true;
+        log.debug("[begin-match] sending — rallyOrEngaged={} status={}",
+                rallyOrEngaged, session.getStatus());
 
         final JsonArray inv      = currentInventorySnapshot;
         final JsonArray gear     = currentGearSnapshot;
@@ -552,6 +599,7 @@ public class MatchmakingManager
             }
             catch (IOException ex)
             {
+                log.warn("[begin-match] IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
@@ -559,8 +607,18 @@ public class MatchmakingManager
 
             if (result.isSuccess() && result.getSession() != null)
             {
+                log.info("[begin-match] success — status now {}", result.getSession().getStatus());
                 session = result.getSession();
                 updateResultStatus();
+            }
+            else
+            {
+                // Back-off so a transient failure doesn't latch the state.
+                String body = result.getRawResponse();
+                log.warn("[begin-match] failed — msg='{}' body={}",
+                        result.getMessage(),
+                        body.length() > 200 ? body.substring(0, 200) : body);
+                beginCooldownUntilTick = tickCounter + RETRY_BACKOFF_TICKS;
             }
 
             beginInFlight = false;
@@ -804,6 +862,17 @@ public class MatchmakingManager
     {
         String code = runeAlyticsState.getVerificationCode();
         return (code == null || code.isEmpty()) ? null : code;
+    }
+
+    /**
+     * Normalize OSRS RSN strings so that RuneLite's Actor.getName() form
+     * (which uses U+00A0 non-breaking space) compares equal to profile
+     * storage forms that use regular space or underscore.
+     */
+    private static String normalizeRsn(String name)
+    {
+        if (name == null) return "";
+        return name.replace('\u00A0', ' ').replace('_', ' ').trim();
     }
 
     private String resolveLocalRsn()
