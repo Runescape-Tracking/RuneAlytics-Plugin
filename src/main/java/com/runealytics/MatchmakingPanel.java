@@ -412,9 +412,12 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             }
 
             // No active match — this is an explicit load failure; reset to idle.
-            setEntryStatus(msg.isEmpty() ? "Failed to load match." : msg, COL_RED);
+            // updateEntryCard() is called first so it restores the enabled state
+            // and sets "Ready." — then we immediately override the status label
+            // with the actual error so it is the last thing written and stays visible.
             hideActiveCards();
             updateEntryCard();
+            setEntryStatus(msg.isEmpty() ? "Failed to load match." : msg, COL_RED);
             return;
         }
 
