@@ -69,6 +69,16 @@ public class MatchmakingSession
                     .orElse(null);
         }
 
+        /** Returns the first issue whose code matches the given value, or null. */
+        public ValidationIssue firstIssueByCode(String code)
+        {
+            if (code == null) return null;
+            return issues.stream()
+                    .filter(i -> code.equals(i.getCode()))
+                    .findFirst()
+                    .orElse(null);
+        }
+
         /** True when there are no error-level issues. */
         public boolean hasOnlyWarnings()
         {

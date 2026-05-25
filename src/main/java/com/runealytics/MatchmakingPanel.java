@@ -555,6 +555,19 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             return;
         }
 
+        // ── Violation grace countdown — shown with high-urgency orange ────────
+        // The server injects a "violation_grace" issue at the front of the list
+        // when a countdown is active.  We render it before other error checks so
+        // it's always the most prominent message while the timer is running.
+        MatchmakingSession.ValidationIssue graceIssue =
+                validation.firstIssueByCode("violation_grace");
+        if (graceIssue != null)
+        {
+            lbl.setText("<html><div width=\"220\">\u23F1 " + escapeHtml(graceIssue.getMessage()) + "</div></html>");
+            lbl.setForeground(new Color(230, 120, 0)); // orange
+            return;
+        }
+
         String firstError   = validation.firstErrorMessage();
         String firstWarning = validation.firstWarningMessage();
 
