@@ -137,7 +137,8 @@ public class RuneAlyticsPlugin extends Plugin
 
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
-    private NavigationButton navButton;
+    private NavigationButton         navButton;
+    private LootTrackerPanel         lootTrackerPanel;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT TRACKING STATE
@@ -332,12 +333,18 @@ public class RuneAlyticsPlugin extends Plugin
                 MatchmakingPanel        matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
                 RuneAlyticsSettingsPanel settingsPanel   = injector.getInstance(RuneAlyticsSettingsPanel.class);
 
+                lootTrackerPanel = lootPanel;
+                // Sync starts disabled until feature flags confirm it is active
+                lootPanel.setSyncEnabled(false);
+
                 SwingUtilities.invokeLater(() ->
                 {
                     try
                     {
-                        mainPanel.addTab("Loot Tracker", FEATURE_LOOT,         lootPanel);
-                        mainPanel.addTab("Match Finder", FEATURE_MATCHES,      matchmakingPanel);
+                        // Loot Tracker has no feature gate — local tracking is always available.
+                        // Sync availability is controlled separately via setSyncEnabled().
+                        mainPanel.addTab("Loot Tracker", null,            lootPanel);
+                        mainPanel.addTab("Match Finder", FEATURE_MATCHES, matchmakingPanel);
                         mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
                         log.info("RuneAlytics tabs populated");
                     }
@@ -1143,6 +1150,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGIN_SCREEN)
         {
             state.setLoggedIn(false);
+            if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(false);
             SwingUtilities.invokeLater(() -> {
                 mainPanel.showLoggedOutState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
@@ -1178,10 +1186,11 @@ public class RuneAlyticsPlugin extends Plugin
             executorService.submit(() ->
             {
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
+                boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
+                boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
+                if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
                 SwingUtilities.invokeLater(() ->
-                        mainPanel.showMainFeatures(
-                                flags.getOrDefault(FEATURE_LOOT, false),
-                                flags.getOrDefault(FEATURE_MATCHES, false)));
+                        mainPanel.showMainFeatures(true, matchEnabled));
             });
         }
     }
@@ -1202,7 +1211,12 @@ public class RuneAlyticsPlugin extends Plugin
 
         executorService.submit(() -> {
             Map<String, Boolean> flags = apiClient.fetchFeatureFlags(username.toLowerCase());
-            SwingUtilities.invokeLater(() -> mainPanel.applyFeatureFlags(flags));
+            boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
+            if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
+            // Loot Tracker tab is always visible; only Match Finder is flag-controlled
+            Map<String, Boolean> tabFlags = new java.util.HashMap<>(flags);
+            tabFlags.put(FEATURE_LOOT, true);
+            SwingUtilities.invokeLater(() -> mainPanel.applyFeatureFlags(tabFlags));
         });
     }
 

@@ -163,30 +163,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         scrollPane.getViewport().setBackground(ColorScheme.DARK_GRAY_COLOR);
         scrollPane.getVerticalScrollBar().setUnitIncrement(16);
         scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-        scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
-        scrollPane.getVerticalScrollBar().addComponentListener(new ComponentAdapter()
-        {
-            @Override public void componentShown (ComponentEvent e) { setScrollPadding(true);  }
-            @Override public void componentHidden(ComponentEvent e) { setScrollPadding(false); }
-        });
+        scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS);
+        scrollPane.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
 
         add(scrollPane, BorderLayout.CENTER);
-    }
-
-    private void setScrollPadding(boolean visible)
-    {
-        int leftPad  = visible ? 2 : PAD;
-        int rightPad = PAD;
-        if (visible)
-        {
-            int sbw = scrollPane.getVerticalScrollBar().getWidth();
-            if (sbw <= 0) sbw = UIManager.getInt("ScrollBar.width");
-            if (sbw <= 0) sbw = 13;
-            rightPad = PAD + sbw;
-        }
-        bossListPanel.setBorder(new EmptyBorder(PAD, leftPad, PAD, rightPad));
-        bossListPanel.revalidate();
-        bossListPanel.repaint();
     }
 
     private JPanel buildHeader()
@@ -596,6 +576,26 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     }
 
     /**
+     * Enables or disables the Sync button based on whether the RuneAlytics
+     * server-side loot tracker feature is active for this player.
+     * When disabled, the button is greyed out with an explanatory tooltip.
+     */
+    public void setSyncEnabled(boolean enabled)
+    {
+        SwingUtilities.invokeLater(() -> {
+            if (syncButton == null) return;
+            syncButton.setEnabled(enabled);
+            syncButton.setToolTipText(enabled
+                    ? "Sync with RuneAlytics server"
+                    : "Loot syncing is disabled — enable Loot Tracker on RuneAlytics.com");
+            syncButton.setBackground(enabled ? new Color(40, 60, 90) : new Color(35, 35, 35));
+            syncButton.setForeground(enabled ? Color.WHITE : new Color(100, 100, 100));
+            syncButton.setBorder(BorderFactory.createLineBorder(
+                    enabled ? new Color(60, 90, 130) : new Color(55, 55, 55), 1));
+        });
+    }
+
+    /**
      * Animates the sync button and status label to reflect the outcome.
      * Reverts automatically after 2.5 seconds — no modal dialog.
      *
@@ -889,11 +889,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     {
         boolean ip = lootManager.isPickpocketSource(npcName);
         boolean is = lootManager.isSkillingSource(npcName);
-        String  ic = ip ? "👜" : (is ? "🌿" : "⚔");
         String  dn = ip ? lootManager.stripPickpocketPrefix(npcName)
                 : is ? lootManager.stripSkillingPrefix(npcName)
                 : npcName;
-        return ic + " " + truncate(dn, 18) + " × " + String.format("%,d", killCount);
+        return truncate(dn, 18) + " × " + String.format("%,d", killCount);
     }
 
     private JPanel buildBossCard(BossKillStats stats)
@@ -1038,11 +1037,36 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             }
             else
             {
-                itemManager.getImage(drop.getItemId(), drop.getTotalQuantity(), drop.getTotalQuantity() > 1)
+                itemManager.getImage(drop.getItemId(), 1, false)
                         .addTo(iconLabel);
             }
 
             layers.add(iconLabel, JLayeredPane.DEFAULT_LAYER);
+
+            // Custom quantity badge with dark backing for readability
+            if (!isPet && drop.getTotalQuantity() > 1)
+            {
+                String qtyStr = formatNumber(drop.getTotalQuantity());
+                JLabel qtyLabel = new JLabel(qtyStr, SwingConstants.CENTER)
+                {
+                    @Override
+                    protected void paintComponent(Graphics g)
+                    {
+                        Graphics2D g2 = (Graphics2D) g.create();
+                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                                RenderingHints.VALUE_ANTIALIAS_ON);
+                        g2.setColor(new Color(0, 0, 0, 170));
+                        g2.fillRoundRect(0, 0, getWidth(), getHeight(), 3, 3);
+                        g2.dispose();
+                        super.paintComponent(g);
+                    }
+                };
+                qtyLabel.setFont(new Font("Calibri", Font.BOLD, 9));
+                qtyLabel.setForeground(new Color(255, 224, 80));
+                qtyLabel.setOpaque(false);
+                qtyLabel.setBounds(1, ITEM_SIZE - 12, ITEM_SIZE - 2, 11);
+                layers.add(qtyLabel, JLayeredPane.PALETTE_LAYER);
+            }
 
             if (isPet)
             {
