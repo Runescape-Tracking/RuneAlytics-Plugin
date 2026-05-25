@@ -227,34 +227,43 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     private JPanel buildPlayerRow(AvatarLabel avatar, JLabel name, JLabel tag,
                                    JLabel status, JLabel validation)
     {
-        JPanel row = new JPanel(new BorderLayout(8, 0));
-        row.setOpaque(false);
-        row.setAlignmentX(LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 66));
+        // Top sub-row: avatar | name + tag | status
+        // The status label now sits to the RIGHT of the name/tag block on the
+        // same line, so it does NOT steal horizontal space from the validation
+        // label.  Previously the validation lived inside the constrained centre
+        // column and was clipped by the EAST status panel.
+        JPanel topRow = new JPanel(new BorderLayout(8, 0));
+        topRow.setOpaque(false);
+        topRow.setAlignmentX(LEFT_ALIGNMENT);
 
-        // left: avatar
-        row.add(avatar, BorderLayout.WEST);
+        topRow.add(avatar, BorderLayout.WEST);
 
-        // centre: name + tag + validation
-        JPanel centre = vertPanel();
-        centre.setAlignmentY(Component.CENTER_ALIGNMENT);
+        JPanel nameBlock = vertPanel();
+        nameBlock.setAlignmentY(Component.CENTER_ALIGNMENT);
         name.setAlignmentX(LEFT_ALIGNMENT);
         tag.setAlignmentX(LEFT_ALIGNMENT);
-        validation.setAlignmentX(LEFT_ALIGNMENT);
-        centre.add(name);
-        centre.add(RuneAlyticsUi.vSpace(1));
-        centre.add(tag);
-        centre.add(RuneAlyticsUi.vSpace(2));
-        centre.add(validation);
-        row.add(centre, BorderLayout.CENTER);
+        nameBlock.add(name);
+        nameBlock.add(RuneAlyticsUi.vSpace(1));
+        nameBlock.add(tag);
+        topRow.add(nameBlock, BorderLayout.CENTER);
 
-        // right: ready status
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
         right.setOpaque(false);
         right.add(status);
-        row.add(right, BorderLayout.EAST);
+        topRow.add(right, BorderLayout.EAST);
 
-        return row;
+        // Validation label spans the full row width below the top sub-row so
+        // it is never truncated by the status label on the right.
+        validation.setAlignmentX(LEFT_ALIGNMENT);
+
+        JPanel wrapper = vertPanel();
+        wrapper.setAlignmentX(LEFT_ALIGNMENT);
+        wrapper.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
+        wrapper.add(topRow);
+        wrapper.add(RuneAlyticsUi.vSpace(3));
+        wrapper.add(validation);
+
+        return wrapper;
     }
 
     // ── Result card ───────────────────────────────────────────────────────────
@@ -549,17 +558,16 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         String firstError   = validation.firstErrorMessage();
         String firstWarning = validation.firstWarningMessage();
 
-        // Wrap in <html><div width=...> so the JLabel actually word-wraps
-        // instead of truncating with an ellipsis.  Width is sized for the
-        // narrow plugin panel; tweak if the panel ever widens.
+        // Validation now sits below the player row (full-panel width) so we
+        // can use a wider div — 220px fits the standard plugin panel width.
         if (firstError != null)
         {
-            lbl.setText("<html><div width=\"180\">\u2717 " + escapeHtml(firstError) + "</div></html>");
+            lbl.setText("<html><div width=\"220\">\u2717 " + escapeHtml(firstError) + "</div></html>");
             lbl.setForeground(COL_RED);
         }
         else if (firstWarning != null)
         {
-            lbl.setText("<html><div width=\"180\">\u26A0 " + escapeHtml(firstWarning) + "</div></html>");
+            lbl.setText("<html><div width=\"220\">\u26A0 " + escapeHtml(firstWarning) + "</div></html>");
             lbl.setForeground(new Color(230, 180, 40));
         }
         else
