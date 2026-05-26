@@ -406,12 +406,18 @@ public class RuneAlyticsSettingsPanel extends JPanel
         return outer;
     }
 
-    /** Card panel capped at 194 px and centered — matches the visual width of the Matches panel cards. */
+    /** 196px-wide centered card with 5px inner padding, matching the specified settings layout. */
     private static JPanel settingsCard()
     {
-        JPanel card = RuneAlyticsUi.cardPanel();
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+        card.setOpaque(true);
+        card.setBorder(new CompoundBorder(
+                new LineBorder(new Color(60, 60, 60, 180), 1, true),
+                new EmptyBorder(5, 5, 5, 5)));
         card.setAlignmentX(Component.CENTER_ALIGNMENT);
-        card.setMaximumSize(new Dimension(194, Short.MAX_VALUE));
+        card.setMaximumSize(new Dimension(196, Short.MAX_VALUE));
         return card;
     }
 
@@ -511,7 +517,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 new LineBorder(new Color(60, 60, 65), 1, true),
                 new EmptyBorder(8, 8, 8, 8)));
         card.setAlignmentX(Component.CENTER_ALIGNMENT);
-        card.setMaximumSize(new Dimension(194, Short.MAX_VALUE));
+        card.setMaximumSize(new Dimension(196, Short.MAX_VALUE));
 
         card.add(buildStepIcon(stepNum));
         card.add(hSpace(10));
@@ -521,8 +527,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
         t.setFont(cf(Font.BOLD, 13f));
         t.setForeground(Color.WHITE);
         textCol.add(t);
-        // 194px card - 18px border/padding - 40px icon+gap = 136px text column
-        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 11f), 130));
+        // 196px card - 18px border/padding - 40px icon+gap = 138px text column
+        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 11f), 134));
 
         card.add(textCol);
         return card;
@@ -719,7 +725,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
         panel.setOpaque(true);
-        panel.setBorder(new EmptyBorder(10, 8, 10, 8));
+        panel.setBorder(new EmptyBorder(10, 5, 10, 5));
         return panel;
     }
 
@@ -743,7 +749,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private static JLabel compactLabel(String text, Color fg, Font font)
     {
-        return compactLabel(text, fg, font, 170);
+        return compactLabel(text, fg, font, 180);
     }
 
     private static JLabel compactLabel(String text, Color fg, Font font, int wrapPx)

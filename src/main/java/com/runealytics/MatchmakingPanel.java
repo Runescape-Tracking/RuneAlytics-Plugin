@@ -375,11 +375,12 @@ public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListene
 
             setStatus("Status: " + session.getStatus(), true);
         }
-        else
+        else if (!update.isSuccess())
         {
             String msg = update.getMessage();
             setStatus(msg != null && !msg.isEmpty() ? msg : "Request failed.", false);
         }
+        // success with no session = silent ack (e.g. acceptMatch returns "true")
 
         revalidate();
         repaint();
