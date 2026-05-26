@@ -126,14 +126,8 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     private void buildUi()
     {
-        // Use inline title/subtitle so we can control the gap tightly —
-        // addSectionTitle/addSubtitle add generous spacing suited for taller panels.
-        JLabel title = RuneAlyticsUi.titleLabel("Match Finder");
-        add(title);
-        add(RuneAlyticsUi.vSpace(2));
-        JLabel subtitle = RuneAlyticsUi.subtitleLabel("PvP Match Tracker");
-        add(subtitle);
-        add(RuneAlyticsUi.vSpace(6));
+        add(RuneAlyticsUi.buildPanelHeader("Matches"));
+        add(RuneAlyticsUi.vSpace(8));
 
         add(buildLoadCard());
         add(RuneAlyticsUi.vSpace(5));

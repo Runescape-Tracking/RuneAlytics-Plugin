@@ -3,8 +3,6 @@ package com.runealytics;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import net.runelite.client.ui.ColorScheme;
-import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 
 import javax.inject.Inject;
@@ -18,7 +16,6 @@ import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
 import java.awt.*;
-import java.awt.image.BufferedImage;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 
@@ -134,8 +131,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private JPanel buildVerifiedContent()
     {
         JPanel panel = rootPanel();
-        panel.add(buildLogoSection());
-        panel.add(vSpace(12));
+        panel.add(RuneAlyticsUi.buildPanelHeader("Settings"));
+        panel.add(vSpace(10));
         panel.add(buildConnectionStatusCard());
         panel.add(vSpace(14));
         panel.add(sectionHeader("PRIVACY SETTINGS"));
@@ -292,8 +289,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private JPanel buildUnverifiedContent()
     {
         JPanel panel = rootPanel();
-        panel.add(buildLogoSection());
-        panel.add(vSpace(14));
+        panel.add(RuneAlyticsUi.buildPanelHeader("Settings"));
+        panel.add(vSpace(10));
         panel.add(buildVerificationSection());
         panel.add(vSpace(14));
         panel.add(sectionHeader("RUNEALYTICS BENEFITS"));
@@ -374,68 +371,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
         p.add(buildConnectionStatusCard());
         return p;
-    }
-
-    private JPanel buildLogoSection()
-    {
-        JPanel outer = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
-        outer.setOpaque(false);
-        outer.setAlignmentX(Component.LEFT_ALIGNMENT);
-        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 118));
-
-        JPanel inner = new JPanel();
-        inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
-        inner.setOpaque(false);
-
-        BufferedImage fullLogo = tryLoadImage("/runealytics_logo.png");
-
-        if (fullLogo != null)
-        {
-            JLabel lbl = scaledImageLabelNoUpscale(fullLogo, 82);
-            lbl.setAlignmentX(Component.CENTER_ALIGNMENT);
-            inner.add(lbl);
-            inner.add(vSpace(6));
-
-            JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
-            tagline.setFont(cf(Font.BOLD, 11f));
-            tagline.setForeground(TEAL_COLOR);
-            tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
-            inner.add(tagline);
-        }
-        else
-        {
-            BufferedImage icon = tryLoadImage("/runealytics_icon.png");
-
-            JLabel logo;
-
-            if (icon != null)
-            {
-                logo = scaledImageLabelNoUpscale(icon, 48);
-            }
-            else
-            {
-                logo = new JLabel("RA", SwingConstants.CENTER);
-                logo.setFont(cf(Font.BOLD, 24f));
-                logo.setForeground(GOLD_COLOR);
-                logo.setOpaque(true);
-                logo.setBackground(new Color(50, 40, 10));
-                logo.setPreferredSize(new Dimension(64, 64));
-                logo.setMaximumSize(new Dimension(64, 64));
-            }
-
-            logo.setAlignmentX(Component.CENTER_ALIGNMENT);
-            inner.add(logo);
-            inner.add(vSpace(6));
-
-            JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
-            tagline.setFont(cf(Font.BOLD, 11f));
-            tagline.setForeground(TEAL_COLOR);
-            tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
-            inner.add(tagline);
-        }
-
-        outer.add(inner);
-        return outer;
     }
 
     private static JPanel settingsCard()
@@ -873,48 +808,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
         p.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         return p;
-    }
-
-    private static BufferedImage tryLoadImage(String resource)
-    {
-        try
-        {
-            return ImageUtil.loadImageResource(RuneAlyticsSettingsPanel.class, resource);
-        }
-        catch (Exception e)
-        {
-            return null;
-        }
-    }
-
-    private static JLabel scaledImageLabelNoUpscale(BufferedImage src, int targetW)
-    {
-        int finalW = Math.min(targetW, src.getWidth());
-        int finalH = Math.max(1, (int) Math.round(src.getHeight() * (finalW / (double) src.getWidth())));
-
-        if (finalW == src.getWidth())
-        {
-            JLabel label = new JLabel(new ImageIcon(src));
-            label.setPreferredSize(new Dimension(src.getWidth(), src.getHeight()));
-            label.setMaximumSize(new Dimension(src.getWidth(), src.getHeight()));
-            return label;
-        }
-
-        BufferedImage dest = new BufferedImage(finalW, finalH, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2 = dest.createGraphics();
-
-        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-        g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g2.setRenderingHint(RenderingHints.KEY_ALPHA_INTERPOLATION, RenderingHints.VALUE_ALPHA_INTERPOLATION_QUALITY);
-
-        g2.drawImage(src, 0, 0, finalW, finalH, null);
-        g2.dispose();
-
-        JLabel label = new JLabel(new ImageIcon(dest));
-        label.setPreferredSize(new Dimension(finalW, finalH));
-        label.setMaximumSize(new Dimension(finalW, finalH));
-        return label;
     }
 
     private static Component vSpace(int px)

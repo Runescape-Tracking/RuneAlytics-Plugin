@@ -1,6 +1,7 @@
 package com.runealytics;
 
 import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.util.ImageUtil;
 
 import javax.swing.*;
 import javax.swing.border.Border;
@@ -8,6 +9,7 @@ import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
 import java.awt.*;
+import java.awt.image.BufferedImage;
 
 public final class RuneAlyticsUi
 {
@@ -290,6 +292,98 @@ public final class RuneAlyticsUi
         card.add(scroll);
 
         return card;
+    }
+
+    // ---------- PANEL HEADER ----------
+
+    private static final Color HEADER_TEAL = new Color(82, 196, 196);
+    private static final Color HEADER_DIM  = new Color(190, 190, 190);
+
+    /**
+     * Shared branding header used at the top of every panel tab.
+     * Layout (centered):
+     *   [RuneAlytics logo — 42 px wide]
+     *   KNOW MORE. PLAY SMARTER.
+     *   {tabName}
+     */
+    public static JPanel buildPanelHeader(String tabName)
+    {
+        JPanel outer = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        outer.setOpaque(false);
+        outer.setAlignmentX(Component.LEFT_ALIGNMENT);
+        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 120));
+
+        JPanel inner = new JPanel();
+        inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
+        inner.setOpaque(false);
+
+        // Logo — prefer full logo, fall back to icon
+        BufferedImage img = tryLoadHeaderImage("/runealytics_logo.png");
+        if (img == null) img = tryLoadHeaderImage("/runealytics_icon.png");
+
+        if (img != null)
+        {
+            JLabel logoLbl = scaledImageLabel(img, 42);
+            logoLbl.setAlignmentX(Component.CENTER_ALIGNMENT);
+            inner.add(logoLbl);
+            inner.add(vSpace(5));
+        }
+
+        JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
+        tagline.setFont(cf(Font.BOLD, 10f));
+        tagline.setForeground(HEADER_TEAL);
+        tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
+        inner.add(tagline);
+
+        inner.add(vSpace(2));
+
+        JLabel tabLbl = new JLabel(tabName, SwingConstants.CENTER);
+        tabLbl.setFont(cf(Font.PLAIN, 11f));
+        tabLbl.setForeground(HEADER_DIM);
+        tabLbl.setAlignmentX(Component.CENTER_ALIGNMENT);
+        inner.add(tabLbl);
+
+        outer.add(inner);
+        return outer;
+    }
+
+    private static BufferedImage tryLoadHeaderImage(String resource)
+    {
+        try
+        {
+            return ImageUtil.loadImageResource(RuneAlyticsUi.class, resource);
+        }
+        catch (Exception ignored)
+        {
+            return null;
+        }
+    }
+
+    private static JLabel scaledImageLabel(BufferedImage src, int targetW)
+    {
+        int finalW = Math.min(targetW, src.getWidth());
+        int finalH = Math.max(1, (int) Math.round(src.getHeight() * (finalW / (double) src.getWidth())));
+
+        if (finalW == src.getWidth())
+        {
+            JLabel lbl = new JLabel(new ImageIcon(src));
+            lbl.setPreferredSize(new Dimension(src.getWidth(), src.getHeight()));
+            lbl.setMaximumSize(new Dimension(src.getWidth(), src.getHeight()));
+            return lbl;
+        }
+
+        BufferedImage dest = new BufferedImage(finalW, finalH, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = dest.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g2.setRenderingHint(RenderingHints.KEY_RENDERING,     RenderingHints.VALUE_RENDER_QUALITY);
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,  RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.drawImage(src, 0, 0, finalW, finalH, null);
+        g2.dispose();
+
+        JLabel lbl = new JLabel(new ImageIcon(dest));
+        lbl.setPreferredSize(new Dimension(finalW, finalH));
+        lbl.setMaximumSize(new Dimension(finalW, finalH));
+        return lbl;
     }
 
     // ---------- SPACERS ----------

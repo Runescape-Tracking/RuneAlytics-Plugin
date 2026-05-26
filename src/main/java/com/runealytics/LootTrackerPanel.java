@@ -176,6 +176,17 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         header.setBackground(new Color(28, 28, 28));
         header.setBorder(new EmptyBorder(8, 8, 8, 8));
 
+        // ── Shared branding header ────────────────────────────────────────────
+        header.add(RuneAlyticsUi.buildPanelHeader("Loot Tracker"));
+        header.add(Box.createVerticalStrut(8));
+
+        JSeparator topSep = new JSeparator();
+        topSep.setForeground(new Color(55, 55, 55));
+        topSep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        topSep.setAlignmentX(Component.LEFT_ALIGNMENT);
+        header.add(topSep);
+        header.add(Box.createVerticalStrut(8));
+
         // ── Stats row ────────────────────────────────────────────────────────
         JPanel statsRow = new JPanel(new BorderLayout(8, 0));
         statsRow.setOpaque(false);
