@@ -1,6 +1,7 @@
 package com.runealytics;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import com.google.inject.Provides;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -18,6 +19,7 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
 import okhttp3.OkHttpClient;
 
@@ -134,6 +136,9 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private XpTrackerManager         xpTrackerManager;
     @Inject private RunealyticsApiClient     apiClient;
     @Inject private BankDataManager          bankDataManager;
+    @Inject private MatchmakingManager       matchmakingManager;
+    @Inject private MatchmakingMinimapOverlay matchmakingOverlay;
+    @Inject private OverlayManager           overlayManager;
 
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
@@ -370,6 +375,8 @@ public class RuneAlyticsPlugin extends Plugin
         // the executor shuts down, so the player's last session gains are not lost.
         try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.warn("XP flush on shutdown failed: {}", e.getMessage()); }
         try { lootManager.shutdown();             } catch (Exception e) { log.warn("Loot manager shutdown failed: {}", e.getMessage()); }
+        try { matchmakingManager.reset();         } catch (Exception e) { log.warn("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
+        try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.warn("Matchmaking overlay removal failed: {}", e.getMessage()); }
 
         // Always attempt to remove the nav button — even if some other code
         // path nulled the reference, leaving an orphan would mean the next
@@ -490,9 +497,16 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onActorDeath(ActorDeath event)
     {
+        Actor actor = event.getActor();
+
+        // ── Matchmaking: report player deaths to server ───────────────────────
+        if (actor instanceof Player)
+        {
+            matchmakingManager.onActorDeath((Player) actor);
+        }
+
         if (!config.enableLootTracking()) return;
 
-        Actor actor = event.getActor();
         if (!(actor instanceof NPC)) return;
 
         NPC npc = (NPC) actor;
@@ -627,20 +641,29 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onItemContainerChanged(ItemContainerChanged event)
     {
+        // ── Matchmaking: refresh gear snapshot and report on change ──────────
+        // Runs on the client thread, so ItemContainer reads inside the manager
+        // are safe.  The manager only acts if a match is active.
+        matchmakingManager.onItemContainerChanged(event);
+
         // ── Bank sync ─────────────────────────────────────────────────────────
         if (event.getContainerId() == InventoryID.BANK.getId()
                 && config.enableBankSync()
                 && state.isLoggedIn()
                 && state.isVerified())
         {
-            final String token    = state.getVerificationCode();
-            final String username = state.getVerifiedUsername();
-            executorService.execute(() ->
-                    bankDataManager.syncBankData(
-                            token, username,
-                            event.getItemContainer(),
-                            client.getItemContainer(InventoryID.INVENTORY),
-                            client.getItemContainer(InventoryID.EQUIPMENT)));
+            final String token          = state.getVerificationCode();
+            final String username       = state.getVerifiedUsername();
+            // Build the complete JSON snapshot HERE on the client thread because
+            // fromContainerWithValues calls ItemManager.getItemComposition which
+            // requires client.getItemDefinition — a client-thread-only API.
+            // Only the HTTP call is handed off to the background executor.
+            final JsonObject bankSnapshot = bankDataManager.buildBankSnapshot(
+                    username,
+                    event.getItemContainer(),
+                    client.getItemContainer(InventoryID.INVENTORY),
+                    client.getItemContainer(InventoryID.EQUIPMENT));
+            executorService.execute(() -> bankDataManager.syncBankData(token, username, bankSnapshot));
             return;
         }
 
@@ -1064,6 +1087,11 @@ public class RuneAlyticsPlugin extends Plugin
     {
         gameTickCount++;
 
+        // ── Matchmaking polling / automation ─────────────────────────────────
+        // Runs on the client thread, so inventory/gear reads inside the manager
+        // are safe (no AssertionError from ItemContainer access off-thread).
+        matchmakingManager.onGameTick();
+
         // ── Flush zero-loot kills ──────────────────────────────────────────────
         // ActorDeath entries that aged out without a cancelling
         // NpcLootReceived are promoted to zero-loot kills here.
@@ -1150,6 +1178,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGIN_SCREEN)
         {
             state.setLoggedIn(false);
+            matchmakingManager.reset(); // clear any active match on logout
             if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(false);
             SwingUtilities.invokeLater(() -> {
                 mainPanel.showLoggedOutState();
@@ -1164,16 +1193,27 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGGED_IN)
         {
             state.setLoggedIn(true);
-            // Refresh verification + settings + matchmaking panels so UI enables on login
+
+            // Resolve the player's RSN.  getLocalPlayer() can briefly return null
+            // during the early LOGGED_IN transition (before the character fully
+            // spawns), so fall back to the stored verified username so we never
+            // bail out and leave tabs in their logged-out (hidden) state.
+            String username = client.getLocalPlayer() != null
+                    ? client.getLocalPlayer().getName()
+                    : null;
+            if ((username == null || username.isEmpty()) && state.getVerifiedUsername() != null)
+            {
+                username = state.getVerifiedUsername();
+            }
+
+            // Refresh all sidebar panels that show login-state-dependent controls.
+            // MatchmakingPanel is included here so its input/button enable correctly
+            // as soon as the player is recognised as logged-in + verified.
             SwingUtilities.invokeLater(() -> {
                 injector.getInstance(RuneAlyticsVerificationPanel.class).refreshLoginState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
                 injector.getInstance(MatchmakingPanel.class).refreshLoginState();
             });
-
-            String username = client.getLocalPlayer() != null
-                    ? client.getLocalPlayer().getName()
-                    : null;
 
             if (username == null || username.isEmpty()) return;
 
@@ -1196,6 +1236,7 @@ public class RuneAlyticsPlugin extends Plugin
             });
         }
     }
+
 
     private void handlePostLogin()
     {
