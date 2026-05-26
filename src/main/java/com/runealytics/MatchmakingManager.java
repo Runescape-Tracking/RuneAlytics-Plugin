@@ -2,10 +2,13 @@ package com.runealytics;
 
 import com.google.gson.JsonArray;
 import net.runelite.api.Client;
+import net.runelite.api.HeadIcon;
 import net.runelite.api.InventoryID;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.client.game.ItemManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,39 +24,93 @@ public class MatchmakingManager
     private static final Logger log = LoggerFactory.getLogger(MatchmakingManager.class);
 
     private static final int POLL_INTERVAL_TICKS = 2;
-    private static final int RALLY_DISTANCE = 15;
 
-    private final Client client;
-    private final RuneAlyticsState runeAlyticsState;
-    private final MatchmakingApiClient apiClient;
+    /** Ticks to wait after a failed accept/begin call before retrying. */
+    private static final int RETRY_BACKOFF_TICKS = 5;
+    private static final int RALLY_DISTANCE      = 15;
+
+    private final Client                   client;
+    private final RuneAlyticsState         runeAlyticsState;
+    private final MatchmakingApiClient     apiClient;
     private final ScheduledExecutorService executorService;
+    private final ItemManager              itemManager;
 
-    private MatchmakingSession session;
+    private MatchmakingSession       session;
     private MatchmakingUpdateListener listener;
 
-    private int tickCounter;
+    private int     tickCounter;
     private boolean requestInFlight;
+    private boolean acceptInFlight;
     private boolean beginInFlight;
+
+    /** Tick number when the next accept/begin retry is allowed (back-off). */
+    private int     acceptCooldownUntilTick;
+    private int     beginCooldownUntilTick;
     private boolean reportInFlight;
     private boolean itemsReportInFlight;
     private boolean resultReported;
     private boolean itemsReported;
     private WorldPoint lastRallyPoint;
-    private String lastHintPlayerName;
+    private String     lastHintPlayerName;
+
+    /**
+     * Current enriched inventory snapshot — updated on every game tick and on
+     * every {@link ItemContainerChanged} event so the server always receives
+     * up-to-date item data for risk/gear validation.
+     *
+     * <p>Uses {@code ge_per}/{@code total} values so the server can compute
+     * the player's total risk without its own price lookup.</p>
+     */
+    private JsonArray currentInventorySnapshot;
+
+    /**
+     * Current enriched equipment snapshot — includes {@code slot}, {@code id},
+     * {@code qty}, {@code ge_per}, {@code total}.  The {@code slot} field lets
+     * the server identify the weapon slot (3) for gear-rule validation.
+     */
+    private JsonArray currentGearSnapshot;
+
+    /**
+     * Ordinal of the local player's active overhead prayer (HeadIcon.ordinal())
+     * or {@code -1} if no overhead is active.  Sent to the server so it can
+     * enforce "No Overheads" rules in real-time without any rule logic in the
+     * plugin.
+     */
+    private int currentOverheadIconOrdinal = -1;
+
+    /**
+     * Whether the local player currently has a skull icon (is skulled).
+     * Sent to the server so it can calculate effective risk for unskulled
+     * players who would keep their 3 most valuable items on death.
+     */
+    private boolean currentIsSkulled;
+
+    /**
+     * Set to {@code true} on {@link ItemContainerChanged} while in a Fighting
+     * match, so {@link #reportItemsIfNeeded()} sends a fresh snapshot to
+     * {@code /report-items} on the next tick.
+     */
+    private boolean gearChangedDuringFight;
 
     @Inject
     public MatchmakingManager(
-            Client client,
-            RuneAlyticsState runeAlyticsState,
-            MatchmakingApiClient apiClient,
-            ScheduledExecutorService executorService
+            Client                   client,
+            RuneAlyticsState         runeAlyticsState,
+            MatchmakingApiClient     apiClient,
+            ScheduledExecutorService executorService,
+            ItemManager              itemManager
     )
     {
-        this.client = client;
+        this.client           = client;
         this.runeAlyticsState = runeAlyticsState;
-        this.apiClient = apiClient;
-        this.executorService = executorService;
+        this.apiClient        = apiClient;
+        this.executorService  = executorService;
+        this.itemManager      = itemManager;
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Public API
+    // ─────────────────────────────────────────────────────────────────────────
 
     public void setListener(MatchmakingUpdateListener listener)
     {
@@ -72,33 +129,35 @@ public class MatchmakingManager
 
     public void loadMatch(String matchCode)
     {
-        if (requestInFlight)
-        {
-            return;
-        }
+        if (requestInFlight) return;
 
         reset();
 
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
         if (verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
         {
             notifyListener(new MatchmakingUpdate(null,
                     "Missing verification or RSN. Please re-verify your account.",
-                    "",
-                    false,
-                    false));
+                    "", false, false));
             return;
         }
 
         requestInFlight = true;
 
+        // Snapshot captured before kicking off the load so the server gets
+        // an immediate validation result even on the first response.
+        final JsonArray inv      = currentInventorySnapshot;
+        final JsonArray gear     = currentGearSnapshot;
+        final int       overhead = currentOverheadIconOrdinal;
+        final boolean   skulled  = currentIsSkulled;
+
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.getMatch(verificationCode, matchCode, rsn);
+                result = apiClient.getMatch(verificationCode, matchCode, rsn, inv, gear, overhead, skulled);
             }
             catch (IOException ex)
             {
@@ -110,7 +169,6 @@ public class MatchmakingManager
             if (result.isSuccess() && result.getSession() != null)
             {
                 session = result.getSession();
-                attemptAcceptMatchIfNeeded();
                 updateResultStatus();
             }
 
@@ -118,8 +176,24 @@ public class MatchmakingManager
         });
     }
 
+    /**
+     * Must be called on the <em>client thread</em> every game tick so that
+     * all {@link ItemContainer} reads happen safely.
+     */
     public void onGameTick()
     {
+        // Refresh entire player state (inventory, gear, overhead, skull) on the
+        // client thread so every outbound call carries current data.
+        // Safe even when there is no active match.
+        refreshPlayerState();
+
+        // Always update the hint arrow regardless of in-flight state so the
+        // arrow is never stale while waiting for a network response to return.
+        if (session != null)
+        {
+            updateHintArrow();
+        }
+
         if (session == null || requestInFlight)
         {
             return;
@@ -127,8 +201,13 @@ public class MatchmakingManager
 
         tickCounter++;
 
-        updateHintArrow();
+        // ── Accept: done on first tick where snapshot is ready ────────────────
+        if (!session.isLocalJoined())
+        {
+            attemptAcceptMatchIfNeeded();
+        }
 
+        // ── Poll every 2 ticks — includes latest gear for continuous validation
         if (tickCounter % POLL_INTERVAL_TICKS == 0)
         {
             pollMatch();
@@ -138,93 +217,116 @@ public class MatchmakingManager
         reportItemsIfNeeded();
     }
 
-    public void reset()
+    /**
+     * Called from the plugin's {@code onItemContainerChanged} handler.
+     * Updates the local snapshot immediately so the next poll carries
+     * the freshest data.  Also flags that gear changed during a fight,
+     * which triggers a dedicated {@code /report-items} call.
+     */
+    public void onItemContainerChanged(ItemContainerChanged event)
     {
-        session = null;
-        tickCounter = 0;
-        requestInFlight = false;
-        beginInFlight = false;
-        reportInFlight = false;
-        itemsReportInFlight = false;
-        resultReported = false;
-        itemsReported = false;
-        clearHintArrow();
+        int containerId = event.getContainerId();
+        if (containerId != InventoryID.INVENTORY.getId()
+                && containerId != InventoryID.EQUIPMENT.getId())
+        {
+            return;
+        }
+
+        // Player state is rebuilt on each tick anyway; calling it here ensures
+        // the next poll fired off-thread has the latest inventory/gear/status.
+        refreshPlayerState();
+
+        // Mark gear as changed during a fight so /report-items fires again
+        if (session != null && session.getStatus() != null
+                && session.getStatus().equalsIgnoreCase("Fighting"))
+        {
+            gearChangedDuringFight = true;
+            // Reset itemsReported so the next reportItemsIfNeeded() call fires
+            itemsReported = false;
+        }
     }
 
-    public void forfeitMatch()
+    public void reset()
     {
-        if (session == null || reportInFlight || resultReported)
-        {
-            return;
-        }
-
-        String localRsn = resolveLocalRsn();
-        if (localRsn == null || localRsn.isEmpty())
-        {
-            return;
-        }
-
-        String token = session.getLocalToken();
-        String verificationCode = resolveVerificationCode();
-
-        if (token == null || token.isEmpty() || verificationCode == null || verificationCode.isEmpty())
-        {
-            return;
-        }
-
-        reportInFlight = true;
-        final String deathName = localRsn;
-
-        executorService.submit(() -> {
-            MatchmakingApiResult result;
-            try
-            {
-                result = apiClient.reportMatch(verificationCode, session.getMatchCode(), localRsn, token, deathName);
-            }
-            catch (IOException ex)
-            {
-                result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
-            }
-
-            handleResult(result);
-
-            if (result.isSuccess() && result.getSession() != null)
-            {
-                session = result.getSession();
-                updateResultStatus();
-            }
-
-            reportInFlight = false;
-        });
+        session                  = null;
+        tickCounter              = 0;
+        requestInFlight          = false;
+        acceptInFlight           = false;
+        beginInFlight            = false;
+        reportInFlight           = false;
+        itemsReportInFlight      = false;
+        resultReported           = false;
+        itemsReported            = false;
+        gearChangedDuringFight   = false;
+        acceptCooldownUntilTick  = 0;
+        beginCooldownUntilTick   = 0;
+        // Keep snapshots — they reflect the player's current state and are
+        // valid across match resets (e.g. New Match).
+        clearHintArrow();
     }
 
     public void onActorDeath(Player player)
     {
-        if (session == null || reportInFlight || resultReported)
+        if (session == null)
         {
+            log.debug("[death] ignored — no active match session");
             return;
         }
-
+        if (reportInFlight)
+        {
+            log.debug("[death] ignored — reportInFlight=true (duplicate/race)");
+            return;
+        }
+        if (resultReported)
+        {
+            log.debug("[death] ignored — resultReported=true (already completed)");
+            return;
+        }
         if (player == null || player.getName() == null)
         {
+            log.debug("[death] ignored — null player/name");
             return;
         }
 
-        String deathName = player.getName();
-        if (!deathName.equalsIgnoreCase(session.getPlayer1Username())
-                && !deathName.equalsIgnoreCase(session.getPlayer2Username()))
+        // RuneLite's Actor.getName() returns names with a non-breaking space
+        // (U+00A0); OSRS profiles often store regular space or underscore.
+        // Normalize ALL three to plain spaces before comparison so the death
+        // is correctly attributed to the right participant.
+        String deathName = normalizeRsn(player.getName());
+        String p1Name    = normalizeRsn(session.getPlayer1Username());
+        String p2Name    = normalizeRsn(session.getPlayer2Username());
+
+        if (!deathName.equalsIgnoreCase(p1Name) && !deathName.equalsIgnoreCase(p2Name))
         {
+            log.debug("[death] ignored — '{}' is not a match participant (p1='{}' p2='{}')",
+                    deathName, p1Name, p2Name);
             return;
         }
 
-        String token = session.getLocalToken();
+        String token            = session.getLocalToken();
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (token == null || token.isEmpty() || verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        if (token == null || token.isEmpty())
         {
+            log.warn("[death] skipping — local auth token is null/empty");
             return;
         }
+        if (verificationCode == null || verificationCode.isEmpty())
+        {
+            log.warn("[death] skipping — verification code is null/empty");
+            return;
+        }
+        if (rsn == null || rsn.isEmpty())
+        {
+            log.warn("[death] skipping — local RSN is null/empty");
+            return;
+        }
+
+        final String reportedDeath = deathName; // already normalized above
+
+        log.info("[death] reporting death of '{}' (match={} status={})",
+                reportedDeath, session.getMatchCode(), session.getStatus());
 
         reportInFlight = true;
 
@@ -232,10 +334,11 @@ public class MatchmakingManager
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.reportMatch(verificationCode, session.getMatchCode(), rsn, token, deathName);
+                result = apiClient.reportMatch(verificationCode, session.getMatchCode(), rsn, token, reportedDeath);
             }
             catch (IOException ex)
             {
+                log.error("[death] reportMatch IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
@@ -243,6 +346,7 @@ public class MatchmakingManager
 
             if (result.isSuccess() && result.getSession() != null)
             {
+                log.info("[death] match reported — new status: {}", result.getSession().getStatus());
                 session = result.getSession();
                 updateResultStatus();
             }
@@ -250,35 +354,86 @@ public class MatchmakingManager
             {
                 refreshToken();
             }
+            else
+            {
+                log.warn("[death] reportMatch failed — success={} msg='{}' body={}",
+                        result.isSuccess(), result.getMessage(),
+                        result.getRawResponse().length() > 200
+                                ? result.getRawResponse().substring(0, 200)
+                                : result.getRawResponse());
+            }
 
             reportInFlight = false;
         });
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Private: snapshot management
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Rebuilds {@link #currentInventorySnapshot} and {@link #currentGearSnapshot}
+     * from the live {@link ItemContainer}s.  Must be called on the client thread.
+     *
+     * <p>The inventory includes {@code ge_per}/{@code total} for risk validation.
+     * The equipment includes {@code slot} (weapon = 3) and {@code ge_per}/{@code total}
+     * for gear-rule validation, both computed via {@link ItemValueResolver}.</p>
+     */
+    private void refreshPlayerState()
+    {
+        ItemContainer inv   = client.getItemContainer(InventoryID.INVENTORY);
+        ItemContainer equip = client.getItemContainer(InventoryID.EQUIPMENT);
+
+        currentInventorySnapshot = RuneAlyticsItemJson.fromContainerWithValues(inv,   itemManager);
+        currentGearSnapshot      = RuneAlyticsItemJson.fromEquipmentWithValues(equip, itemManager);
+
+        // Overhead prayer and skull status — captured here (client thread) so
+        // every outbound API call can include them for server-side validation.
+        Player local = client.getLocalPlayer();
+        if (local != null)
+        {
+            HeadIcon overhead         = local.getOverheadIcon();
+            currentOverheadIconOrdinal = (overhead != null) ? overhead.ordinal() : -1;
+            currentIsSkulled           = local.getSkullIcon() >= 0;
+        }
+        else
+        {
+            currentOverheadIconOrdinal = -1;
+            currentIsSkulled           = false;
+        }
+    }
+
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Private: polling + state changes
+    // ─────────────────────────────────────────────────────────────────────────
+
     private void pollMatch()
     {
-        if (requestInFlight)
-        {
-            return;
-        }
+        if (requestInFlight) return;
 
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        if (verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty())
         {
             return;
         }
 
         requestInFlight = true;
 
-        String matchCode = session.getMatchCode();
+        String    matchCode = session.getMatchCode();
+        JsonArray inv       = currentInventorySnapshot;
+        JsonArray gear      = currentGearSnapshot;
+        int       overhead  = currentOverheadIconOrdinal;
+        boolean   skulled   = currentIsSkulled;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.getMatch(verificationCode, matchCode, rsn);
+                result = apiClient.getMatch(verificationCode, matchCode, rsn, inv, gear, overhead, skulled);
             }
             catch (IOException ex)
             {
@@ -290,7 +445,6 @@ public class MatchmakingManager
             if (result.isSuccess() && result.getSession() != null)
             {
                 session = result.getSession();
-                attemptAcceptMatchIfNeeded();
                 updateResultStatus();
             }
 
@@ -300,33 +454,44 @@ public class MatchmakingManager
 
     private void attemptAcceptMatchIfNeeded()
     {
-        if (session == null || session.isLocalJoined())
-        {
-            return;
-        }
+        if (session == null || session.isLocalJoined() || acceptInFlight) return;
 
-        String token = session.getLocalToken();
-        if (token == null || token.isEmpty())
-        {
-            return;
-        }
+        // Honour back-off after a previous failure so we don't slam the server
+        // with one request per tick.  The flag is cleared after the response,
+        // and the natural short-circuit (isLocalJoined()) prevents spam after
+        // success — but we still need this for repeated 4xx/5xx scenarios.
+        if (tickCounter < acceptCooldownUntilTick) return;
+
+        String token            = session.getLocalToken();
+        if (token == null || token.isEmpty()) return;
 
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        if (verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty())
         {
             return;
         }
+
+        final JsonArray inventory = currentInventorySnapshot != null ? currentInventorySnapshot : new JsonArray();
+        final JsonArray gear      = currentGearSnapshot      != null ? currentGearSnapshot      : new JsonArray();
+        final int       overhead  = currentOverheadIconOrdinal;
+        final boolean   skulled   = currentIsSkulled;
+
+        acceptInFlight = true;
+        log.debug("[accept] sending — status={} rsn={}", session.getStatus(), rsn);
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.acceptMatch(verificationCode, session.getMatchCode(), rsn, token);
+                result = apiClient.acceptMatch(
+                        verificationCode, session.getMatchCode(), rsn, token, inventory, gear, overhead, skulled);
             }
             catch (IOException ex)
             {
+                log.warn("[accept] IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
@@ -334,18 +499,32 @@ public class MatchmakingManager
 
             if (result.isSuccess() && result.getSession() != null)
             {
+                log.info("[accept] success — status now {}", result.getSession().getStatus());
                 session = result.getSession();
                 updateResultStatus();
             }
+            else
+            {
+                // ALWAYS schedule a retry on failure so a transient error
+                // (422, 5xx, network drop) doesn't permanently latch the
+                // match in "Pending".  Without this back-off + clear, the
+                // first 422 would freeze the state machine forever.
+                String body = result.getRawResponse();
+                log.warn("[accept] failed — success={} tokenRefresh={} msg='{}' body={}",
+                        result.isSuccess(), result.isTokenRefresh(), result.getMessage(),
+                        body.length() > 200 ? body.substring(0, 200) : body);
+                acceptCooldownUntilTick = tickCounter + RETRY_BACKOFF_TICKS;
+            }
+
+            // ALWAYS clear the flag — the natural !isLocalJoined() guard
+            // (updated by the next poll) handles the success-no-retry case.
+            acceptInFlight = false;
         });
     }
 
     private void attemptBeginMatchIfNeeded()
     {
-        if (session == null || beginInFlight || session.isLocalReadyToFight())
-        {
-            return;
-        }
+        if (session == null || beginInFlight || session.isLocalReadyToFight()) return;
 
         if (session.getStatus().equalsIgnoreCase("Fighting")
                 || session.getStatus().equalsIgnoreCase("Completed")
@@ -354,59 +533,73 @@ public class MatchmakingManager
             return;
         }
 
+        // We can only ready-up after BOTH players have joined and the server
+        // has unlocked the match (status=Ready, rally generated).  Bailing
+        // earlier just spams 4xx responses.
+        if (!session.isLocalJoined()) return;
+        if (!session.getStatus().equalsIgnoreCase("Ready"))
+        {
+            // Still Pending → opponent hasn't accepted yet; wait for the next
+            // poll to flip status to Ready.
+            return;
+        }
+
+        if (tickCounter < beginCooldownUntilTick) return;
+
+        // Original behaviour required the player to be physically at the rally
+        // point OR already engaged with the opponent.  That gating was too
+        // restrictive — if neither check ever returned true (rally tolerance
+        // off, opponent not rendered yet, etc.) the status would stay Ready
+        // forever.  Now: once status=Ready and the local player has joined,
+        // we always send /begin-match.  The proximity check is still used as
+        // a hint but never blocks the call.
         Player localPlayer = client.getLocalPlayer();
-        if (localPlayer == null)
+        Player opponent    = (localPlayer != null)
+                ? findPlayerByName(session.getOpponentRsn()) : null;
+        boolean rallyOrEngaged = false;
+        if (localPlayer != null && opponent != null)
         {
-            return;
+            if (session.getRally() != null)
+            {
+                WorldPoint rallyPoint = new WorldPoint(
+                        session.getRally().getX(),
+                        session.getRally().getY(),
+                        session.getRally().getPlane());
+                rallyOrEngaged = isWithinRally(localPlayer, opponent, rallyPoint);
+            }
+            if (!rallyOrEngaged) rallyOrEngaged = isPlayerEngaged(localPlayer, opponent);
         }
 
-        String opponentRsn = session.getOpponentRsn();
-        Player opponent = findPlayerByName(opponentRsn);
-        if (opponent == null)
-        {
-            return;
-        }
-
-        boolean shouldBegin = false;
-        if (session.getRally() != null)
-        {
-            WorldPoint rallyPoint = new WorldPoint(
-                    session.getRally().getX(),
-                    session.getRally().getY(),
-                    session.getRally().getPlane()
-            );
-            shouldBegin = isWithinRally(localPlayer, opponent, rallyPoint);
-        }
-
-        if (!shouldBegin)
-        {
-            shouldBegin = isPlayerEngaged(localPlayer, opponent);
-        }
-
-        if (!shouldBegin)
-        {
-            return;
-        }
-
-        String token = session.getLocalToken();
+        String token            = session.getLocalToken();
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (token == null || token.isEmpty() || verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        if (token == null || token.isEmpty()
+                || verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty())
         {
             return;
         }
 
         beginInFlight = true;
+        log.debug("[begin-match] sending — rallyOrEngaged={} status={}",
+                rallyOrEngaged, session.getStatus());
+
+        final JsonArray inv      = currentInventorySnapshot;
+        final JsonArray gear     = currentGearSnapshot;
+        final int       overhead = currentOverheadIconOrdinal;
+        final boolean   skulled  = currentIsSkulled;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.beginMatch(verificationCode, session.getMatchCode(), rsn, token);
+                result = apiClient.beginMatch(
+                        verificationCode, session.getMatchCode(), rsn, token, inv, gear, overhead, skulled);
             }
             catch (IOException ex)
             {
+                log.warn("[begin-match] IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
@@ -414,70 +607,81 @@ public class MatchmakingManager
 
             if (result.isSuccess() && result.getSession() != null)
             {
+                log.info("[begin-match] success — status now {}", result.getSession().getStatus());
                 session = result.getSession();
                 updateResultStatus();
+            }
+            else
+            {
+                // Back-off so a transient failure doesn't latch the state.
+                String body = result.getRawResponse();
+                log.warn("[begin-match] failed — msg='{}' body={}",
+                        result.getMessage(),
+                        body.length() > 200 ? body.substring(0, 200) : body);
+                beginCooldownUntilTick = tickCounter + RETRY_BACKOFF_TICKS;
             }
 
             beginInFlight = false;
         });
     }
 
+    /**
+     * Sends the current gear snapshot to {@code /report-items}.
+     *
+     * <p>Fires when the match transitions to "Fighting" AND whenever the
+     * player's inventory or equipment changes mid-fight (detected via
+     * {@link #onItemContainerChanged}).</p>
+     */
     private void reportItemsIfNeeded()
     {
-        if (session == null || itemsReportInFlight || itemsReported)
-        {
-            return;
-        }
+        if (session == null || itemsReportInFlight || itemsReported) return;
 
-        if (!session.getStatus().equalsIgnoreCase("Fighting"))
-        {
-            return;
-        }
+        if (!session.getStatus().equalsIgnoreCase("Fighting")) return;
 
-        String token = session.getLocalToken();
+        String token            = session.getLocalToken();
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (token == null || token.isEmpty() || verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty())
+        if (token == null || token.isEmpty()
+                || verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty())
         {
             return;
         }
 
-        ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
-        ItemContainer gear      = client.getItemContainer(InventoryID.EQUIPMENT);
+        final JsonArray inventoryItems = currentInventorySnapshot != null
+                ? currentInventorySnapshot : new JsonArray();
+        final JsonArray gearItems      = currentGearSnapshot != null
+                ? currentGearSnapshot : new JsonArray();
+        final int     overhead = currentOverheadIconOrdinal;
+        final boolean skulled  = currentIsSkulled;
 
-        JsonArray inventoryItems = RuneAlyticsItemJson.fromContainer(inventory);
-        JsonArray gearItems      = RuneAlyticsItemJson.fromContainer(gear);
-
-        itemsReportInFlight = true;
+        itemsReportInFlight    = true;
+        gearChangedDuringFight = false;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
                 result = apiClient.reportItems(
-                        verificationCode,
-                        session.getMatchCode(),
-                        rsn,
-                        token,
-                        inventoryItems,
-                        gearItems
-                );
+                        verificationCode, session.getMatchCode(), rsn,
+                        token, inventoryItems, gearItems, overhead, skulled);
             }
             catch (IOException ex)
             {
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
-            handleResult(result);
+            handleResult(result);  // handles token refresh internally
 
             if (result.isSuccess())
             {
                 itemsReported = true;
-            }
-            else if (result.isTokenRefresh())
-            {
-                refreshToken();
+                if (result.getSession() != null)
+                {
+                    session = result.getSession();
+                    updateResultStatus();
+                }
             }
 
             itemsReportInFlight = false;
@@ -487,18 +691,24 @@ public class MatchmakingManager
     private void refreshToken()
     {
         String verificationCode = resolveVerificationCode();
-        String rsn = resolveLocalRsn();
+        String rsn              = resolveLocalRsn();
 
-        if (verificationCode == null || verificationCode.isEmpty() || rsn == null || rsn.isEmpty() || session == null)
+        if (verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty() || session == null)
         {
             return;
         }
+
+        final JsonArray inv      = currentInventorySnapshot;
+        final JsonArray gear     = currentGearSnapshot;
+        final int       overhead = currentOverheadIconOrdinal;
+        final boolean   skulled  = currentIsSkulled;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.getMatch(verificationCode, session.getMatchCode(), rsn);
+                result = apiClient.getMatch(verificationCode, session.getMatchCode(), rsn, inv, gear, overhead, skulled);
             }
             catch (IOException ex)
             {
@@ -515,13 +725,13 @@ public class MatchmakingManager
         });
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Private: state + UI helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
     private void updateResultStatus()
     {
-        if (session == null)
-        {
-            return;
-        }
-
+        if (session == null) return;
         if (session.getStatus().equalsIgnoreCase("Completed")
                 || session.getStatus().equalsIgnoreCase("Canceled"))
         {
@@ -529,52 +739,51 @@ public class MatchmakingManager
         }
     }
 
+    /**
+     * Manages the in-world hint arrow.  Behaviour:
+     *
+     * <ul>
+     *   <li>No session or match Completed/Canceled → arrow cleared.</li>
+     *   <li>Opponent is rendered (Pending, Ready, or Fighting) → arrow tracks
+     *       the opponent player so the local player can see exactly where the
+     *       other RuneLite client is in the world.</li>
+     *   <li>Opponent is NOT rendered (still travelling, in a different region)
+     *       and the server has issued a rally point → arrow falls back to the
+     *       rally tile so the player has somewhere to head toward.</li>
+     *   <li>Neither available → arrow cleared.</li>
+     * </ul>
+     *
+     * The cached {@code lastHintPlayerName} / {@code lastRallyPoint} avoids
+     * spamming {@code setHintArrow} every game tick.
+     */
     private void updateHintArrow()
     {
-        if (session == null)
-        {
-            clearHintArrow();
-            return;
-        }
+        if (session == null)              { clearHintArrow(); return; }
+        if (isMatchCompletedOrCanceled()) { clearHintArrow(); return; }
 
-        if (isMatchCompletedOrCanceled())
+        // ── 1. Always prefer the opponent in Pending, Ready, and Fighting ────
+        Player opponent = findPlayerByName(session.getOpponentRsn());
+        if (opponent != null)
         {
-            clearHintArrow();
-            return;
-        }
-
-        if (isMatchFighting())
-        {
-            Player opponent = findPlayerByName(session.getOpponentRsn());
-            if (opponent == null)
-            {
-                clearHintArrow();
-                return;
-            }
-
-            String opponentName = opponent.getName();
-            if (opponentName != null && !opponentName.equalsIgnoreCase(lastHintPlayerName))
+            String name = normalizeRsn(opponent.getName());
+            if (!name.equalsIgnoreCase(lastHintPlayerName))
             {
                 client.setHintArrow(opponent);
-                lastHintPlayerName = opponentName;
-                lastRallyPoint = null;
+                lastHintPlayerName = name;
+                lastRallyPoint     = null;
             }
             return;
         }
 
+        // ── 2. Opponent not in render distance — fall back to the rally tile ─
         MatchmakingRally rally = session.getRally();
-        if (rally == null)
-        {
-            clearHintArrow();
-            return;
-        }
+        if (rally == null) { clearHintArrow(); return; }
 
         WorldPoint rallyPoint = new WorldPoint(rally.getX(), rally.getY(), rally.getPlane());
-
         if (!rallyPoint.equals(lastRallyPoint) || lastHintPlayerName != null)
         {
             client.setHintArrow(rallyPoint);
-            lastRallyPoint = rallyPoint;
+            lastRallyPoint     = rallyPoint;
             lastHintPlayerName = null;
         }
     }
@@ -584,33 +793,23 @@ public class MatchmakingManager
         if (lastRallyPoint != null || lastHintPlayerName != null)
         {
             client.clearHintArrow();
-            lastRallyPoint = null;
+            lastRallyPoint     = null;
             lastHintPlayerName = null;
         }
     }
 
     public WorldPoint getMinimapTarget()
     {
-        if (session == null || isMatchCompletedOrCanceled())
-        {
-            return null;
-        }
+        if (session == null || isMatchCompletedOrCanceled()) return null;
 
         if (isMatchFighting())
         {
             Player opponent = findPlayerByName(session.getOpponentRsn());
-            if (opponent != null)
-            {
-                return opponent.getWorldLocation();
-            }
+            if (opponent != null) return opponent.getWorldLocation();
         }
 
         MatchmakingRally rally = session.getRally();
-        if (rally == null)
-        {
-            return null;
-        }
-
+        if (rally == null) return null;
         return new WorldPoint(rally.getX(), rally.getY(), rally.getPlane());
     }
 
@@ -628,49 +827,33 @@ public class MatchmakingManager
 
     private boolean isWithinRally(Player localPlayer, Player opponent, WorldPoint rallyPoint)
     {
-        if (localPlayer == null || opponent == null || rallyPoint == null)
-        {
-            return false;
-        }
-
-        WorldPoint localPoint = localPlayer.getWorldLocation();
-        WorldPoint opponentPoint = opponent.getWorldLocation();
-
-        if (localPoint.getPlane() != rallyPoint.getPlane()
-                || opponentPoint.getPlane() != rallyPoint.getPlane())
-        {
-            return false;
-        }
-
-        return localPoint.distanceTo(rallyPoint) <= RALLY_DISTANCE
-                && opponentPoint.distanceTo(rallyPoint) <= RALLY_DISTANCE;
+        if (localPlayer == null || opponent == null || rallyPoint == null) return false;
+        WorldPoint lp = localPlayer.getWorldLocation();
+        WorldPoint op = opponent.getWorldLocation();
+        if (lp.getPlane() != rallyPoint.getPlane() || op.getPlane() != rallyPoint.getPlane()) return false;
+        return lp.distanceTo(rallyPoint) <= RALLY_DISTANCE
+                && op.distanceTo(rallyPoint) <= RALLY_DISTANCE;
     }
 
     private boolean isPlayerEngaged(Player localPlayer, Player opponent)
     {
-        if (localPlayer.getInteracting() == opponent)
-        {
-            return true;
-        }
-
-        return opponent.getInteracting() == localPlayer;
+        return localPlayer.getInteracting() == opponent
+                || opponent.getInteracting() == localPlayer;
     }
 
     private Player findPlayerByName(String name)
     {
-        if (name == null || name.isEmpty())
-        {
-            return null;
-        }
-
+        String target = normalizeRsn(name);
+        if (target.isEmpty()) return null;
+        // Use normalized comparison: RuneLite's Actor.getName() returns NBSP
+        // (U+00A0) while server-side RSNs use regular spaces or underscores.
+        // Without this normalization the opponent lookup silently returns null
+        // and the hint arrow / engagement check never fire.
         for (Player player : client.getPlayers())
         {
-            if (player != null && name.equalsIgnoreCase(player.getName()))
-            {
-                return player;
-            }
+            if (player == null) continue;
+            if (normalizeRsn(player.getName()).equalsIgnoreCase(target)) return player;
         }
-
         return null;
     }
 
@@ -695,27 +878,31 @@ public class MatchmakingManager
 
     private void notifyListener(MatchmakingUpdate update)
     {
-        if (listener == null)
-        {
-            return;
-        }
-
+        if (listener == null) return;
         SwingUtilities.invokeLater(() -> listener.onMatchmakingUpdate(update));
     }
 
     private String resolveVerificationCode()
     {
-        String verificationCode = runeAlyticsState.getVerificationCode();
-        if (verificationCode == null || verificationCode.isEmpty())
-        {
-            return null;
-        }
-        return verificationCode;
+        String code = runeAlyticsState.getVerificationCode();
+        return (code == null || code.isEmpty()) ? null : code;
+    }
+
+    /**
+     * Normalize OSRS RSN strings so that RuneLite's Actor.getName() form
+     * (which uses U+00A0 non-breaking space) compares equal to profile
+     * storage forms that use regular space or underscore.
+     */
+    private static String normalizeRsn(String name)
+    {
+        if (name == null) return "";
+        return name.replace('\u00A0', ' ').replace('_', ' ').trim();
     }
 
     private String resolveLocalRsn()
     {
-        if (runeAlyticsState.getVerifiedUsername() != null && !runeAlyticsState.getVerifiedUsername().isEmpty())
+        if (runeAlyticsState.getVerifiedUsername() != null
+                && !runeAlyticsState.getVerifiedUsername().isEmpty())
         {
             return runeAlyticsState.getVerifiedUsername();
         }
