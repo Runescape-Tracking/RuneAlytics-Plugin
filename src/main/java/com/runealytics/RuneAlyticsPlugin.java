@@ -1248,7 +1248,7 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     @Subscribe
-    public void onConfigChanged(net.runelite.client.config.ConfigChanged event)
+    public void onConfigChanged(net.runelite.client.events.ConfigChanged event)
     {
         if (!"runealytics".equals(event.getGroup())) return;
         String key = event.getKey();
