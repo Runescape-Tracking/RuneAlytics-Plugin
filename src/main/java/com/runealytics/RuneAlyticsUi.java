@@ -297,7 +297,7 @@ public final class RuneAlyticsUi
     // ---------- PANEL HEADER ----------
 
     private static final Color HEADER_TEAL = new Color(82, 196, 196);
-    private static final Color HEADER_DIM  = new Color(190, 190, 190);
+    private static final Color HEADER_GOLD  = new Color(212, 175, 55);
 
     /**
      * Shared branding header used at the top of every panel tab.
@@ -318,8 +318,8 @@ public final class RuneAlyticsUi
         inner.setOpaque(false);
 
         // Logo — prefer full logo, fall back to icon
-        BufferedImage img = tryLoadHeaderImage("/runealytics_logo.png");
-        if (img == null) img = tryLoadHeaderImage("/runealytics_icon.png");
+        BufferedImage img = tryLoadHeaderImage("/lightLogo_noglow.png");
+        if (img == null) img = tryLoadHeaderImage("/lightLogo_noglow.png");
 
         if (img != null)
         {
@@ -330,7 +330,7 @@ public final class RuneAlyticsUi
         }
 
         JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
-        tagline.setFont(cf(Font.BOLD, 10f));
+        tagline.setFont(cf(Font.BOLD, 12f));
         tagline.setForeground(HEADER_TEAL);
         tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
         inner.add(tagline);
@@ -338,8 +338,8 @@ public final class RuneAlyticsUi
         inner.add(vSpace(2));
 
         JLabel tabLbl = new JLabel(tabName, SwingConstants.CENTER);
-        tabLbl.setFont(cf(Font.PLAIN, 11f));
-        tabLbl.setForeground(HEADER_DIM);
+        tabLbl.setFont(cf(Font.BOLD, 14f));
+        tabLbl.setForeground(HEADER_GOLD);
         tabLbl.setAlignmentX(Component.CENTER_ALIGNMENT);
         inner.add(tabLbl);
 

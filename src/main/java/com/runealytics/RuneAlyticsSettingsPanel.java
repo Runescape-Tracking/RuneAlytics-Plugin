@@ -315,7 +315,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 "Connect your <b>RuneLite</b> client with your <b>RuneAlytics</b> account "
                         + "to unlock powerful tracking and analytics features.",
                 BODY_TEXT,
-                cf(Font.PLAIN, 11f)
+                cf(Font.PLAIN, 12f)
         ));
 
         p.add(vSpace(10));
@@ -336,11 +336,12 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 "Your RuneLite client is now linked to your RuneAlytics account."));
         p.add(vSpace(10));
 
-        p.add(sectionHeader("VERIFICATION CODE"));
-        p.add(vSpace(4));
+
 
         if (state.isLoggedIn())
         {
+            p.add(sectionHeader("VERIFICATION CODE"));
+            p.add(vSpace(4));
             codeField = RuneAlyticsUi.inputField();
             codeField.setFont(cf(Font.PLAIN, 13f));
             codeField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
@@ -354,6 +355,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
             verifyButton.addActionListener(e -> triggerVerification());
             p.add(verifyButton);
             p.add(vSpace(8));
+            p.add(buildConnectionStatusCard());
         }
         else
         {
@@ -368,8 +370,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
             p.add(vSpace(8));
         }
-
-        p.add(buildConnectionStatusCard());
         return p;
     }
 
@@ -516,13 +516,13 @@ public class RuneAlyticsSettingsPanel extends JPanel
         JPanel textCol = verticalPanel();
 
         JLabel t = new JLabel("<html><body style='width:" + STEP_TEXT_WRAP + "px; margin:0; padding:0'>" + title + "</body></html>");
-        t.setFont(cf(Font.BOLD, 12f));
-        t.setForeground(Color.WHITE);
+        t.setFont(cf(Font.BOLD, 13f));
+        t.setForeground(TEAL_COLOR);
         t.setAlignmentX(Component.LEFT_ALIGNMENT);
         textCol.add(t);
         textCol.add(vSpace(3));
 
-        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 10f), STEP_TEXT_WRAP));
+        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 13f), STEP_TEXT_WRAP));
 
         card.add(textCol);
 
@@ -547,7 +547,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 g2.fillOval(0, 0, getWidth(), getHeight());
 
                 g2.setColor(TEAL_COLOR);
-                g2.setStroke(new BasicStroke(1.5f));
+                g2.setStroke(new BasicStroke(2f));
                 g2.drawOval(1, 1, getWidth() - 2, getHeight() - 2);
 
                 g2.dispose();

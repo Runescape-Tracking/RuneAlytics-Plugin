@@ -126,7 +126,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     private void buildUi()
     {
-        add(RuneAlyticsUi.buildPanelHeader("Matches"));
+        add(RuneAlyticsUi.buildPanelHeader("Match Finder"));
         add(RuneAlyticsUi.vSpace(8));
 
         add(buildLoadCard());
