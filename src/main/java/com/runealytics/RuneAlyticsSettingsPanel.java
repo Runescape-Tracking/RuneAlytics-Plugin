@@ -153,7 +153,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         JPanel p = verticalPanel();
 
         // Bank Visibility card
-        JPanel bankCard = RuneAlyticsUi.cardPanel();
+        JPanel bankCard = settingsCard();
         JLabel bankTitle = new JLabel("Bank Visibility");
         bankTitle.setFont(cf(Font.BOLD, 13f));
         bankTitle.setForeground(Color.WHITE);
@@ -174,7 +174,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         p.add(vSpace(8));
 
         // Online Status card
-        JPanel visCard = RuneAlyticsUi.cardPanel();
+        JPanel visCard = settingsCard();
         JLabel visTitle = new JLabel("Online Status");
         visTitle.setFont(cf(Font.BOLD, 13f));
         visTitle.setForeground(Color.WHITE);
@@ -406,9 +406,18 @@ public class RuneAlyticsSettingsPanel extends JPanel
         return outer;
     }
 
-    private JPanel buildConnectionStatusCard()
+    /** Card panel capped at 194 px and centered — matches the visual width of the Matches panel cards. */
+    private static JPanel settingsCard()
     {
         JPanel card = RuneAlyticsUi.cardPanel();
+        card.setAlignmentX(Component.CENTER_ALIGNMENT);
+        card.setMaximumSize(new Dimension(194, Short.MAX_VALUE));
+        return card;
+    }
+
+    private JPanel buildConnectionStatusCard()
+    {
+        JPanel card = settingsCard();
 
         JPanel row = new JPanel();
         row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
@@ -461,7 +470,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private void addBenefitCard(JPanel parent, String title, String desc)
     {
-        JPanel card = RuneAlyticsUi.cardPanel();
+        JPanel card = settingsCard();
         JLabel t = new JLabel(title);
         t.setFont(cf(Font.BOLD, 13f));
         t.setForeground(Color.WHITE);
@@ -501,7 +510,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
         card.setBorder(new CompoundBorder(
                 new LineBorder(new Color(60, 60, 65), 1, true),
                 new EmptyBorder(8, 8, 8, 8)));
-        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.setAlignmentX(Component.CENTER_ALIGNMENT);
+        card.setMaximumSize(new Dimension(194, Short.MAX_VALUE));
 
         card.add(buildStepIcon(stepNum));
         card.add(hSpace(10));
@@ -511,7 +521,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
         t.setFont(cf(Font.BOLD, 13f));
         t.setForeground(Color.WHITE);
         textCol.add(t);
-        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 11f), 112));
+        // 194px card - 18px border/padding - 40px icon+gap = 136px text column
+        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 11f), 130));
 
         card.add(textCol);
         return card;

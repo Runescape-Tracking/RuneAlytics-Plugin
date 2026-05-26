@@ -127,17 +127,15 @@ public class MatchmakingApiClient
             String message = json != null ? getString(json, "message") : null;
             boolean tokenRefresh = json != null && (hasTrue(json, "token_refresh") || hasTrue(json, "refresh_token"));
 
-            if (response.isSuccessful() && json != null)
+            if (response.isSuccessful())
             {
-                MatchmakingSession session = parseMatchSession(json, matchCode, osrsRsn);
+                // Some endpoints (e.g. accept) return a primitive ("true") not an object.
+                // Treat any 2xx as success; only populate a session when we have an object.
+                MatchmakingSession session = json != null ? parseMatchSession(json, matchCode, osrsRsn) : null;
                 return new MatchmakingApiResult(session, message, responseBody, true, tokenRefresh);
             }
 
-            if (!response.isSuccessful())
-            {
-                log.debug("Matchmaking request failed: {} {}", response.code(), responseBody);
-            }
-
+            log.debug("Matchmaking request failed: {} {}", response.code(), responseBody);
             return new MatchmakingApiResult(null, message, responseBody, false, tokenRefresh);
         }
     }
