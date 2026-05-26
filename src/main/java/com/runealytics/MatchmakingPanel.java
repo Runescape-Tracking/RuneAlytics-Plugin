@@ -201,9 +201,9 @@ public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListene
         card.add(vSpace(2));
         card.add(kvRow("Risk",   riskVal));
         card.add(vSpace(2));
-        card.add(kvRow("Rules",  rulesVal));
-        card.add(vSpace(2));
         card.add(kvRow("Status", statusVal));
+        card.add(vSpace(6));
+        card.add(rulesRow());
 
         card.setVisible(false);
         return card;
@@ -391,7 +391,11 @@ public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListene
         worldVal.setText(String.valueOf(session.getWorld()));
         zoneVal.setText(session.getZone() != null ? session.getZone() : "—");
         riskVal.setText(session.getRisk() != null ? session.getRisk() : "—");
-        rulesVal.setText(session.getGearRules() != null ? session.getGearRules() : "—");
+        String rules = session.getGearRules();
+        if (rules != null && !rules.isEmpty())
+            rulesVal.setText("<html><body style='width:145px; margin:0; padding:0'>" + rules + "</body></html>");
+        else
+            rulesVal.setText("—");
         statusVal.setText(session.getStatus() != null ? session.getStatus() : "—");
 
         String localRsn = session.getLocalRsn();
@@ -581,6 +585,26 @@ public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListene
         row.add(k);
         row.add(val);
         row.add(Box.createHorizontalGlue());
+        return row;
+    }
+
+    private JPanel rulesRow()
+    {
+        JPanel row = new JPanel();
+        row.setLayout(new BoxLayout(row, BoxLayout.Y_AXIS));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JLabel header = new JLabel("Rules");
+        header.setFont(cf(Font.PLAIN, 11f));
+        header.setForeground(DIM);
+        header.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.add(header);
+        row.add(vSpace(2));
+
+        rulesVal.setAlignmentX(Component.LEFT_ALIGNMENT);
+        rulesVal.setMaximumSize(new Dimension(Integer.MAX_VALUE, Short.MAX_VALUE));
+        row.add(rulesVal);
         return row;
     }
 

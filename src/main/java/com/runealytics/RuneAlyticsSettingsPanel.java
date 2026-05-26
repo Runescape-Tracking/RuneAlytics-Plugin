@@ -290,14 +290,10 @@ public class RuneAlyticsSettingsPanel extends JPanel
         p.add(sectionHeader("ACCOUNT VERIFICATION"));
         p.add(vSpace(6));
 
-        JLabel desc = new JLabel(
-                "<html><body style='width:155px'>"
-                + "<span style='color:#cccccc'>Connect your <b>RuneLite</b> client with your "
-                + "<b>RuneAlytics</b> account to unlock powerful tracking and analytics "
-                + "features.</span></body></html>");
-        desc.setFont(cf(Font.PLAIN, 12f));
-        desc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.add(desc);
+        p.add(compactLabel(
+                "Connect your <b>RuneLite</b> client with your <b>RuneAlytics</b> account "
+                + "to unlock powerful tracking and analytics features.",
+                BODY_TEXT, cf(Font.PLAIN, 12f), 190));
         p.add(vSpace(10));
 
         p.add(buildStepCard("1", "Go to RuneAlytics.com",
@@ -515,7 +511,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         t.setFont(cf(Font.BOLD, 13f));
         t.setForeground(Color.WHITE);
         textCol.add(t);
-        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 11f), 115));
+        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 11f), 112));
 
         card.add(textCol);
         return card;
@@ -712,7 +708,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
         panel.setOpaque(true);
-        panel.setBorder(new EmptyBorder(10, 12, 10, 12));
+        panel.setBorder(new EmptyBorder(10, 8, 10, 8));
         return panel;
     }
 
@@ -736,19 +732,15 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private static JLabel compactLabel(String text, Color fg, Font font)
     {
-        return compactLabel(text, fg, font, 155);
+        return compactLabel(text, fg, font, 170);
     }
 
     private static JLabel compactLabel(String text, Color fg, Font font, int wrapPx)
     {
-        JLabel lbl = new JLabel("<html><body style='width:" + wrapPx + "px'>" + text + "</body></html>");
+        JLabel lbl = new JLabel("<html><body style='width:" + wrapPx + "px; margin:0; padding:0'>" + text + "</body></html>");
         lbl.setFont(font);
         lbl.setForeground(fg);
         lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-        // Cap the component width so BoxLayout actually allocates wrapPx pixels —
-        // without this the HTML renderer ignores the style width and paints to the
-        // full allocated width, sending text to the card's right padding boundary.
-        lbl.setMaximumSize(new Dimension(wrapPx, Short.MAX_VALUE));
         return lbl;
     }
 
