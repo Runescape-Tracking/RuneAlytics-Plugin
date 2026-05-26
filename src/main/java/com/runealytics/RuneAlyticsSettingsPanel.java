@@ -331,18 +331,30 @@ public class RuneAlyticsSettingsPanel extends JPanel
         p.add(sectionHeader("VERIFICATION CODE"));
         p.add(vSpace(4));
 
-        codeField = RuneAlyticsUi.inputField();
-        codeField.setFont(cf(Font.PLAIN, 13f));
-        ((AbstractDocument) codeField.getDocument()).setDocumentFilter(new UpperCaseFilter(20));
-        codeField.addActionListener(e -> triggerVerification());
-        p.add(codeField);
-        p.add(vSpace(6));
+        if (state.isLoggedIn())
+        {
+            codeField = RuneAlyticsUi.inputField();
+            codeField.setFont(cf(Font.PLAIN, 13f));
+            ((AbstractDocument) codeField.getDocument()).setDocumentFilter(new UpperCaseFilter(20));
+            codeField.addActionListener(e -> triggerVerification());
+            p.add(codeField);
+            p.add(vSpace(6));
 
-        verifyButton = buildGoldButton("Verify Account");
-        verifyButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
-        verifyButton.addActionListener(e -> triggerVerification());
-        p.add(verifyButton);
-        p.add(vSpace(8));
+            verifyButton = buildGoldButton("Verify Account");
+            verifyButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+            verifyButton.addActionListener(e -> triggerVerification());
+            p.add(verifyButton);
+            p.add(vSpace(8));
+        }
+        else
+        {
+            codeField   = null;
+            verifyButton = null;
+            p.add(compactLabel(
+                    "Log into RuneScape first, then enter your auth code here.",
+                    DIM_TEXT, cf(Font.ITALIC, 11f)));
+            p.add(vSpace(8));
+        }
 
         p.add(buildConnectionStatusCard());
         return p;
@@ -384,7 +396,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
             BufferedImage icon = tryLoadImage("/runealytics_icon.png");
             JLabel logo;
             if (icon != null)
-                logo = scaledImageLabel(icon, 32, 32);
+                logo = scaledImageLabel(icon, 64, 64);
             else
             {
                 logo = new JLabel("RA", SwingConstants.CENTER);
@@ -397,13 +409,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
             }
             logo.setAlignmentX(Component.CENTER_ALIGNMENT);
             inner.add(logo);
-            inner.add(vSpace(8));
-
-            JLabel title = new JLabel("RUNEALYTICS", SwingConstants.CENTER);
-            title.setFont(cf(Font.BOLD, 21f));
-            title.setForeground(GOLD_COLOR);
-            title.setAlignmentX(Component.CENTER_ALIGNMENT);
-            inner.add(title);
+            inner.add(vSpace(6));
 
             JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
             tagline.setFont(cf(Font.BOLD, 11f));
@@ -478,7 +484,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         t.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.add(t);
         card.add(vSpace(3));
-        card.add(wrapText(desc, BODY_TEXT, cf(Font.PLAIN, 12f)));
+        card.add(compactLabel(desc, BODY_TEXT, cf(Font.PLAIN, 12f)));
         parent.add(card);
     }
 
@@ -487,7 +493,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         JPanel p = verticalPanel();
         p.add(sectionHeader("NEED HELP?"));
         p.add(vSpace(6));
-        p.add(wrapText(
+        p.add(compactLabel(
                 "Join our Discord or visit runealytics.com for support and more information.",
                 BODY_TEXT, cf(Font.PLAIN, 12f)));
         p.add(vSpace(8));
@@ -521,7 +527,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         t.setFont(cf(Font.BOLD, 13f));
         t.setForeground(Color.WHITE);
         textCol.add(t);
-        textCol.add(wrapText(body, BODY_TEXT, cf(Font.PLAIN, 11f)));
+        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 11f)));
 
         card.add(textCol);
         return card;
@@ -806,10 +812,12 @@ public class RuneAlyticsSettingsPanel extends JPanel
     public void refreshLoginState()
     {
         SwingUtilities.invokeLater(() -> {
-            boolean loggedIn = (client.getGameState() == GameState.LOGGED_IN
-                    && client.getLocalPlayer() != null);
-            if (!loggedIn && !state.isVerified())
-                updateConnectionStatus(false, "Log into RuneScape to link your account.");
+            if (!state.isVerified())
+            {
+                // Rebuild the unverified view so the code field / verify button
+                // appear only when the player is actually logged into the game.
+                rebuild();
+            }
         });
         verificationPanel.refreshLoginState();
     }

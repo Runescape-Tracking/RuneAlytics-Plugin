@@ -1535,6 +1535,7 @@ public class RuneAlyticsPlugin extends Plugin
             RuneAlyticsSettingsPanel sp = injector.getInstance(RuneAlyticsSettingsPanel.class);
             sp.updateVerificationStatus(verified, verified ? rsn : null);
             vp.refreshLoginState();
+            injector.getInstance(MatchmakingPanel.class).refreshLoginState();
         });
     }
 
