@@ -29,8 +29,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private static final int  HIGHLIGHT_TIMEOUT_MS = 10_000;
     private static final long SYNC_COOLDOWN_MS = 5 * 60 * 1_000L;
 
-    private static final Font CALIBRI_BOLD  = new Font("Calibri", Font.BOLD, 14);
-    private static final Font CALIBRI_PLAIN = new Font("Calibri", Font.PLAIN, 12);
+    private static final Font CALIBRI_BOLD  = new Font("Calibri", Font.BOLD, 12);
+    private static final Font CALIBRI_PLAIN = new Font("Calibri", Font.PLAIN, 11);
     private static final Font FILTER_FONT   = new Font("Calibri", Font.BOLD, 11);
 
     private static final Color PICKPOCKET_HEADER_HL   = new Color(30, 18, 55);
@@ -59,8 +59,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private final ItemManager        itemManager;
     private final RuneAlyticsPlugin  plugin;
 
-    private final JLabel totalKillsLabel = new JLabel("0 kills");
-    private final JLabel totalValueLabel = new JLabel("0 gp");
+    private final JLabel totalKillsLabel = new JLabel("Kills: 0");
+    private final JLabel totalValueLabel = new JLabel("Value: 0 gp");
     private final JPanel bossListPanel   = new JPanel();
 
     private JButton           eyeButton;
@@ -175,6 +175,17 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
         header.setBackground(new Color(28, 28, 28));
         header.setBorder(new EmptyBorder(8, 8, 8, 8));
+
+        // ── Shared branding header ────────────────────────────────────────────
+        header.add(RuneAlyticsUi.buildPanelHeader("Loot Tracker"));
+        header.add(Box.createVerticalStrut(8));
+
+        JSeparator topSep = new JSeparator();
+        topSep.setForeground(new Color(55, 55, 55));
+        topSep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        topSep.setAlignmentX(Component.LEFT_ALIGNMENT);
+        header.add(topSep);
+        header.add(Box.createVerticalStrut(8));
 
         // ── Stats row ────────────────────────────────────────────────────────
         JPanel statsRow = new JPanel(new BorderLayout(8, 0));
@@ -811,8 +822,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                                 bossListPanel.add(buildBossCard(stats));
                                 bossListPanel.add(Box.createVerticalStrut(5));
                             }
-                            totalKillsLabel.setText(formatNumber(totalKills) + " kills");
-                            totalValueLabel.setText(formatGp(totalVal));
+                            totalKillsLabel.setText("Kills " + formatNumber(totalKills));
+                            totalValueLabel.setText("Value " + formatGp(totalVal));
                         }
 
                         bossListPanel.revalidate();
@@ -1106,8 +1117,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         p.add(Box.createVerticalStrut(8));
         p.add(msgLabel);
 
-        totalKillsLabel.setText("0 kills");
-        totalValueLabel.setText("0 gp total");
+        totalKillsLabel.setText("Kills: 0");
+        totalValueLabel.setText("Value: 0 gp");
         return p;
     }
 

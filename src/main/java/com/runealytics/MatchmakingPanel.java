@@ -24,13 +24,14 @@ import java.awt.geom.RoundRectangle2D;
 @Singleton
 public class MatchmakingPanel extends RuneAlyticsPanelBase implements MatchmakingUpdateListener
 {
-    // ── colour palette (consistent with RuneAlyticsUi) ──────────────────────
-    private static final Color BG           = ColorScheme.DARK_GRAY_COLOR;
-    private static final Color CARD_BG      = ColorScheme.DARKER_GRAY_COLOR;
-    private static final Color CARD_BORDER  = new Color(60, 60, 60, 200);
+    // ── colour palette (mirrors RuneAlyticsSettingsPanel) ────────────────────
+    private static final Color BG           = new Color(38, 38, 38);
+    private static final Color CARD_BG      = new Color(27, 27, 28);
+    private static final Color CARD_BORDER  = new Color(70, 70, 74);
+    private static final Color TEAL_COLOR   = new Color(82, 196, 196);
     private static final Color COL_WHITE    = Color.WHITE;
-    private static final Color COL_MUTED    = new Color(170, 170, 170);
-    private static final Color COL_DIM      = new Color(120, 120, 120);
+    private static final Color COL_MUTED    = new Color(220, 220, 220);
+    private static final Color COL_DIM      = new Color(190, 190, 190);
 
     private static final Color COL_GREEN    = new Color(72, 199, 116);
     private static final Color COL_RED      = new Color(220, 80,  80);
@@ -110,6 +111,9 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         this.matchmakingManager = matchmakingManager;
         this.state              = state;
 
+        setBackground(BG);
+        setBorder(new EmptyBorder(10, 12, 10, 12));
+
         matchmakingManager.setListener(this);
         buildUi();
         wireEvents();
@@ -122,14 +126,8 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     private void buildUi()
     {
-        // Use inline title/subtitle so we can control the gap tightly —
-        // addSectionTitle/addSubtitle add generous spacing suited for taller panels.
-        JLabel title = RuneAlyticsUi.titleLabel("Match Finder");
-        add(title);
-        add(RuneAlyticsUi.vSpace(2));
-        JLabel subtitle = RuneAlyticsUi.subtitleLabel("PvP Match Tracker");
-        add(subtitle);
-        add(RuneAlyticsUi.vSpace(6));
+        add(RuneAlyticsUi.buildPanelHeader("Match Finder"));
+        add(RuneAlyticsUi.vSpace(8));
 
         add(buildLoadCard());
         add(RuneAlyticsUi.vSpace(5));
@@ -151,7 +149,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     {
         JPanel body = vertPanel();
 
-        JLabel desc = new JLabel("Enter a match code from runeanalytics.com/pvp");
+        JLabel desc = new JLabel("<html><body style='width:155px; margin:0; padding:0'>Enter a match code from runealytics.com/pvp</body></html>");
         desc.setFont(cf(Font.PLAIN, 11f));
         desc.setForeground(COL_MUTED);
         desc.setAlignmentX(LEFT_ALIGNMENT);
@@ -644,14 +642,14 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
      */
     private JPanel sectionCard(String icon, String title, JPanel body)
     {
-        JPanel card = new JPanel();
+        JPanel card = new AutoHeightPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
         card.setBackground(CARD_BG);
         card.setOpaque(true);
         card.setAlignmentX(LEFT_ALIGNMENT);
         card.setBorder(new CompoundBorder(
-                new LineBorder(CARD_BORDER, 1, true),
-                new EmptyBorder(8, 10, 8, 10)));
+                new LineBorder(CARD_BORDER, 1),
+                new EmptyBorder(10, 10, 10, 10)));
 
         if (!title.isEmpty())
         {
@@ -662,19 +660,19 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             if (!icon.isEmpty())
             {
                 JLabel iconLbl = new JLabel(icon);
-                iconLbl.setFont(cf(Font.BOLD, 13f));
-                iconLbl.setForeground(COL_MUTED);
+                iconLbl.setFont(cf(Font.BOLD, 11f));
+                iconLbl.setForeground(TEAL_COLOR);
                 header.add(iconLbl);
-                header.add(RuneAlyticsUi.hSpace(6));
+                header.add(RuneAlyticsUi.hSpace(5));
             }
 
             JLabel titleLbl = new JLabel(title);
-            titleLbl.setFont(cf(Font.BOLD, 13f));
-            titleLbl.setForeground(COL_WHITE);
+            titleLbl.setFont(cf(Font.BOLD, 11f));
+            titleLbl.setForeground(TEAL_COLOR);
             header.add(titleLbl);
 
             card.add(header);
-            card.add(RuneAlyticsUi.vSpace(6));
+            card.add(RuneAlyticsUi.vSpace(8));
         }
 
         card.add(body);
@@ -721,7 +719,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     private static JPanel vertPanel()
     {
-        JPanel p = new JPanel();
+        JPanel p = new AutoHeightPanel();
         p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
         p.setOpaque(false);
         p.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -1015,6 +1013,16 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
                 dim.height += rowHeight + insets.top + insets.bottom + vgap * 2;
                 return dim;
             }
+        }
+    }
+
+    private static final class AutoHeightPanel extends JPanel
+    {
+        @Override
+        public Dimension getMaximumSize()
+        {
+            Dimension preferred = getPreferredSize();
+            return new Dimension(Integer.MAX_VALUE, preferred.height);
         }
     }
 

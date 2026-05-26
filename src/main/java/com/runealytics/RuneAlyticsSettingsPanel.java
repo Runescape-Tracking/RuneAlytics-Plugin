@@ -3,8 +3,6 @@ package com.runealytics;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import net.runelite.client.ui.ColorScheme;
-import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 
 import javax.inject.Inject;
@@ -18,7 +16,6 @@ import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
 import java.awt.*;
-import java.awt.image.BufferedImage;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 
@@ -134,8 +131,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private JPanel buildVerifiedContent()
     {
         JPanel panel = rootPanel();
-        panel.add(buildLogoSection());
-        panel.add(vSpace(12));
+        panel.add(RuneAlyticsUi.buildPanelHeader("Settings"));
+        panel.add(vSpace(10));
         panel.add(buildConnectionStatusCard());
         panel.add(vSpace(14));
         panel.add(sectionHeader("PRIVACY SETTINGS"));
@@ -165,15 +162,15 @@ public class RuneAlyticsSettingsPanel extends JPanel
         bankCard.add(compactLabel(
                 "Controls who can see your bank value and contents on RuneAlytics.com.",
                 BODY_TEXT,
-                cf(Font.PLAIN, 11f)
+                cf(Font.PLAIN, 12f)
         ));
 
         bankCard.add(vSpace(6));
 
         bankCard.add(compactLabel(
-                "<i>Private: bank data used only for gear crafting and your personal view.</i>",
+                "<i><b><u>Public:</u></b> bank value and contents will be seen by anyone. <br /> <br /><b><u>Friends:</u></b> only people on your OSRS friends list can view your bank value and contents. <br /> <br /><b><u>Private <default>:</u></b> bank data used only for gear crafting and your personal view.</i>",
                 DIM_TEXT,
-                cf(Font.ITALIC, 11f)
+                cf(Font.ITALIC, 12f)
         ));
 
         bankCard.add(vSpace(10));
@@ -194,15 +191,15 @@ public class RuneAlyticsSettingsPanel extends JPanel
         visCard.add(compactLabel(
                 "Controls who can see when you are online on RuneAlytics.com.",
                 BODY_TEXT,
-                cf(Font.PLAIN, 11f)
+                cf(Font.PLAIN, 12f)
         ));
 
         visCard.add(vSpace(6));
 
         visCard.add(compactLabel(
-                "<i>Friends: only visible to verified players you are tracking.</i>",
+                "<i><b><u>Public:</u></b> All users can view your status and live drops.Friends: only friends on your friends list can view your status and live drops.</i> <br /> <br /> <b><u>Friends:</u></b> All users can view your status and live drops. <br /> <br /> <b><u>Private:</u></b> Only <b><u>you</u></b> can see your status and live drops.</i>",
                 DIM_TEXT,
-                cf(Font.ITALIC, 11f)
+                cf(Font.ITALIC, 12f)
         ));
 
         visCard.add(vSpace(10));
@@ -292,8 +289,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private JPanel buildUnverifiedContent()
     {
         JPanel panel = rootPanel();
-        panel.add(buildLogoSection());
-        panel.add(vSpace(14));
+        panel.add(RuneAlyticsUi.buildPanelHeader("Settings"));
+        panel.add(vSpace(10));
         panel.add(buildVerificationSection());
         panel.add(vSpace(14));
         panel.add(sectionHeader("RUNEALYTICS BENEFITS"));
@@ -318,7 +315,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 "Connect your <b>RuneLite</b> client with your <b>RuneAlytics</b> account "
                         + "to unlock powerful tracking and analytics features.",
                 BODY_TEXT,
-                cf(Font.PLAIN, 11f)
+                cf(Font.PLAIN, 12f)
         ));
 
         p.add(vSpace(10));
@@ -339,11 +336,12 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 "Your RuneLite client is now linked to your RuneAlytics account."));
         p.add(vSpace(10));
 
-        p.add(sectionHeader("VERIFICATION CODE"));
-        p.add(vSpace(4));
+
 
         if (state.isLoggedIn())
         {
+            p.add(sectionHeader("VERIFICATION CODE"));
+            p.add(vSpace(4));
             codeField = RuneAlyticsUi.inputField();
             codeField.setFont(cf(Font.PLAIN, 13f));
             codeField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
@@ -357,6 +355,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
             verifyButton.addActionListener(e -> triggerVerification());
             p.add(verifyButton);
             p.add(vSpace(8));
+            p.add(buildConnectionStatusCard());
         }
         else
         {
@@ -371,71 +370,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
             p.add(vSpace(8));
         }
-
-        p.add(buildConnectionStatusCard());
         return p;
-    }
-
-    private JPanel buildLogoSection()
-    {
-        JPanel outer = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
-        outer.setOpaque(false);
-        outer.setAlignmentX(Component.LEFT_ALIGNMENT);
-        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 118));
-
-        JPanel inner = new JPanel();
-        inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
-        inner.setOpaque(false);
-
-        BufferedImage fullLogo = tryLoadImage("/runealytics_logo.png");
-
-        if (fullLogo != null)
-        {
-            JLabel lbl = scaledImageLabelNoUpscale(fullLogo, 82);
-            lbl.setAlignmentX(Component.CENTER_ALIGNMENT);
-            inner.add(lbl);
-            inner.add(vSpace(6));
-
-            JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
-            tagline.setFont(cf(Font.BOLD, 11f));
-            tagline.setForeground(TEAL_COLOR);
-            tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
-            inner.add(tagline);
-        }
-        else
-        {
-            BufferedImage icon = tryLoadImage("/runealytics_icon.png");
-
-            JLabel logo;
-
-            if (icon != null)
-            {
-                logo = scaledImageLabelNoUpscale(icon, 48);
-            }
-            else
-            {
-                logo = new JLabel("RA", SwingConstants.CENTER);
-                logo.setFont(cf(Font.BOLD, 24f));
-                logo.setForeground(GOLD_COLOR);
-                logo.setOpaque(true);
-                logo.setBackground(new Color(50, 40, 10));
-                logo.setPreferredSize(new Dimension(64, 64));
-                logo.setMaximumSize(new Dimension(64, 64));
-            }
-
-            logo.setAlignmentX(Component.CENTER_ALIGNMENT);
-            inner.add(logo);
-            inner.add(vSpace(6));
-
-            JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
-            tagline.setFont(cf(Font.BOLD, 11f));
-            tagline.setForeground(TEAL_COLOR);
-            tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
-            inner.add(tagline);
-        }
-
-        outer.add(inner);
-        return outer;
     }
 
     private static JPanel settingsCard()
@@ -581,13 +516,13 @@ public class RuneAlyticsSettingsPanel extends JPanel
         JPanel textCol = verticalPanel();
 
         JLabel t = new JLabel("<html><body style='width:" + STEP_TEXT_WRAP + "px; margin:0; padding:0'>" + title + "</body></html>");
-        t.setFont(cf(Font.BOLD, 12f));
-        t.setForeground(Color.WHITE);
+        t.setFont(cf(Font.BOLD, 13f));
+        t.setForeground(TEAL_COLOR);
         t.setAlignmentX(Component.LEFT_ALIGNMENT);
         textCol.add(t);
         textCol.add(vSpace(3));
 
-        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 10f), STEP_TEXT_WRAP));
+        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 13f), STEP_TEXT_WRAP));
 
         card.add(textCol);
 
@@ -612,7 +547,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 g2.fillOval(0, 0, getWidth(), getHeight());
 
                 g2.setColor(TEAL_COLOR);
-                g2.setStroke(new BasicStroke(1.5f));
+                g2.setStroke(new BasicStroke(2f));
                 g2.drawOval(1, 1, getWidth() - 2, getHeight() - 2);
 
                 g2.dispose();
@@ -873,48 +808,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
         p.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         return p;
-    }
-
-    private static BufferedImage tryLoadImage(String resource)
-    {
-        try
-        {
-            return ImageUtil.loadImageResource(RuneAlyticsSettingsPanel.class, resource);
-        }
-        catch (Exception e)
-        {
-            return null;
-        }
-    }
-
-    private static JLabel scaledImageLabelNoUpscale(BufferedImage src, int targetW)
-    {
-        int finalW = Math.min(targetW, src.getWidth());
-        int finalH = Math.max(1, (int) Math.round(src.getHeight() * (finalW / (double) src.getWidth())));
-
-        if (finalW == src.getWidth())
-        {
-            JLabel label = new JLabel(new ImageIcon(src));
-            label.setPreferredSize(new Dimension(src.getWidth(), src.getHeight()));
-            label.setMaximumSize(new Dimension(src.getWidth(), src.getHeight()));
-            return label;
-        }
-
-        BufferedImage dest = new BufferedImage(finalW, finalH, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2 = dest.createGraphics();
-
-        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-        g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g2.setRenderingHint(RenderingHints.KEY_ALPHA_INTERPOLATION, RenderingHints.VALUE_ALPHA_INTERPOLATION_QUALITY);
-
-        g2.drawImage(src, 0, 0, finalW, finalH, null);
-        g2.dispose();
-
-        JLabel label = new JLabel(new ImageIcon(dest));
-        label.setPreferredSize(new Dimension(finalW, finalH));
-        label.setMaximumSize(new Dimension(finalW, finalH));
-        return label;
     }
 
     private static Component vSpace(int px)

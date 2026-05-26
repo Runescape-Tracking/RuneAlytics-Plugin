@@ -228,17 +228,15 @@ public class MatchmakingApiClient
             boolean    tokenRefresh  = json != null
                     && (hasTrue(json, "token_refresh") || hasTrue(json, "refresh_token"));
 
-            if (response.isSuccessful() && json != null)
+            if (response.isSuccessful())
             {
-                MatchmakingSession session = parseMatchSession(json, matchCode, osrsRsn);
+                // Some endpoints (e.g. accept) return a primitive ("true") not an object.
+                // Treat any 2xx as success; only populate a session when we have an object.
+                MatchmakingSession session = json != null ? parseMatchSession(json, matchCode, osrsRsn) : null;
                 return new MatchmakingApiResult(session, message, responseBody, true, tokenRefresh);
             }
 
-            if (!response.isSuccessful())
-            {
-                log.debug("Matchmaking request failed: {} {}", response.code(), responseBody);
-            }
-
+            log.debug("Matchmaking request failed: {} {}", response.code(), responseBody);
             return new MatchmakingApiResult(null, message, responseBody, false, tokenRefresh);
         }
     }
@@ -250,24 +248,18 @@ public class MatchmakingApiClient
             return null;
         }
 
+        // Skip parse attempt for primitive responses (e.g. "true" from acceptMatch)
+        // to avoid a misleading JsonSyntaxException in the debug log.
+        if (!responseBody.trim().startsWith("{")) return null;
+
         try
         {
-            // Parse to JsonElement first so a top-level primitive (e.g. "true")
-            // doesn't throw JsonSyntaxException.
-            JsonElement element = gson.fromJson(responseBody, JsonElement.class);
-            if (element == null || element.isJsonNull()) return null;
-            if (element.isJsonObject()) return element.getAsJsonObject();
-            log.debug("Matchmaking response was not a JSON object: {}", responseBody);
-            return null;
+            return gson.fromJson(responseBody, JsonObject.class);
         }
         catch (Exception ex)
         {
-            // Log the first 200 chars of the body so we can diagnose what
-            // the server actually returned (HTML error page, PHP notice, etc.)
-            String preview = responseBody.length() > 200
-                    ? responseBody.substring(0, 200) + "…"
-                    : responseBody;
-            log.debug("Failed to parse matchmaking response: {} | body: {}", ex.getMessage(), preview);
+            log.debug("Failed to parse matchmaking response: {} | body: {}", ex.getMessage(),
+                    responseBody.length() > 200 ? responseBody.substring(0, 200) + "…" : responseBody);
             return null;
         }
     }
