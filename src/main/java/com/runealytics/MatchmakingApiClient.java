@@ -142,10 +142,11 @@ public class MatchmakingApiClient
 
     private JsonObject parseJson(String responseBody)
     {
-        if (responseBody == null || responseBody.isEmpty())
-        {
-            return null;
-        }
+        if (responseBody == null || responseBody.isEmpty()) return null;
+
+        // Skip parse attempt for primitive responses (e.g. "true" from acceptMatch)
+        // so the catch block doesn't produce a misleading log entry.
+        if (!responseBody.trim().startsWith("{")) return null;
 
         try
         {
