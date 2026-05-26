@@ -4,7 +4,6 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.client.ui.ColorScheme;
-import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 
@@ -83,17 +82,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
         verificationPanel.setVerificationStatusListener(this::handleVerificationStatusChange);
         add(buildScrollPane(), BorderLayout.CENTER);
     }
-
-    @Override
-    public Dimension getPreferredSize()
-    {
-        Container p = getParent();
-        int h = (p != null && p.getHeight() > 0) ? p.getHeight() : 400;
-        return new Dimension(PluginPanel.PANEL_WIDTH, h);
-    }
-
-    @Override
-    public Dimension getMinimumSize() { return new Dimension(50, 80); }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  Scroll pane + rebuild
@@ -178,7 +166,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         bankCard.add(vSpace(3));
         bankCard.add(compactLabel(
                 "Private: bank data used only for gear crafting and your personal view.",
-                DIM_TEXT, cf(Font.ITALIC, 10f)));
+                DIM_TEXT, cf(Font.ITALIC, 11f)));
         bankCard.add(vSpace(8));
         bankCard.add(buildPillToggle(config.bankPrivacy(), v -> config.bankPrivacy(v)));
         p.add(bankCard);
@@ -199,7 +187,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         visCard.add(vSpace(3));
         visCard.add(compactLabel(
                 "Friends: only visible to verified players you are tracking.",
-                DIM_TEXT, cf(Font.ITALIC, 10f)));
+                DIM_TEXT, cf(Font.ITALIC, 11f)));
         visCard.add(vSpace(8));
         visCard.add(buildPillToggle(config.playerVisibility(), v -> config.playerVisibility(v)));
         p.add(visCard);
@@ -396,7 +384,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
             BufferedImage icon = tryLoadImage("/runealytics_icon.png");
             JLabel logo;
             if (icon != null)
-                logo = scaledImageLabel(icon, 64, 64);
+                logo = scaledImageLabelCrisp(icon, 64, 64);
             else
             {
                 logo = new JLabel("RA", SwingConstants.CENTER);
@@ -527,7 +515,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         t.setFont(cf(Font.BOLD, 13f));
         t.setForeground(Color.WHITE);
         textCol.add(t);
-        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 11f)));
+        textCol.add(compactLabel(body, BODY_TEXT, cf(Font.PLAIN, 11f), 115));
 
         card.add(textCol);
         return card;
@@ -746,26 +734,14 @@ public class RuneAlyticsSettingsPanel extends JPanel
         return lbl;
     }
 
-    private static JTextArea wrapText(String text, Color fg, Font font)
-    {
-        JTextArea area = new JTextArea(text);
-        area.setEditable(false);
-        area.setFocusable(false);
-        area.setOpaque(false);
-        area.setLineWrap(true);
-        area.setWrapStyleWord(true);
-        area.setForeground(fg);
-        area.setFont(font);
-        area.setAlignmentX(Component.LEFT_ALIGNMENT);
-        area.setBorder(null);
-        area.setMargin(new Insets(0, 0, 0, 0));
-        area.setMinimumSize(new Dimension(0, 0));
-        return area;
-    }
-
     private static JLabel compactLabel(String text, Color fg, Font font)
     {
-        JLabel lbl = new JLabel("<html><body style='width:155px'>" + text + "</body></html>");
+        return compactLabel(text, fg, font, 155);
+    }
+
+    private static JLabel compactLabel(String text, Color fg, Font font, int wrapPx)
+    {
+        JLabel lbl = new JLabel("<html><body style='width:" + wrapPx + "px'>" + text + "</body></html>");
         lbl.setFont(font);
         lbl.setForeground(fg);
         lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -787,6 +763,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         catch (Exception e) { return null; }
     }
 
+    /** Bicubic scaling — good for non-integer scale ratios (e.g. banner logo). */
     private static JLabel scaledImageLabel(BufferedImage src, int w, int h)
     {
         BufferedImage dest = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
@@ -797,6 +774,20 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 RenderingHints.VALUE_RENDER_QUALITY);
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
                 RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.drawImage(src, 0, 0, w, h, null);
+        g2.dispose();
+        return new JLabel(new ImageIcon(dest));
+    }
+
+    /** Nearest-neighbour scaling — crisp for exact integer multiples (e.g. 1× → 2×). */
+    private static JLabel scaledImageLabelCrisp(BufferedImage src, int w, int h)
+    {
+        BufferedImage dest = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = dest.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        g2.setRenderingHint(RenderingHints.KEY_RENDERING,
+                RenderingHints.VALUE_RENDER_SPEED);
         g2.drawImage(src, 0, 0, w, h, null);
         g2.dispose();
         return new JLabel(new ImageIcon(dest));
