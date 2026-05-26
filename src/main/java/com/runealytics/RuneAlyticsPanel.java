@@ -296,7 +296,7 @@ public class RuneAlyticsPanel extends PluginPanel
         Map<String, Boolean> flags = new HashMap<>();
         flags.put(FEATURE_VERIFICATION, true);   // always accessible
         flags.put(FEATURE_LOOT,         true);
-        flags.put(FEATURE_MATCHES,      false);
+        flags.put(FEATURE_MATCHES,      true);
         applyFeatureFlags(flags);
     }
 
