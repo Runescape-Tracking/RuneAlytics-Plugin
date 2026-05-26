@@ -1154,6 +1154,7 @@ public class RuneAlyticsPlugin extends Plugin
             SwingUtilities.invokeLater(() -> {
                 mainPanel.showLoggedOutState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
+                injector.getInstance(MatchmakingPanel.class).refreshLoginState();
             });
             return;
         }
@@ -1163,10 +1164,11 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGGED_IN)
         {
             state.setLoggedIn(true);
-            // Refresh verification + settings panels so code field enables on login
+            // Refresh verification + settings + matchmaking panels so UI enables on login
             SwingUtilities.invokeLater(() -> {
                 injector.getInstance(RuneAlyticsVerificationPanel.class).refreshLoginState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
+                injector.getInstance(MatchmakingPanel.class).refreshLoginState();
             });
 
             String username = client.getLocalPlayer() != null

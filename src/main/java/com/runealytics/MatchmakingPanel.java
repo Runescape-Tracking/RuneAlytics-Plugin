@@ -262,6 +262,7 @@ public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListene
 
         newMatchButton = new JButton("New Match");
         styleBtn(newMatchButton, new Color(35, 55, 35), new Color(55, 85, 55), GREEN);
+        newMatchButton.setVisible(false);
         newMatchButton.addActionListener(e -> onNewMatch());
 
         forfeitButton = new JButton("Forfeit");
@@ -313,6 +314,7 @@ public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListene
         playersSection.setVisible(false);
         winnerSection.setVisible(false);
         forfeitButton.setVisible(false);
+        newMatchButton.setVisible(false);
         matchCodeField.setText("");
         matchCodeField.setEnabled(true);
         loadButton.setEnabled(state.isLoggedIn() && state.isVerified());
@@ -357,6 +359,7 @@ public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListene
             playersSection.setVisible(true);
             forfeitButton.setVisible(active);
             forfeitButton.setEnabled(true);
+            newMatchButton.setVisible(done);
 
             if (done)
             {

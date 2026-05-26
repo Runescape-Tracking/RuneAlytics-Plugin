@@ -1055,7 +1055,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
             slot.add(layers, BorderLayout.CENTER);
             itemSlotMap.put(slotKey, iconLabel);
-            itemSlotMap.put(slotKey, iconLabel);
 
             JPopupMenu menu = new JPopupMenu();
             JMenuItem toggleHide = new JMenuItem(hidden ? "Un-ignore" : "Ignore");
