@@ -829,6 +829,16 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     public void updateLastSyncTime() { /* display removed */ }
 
+    /**
+     * Re-reads the current config values and rebuilds the verified view so the
+     * pill toggles reflect any changes made via the RuneLite config panel.
+     * No-op when the unverified view is shown (nothing to sync there).
+     */
+    public void refreshPrivacySettings()
+    {
+        if (state.isVerified()) rebuild();
+    }
+
     private void handleVerificationStatusChange()
     {
         SwingUtilities.invokeLater(this::rebuild);

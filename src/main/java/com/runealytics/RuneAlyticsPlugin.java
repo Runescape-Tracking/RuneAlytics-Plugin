@@ -1245,6 +1245,18 @@ public class RuneAlyticsPlugin extends Plugin
                 2_500, TimeUnit.MILLISECONDS);
     }
 
+    @Subscribe
+    public void onConfigChanged(net.runelite.client.config.ConfigChanged event)
+    {
+        if (!"runealytics".equals(event.getGroup())) return;
+        String key = event.getKey();
+        if ("bankPrivacy".equals(key) || "playerVisibility".equals(key))
+        {
+            SwingUtilities.invokeLater(() ->
+                    injector.getInstance(RuneAlyticsSettingsPanel.class).refreshPrivacySettings());
+        }
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     //  XP TRACKING
     // ═════════════════════════════════════════════════════════════════════════
