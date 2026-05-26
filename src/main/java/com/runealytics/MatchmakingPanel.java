@@ -9,621 +9,1015 @@ import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
 import java.awt.*;
+import java.awt.geom.RoundRectangle2D;
 
+/**
+ * Match Finder sidebar panel.
+ *
+ * <p>Phase-driven layout:</p>
+ * <ol>
+ *   <li><b>Idle</b> — code entry + Load Match button</li>
+ *   <li><b>Active</b> — Current Match card + Players card</li>
+ *   <li><b>Terminal</b> — result trophy card + New Match button</li>
+ * </ol>
+ */
 @Singleton
-public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListener
+public class MatchmakingPanel extends RuneAlyticsPanelBase implements MatchmakingUpdateListener
 {
-    private static Font cf(int style, float size) { return new Font("Calibri", style, Math.round(size)); }
+    // ── colour palette (consistent with RuneAlyticsUi) ──────────────────────
+    private static final Color BG           = ColorScheme.DARK_GRAY_COLOR;
+    private static final Color CARD_BG      = ColorScheme.DARKER_GRAY_COLOR;
+    private static final Color CARD_BORDER  = new Color(60, 60, 60, 200);
+    private static final Color COL_WHITE    = Color.WHITE;
+    private static final Color COL_MUTED    = new Color(170, 170, 170);
+    private static final Color COL_DIM      = new Color(120, 120, 120);
 
-    private static final Color TEAL  = new Color(82, 196, 196);
-    private static final Color GOLD  = new Color(215, 175, 55);
-    private static final Color GREEN = new Color(105, 220, 140);
-    private static final Color RED   = new Color(255, 110, 110);
-    private static final Color MUTED = new Color(200, 200, 200);
-    private static final Color DIM   = new Color(150, 150, 150);
+    private static final Color COL_GREEN    = new Color(72, 199, 116);
+    private static final Color COL_RED      = new Color(220, 80,  80);
+    private static final Color COL_BLUE     = new Color(13,  110, 253);
+    private static final Color COL_ORANGE   = ColorScheme.BRAND_ORANGE;
+    private static final Color COL_GRAY_TAG = new Color(80,  80,  80);
 
+    // status badge colours
+    private static final Color STATUS_PENDING   = new Color(200, 140,   0);
+    private static final Color STATUS_READY     = new Color( 50, 160,  90);
+    private static final Color STATUS_FIGHTING  = new Color(200,  55,  55);
+    private static final Color STATUS_COMPLETED = new Color( 30, 130, 200);
+    private static final Color STATUS_CANCELED  = new Color( 90,  90,  90);
+
+    // font helper (matches RuneAlyticsUi / RuneAlyticsSettingsPanel)
+    private static Font cf(int style, float size)
+    { return new Font("Calibri", style, Math.round(size)); }
+
+    // ── dependencies ─────────────────────────────────────────────────────────
     private final MatchmakingManager matchmakingManager;
     private final RuneAlyticsState   state;
 
-    // Load section
-    private JPanel     loadSection;
-    private JTextField matchCodeField;
-    private JButton    loadButton;
+    // ── entry-card widgets ────────────────────────────────────────────────────
+    private final JTextField codeInput     = RuneAlyticsUi.inputField();
+    private final JButton    loadButton    = buildBlueButton("Load Match");
+    private final JLabel     entryStatus   = new JLabel(" ");
 
-    // Status
-    private JLabel statusLabel;
+    // ── current-match-card widgets ────────────────────────────────────────────
+    private final JPanel  matchCard        = vertPanel();
+    private final JLabel  matchCodeVal     = infoValue("-");
+    private final JLabel  worldVal         = infoValue("-");
+    private final JLabel  locationVal      = infoValue("-");
+    private final JLabel  stakeVal         = infoValue("-");
+    private final JLabel  statusBadge      = new JLabel();
 
-    // Match details
-    private JPanel matchSection;
-    private JLabel codeVal, worldVal, zoneVal, riskVal, rulesVal, statusVal;
+    // ── players-card widgets ──────────────────────────────────────────────────
+    private final JPanel  playersCard      = vertPanel();
+    private AvatarLabel   p1Avatar;
+    private AvatarLabel   p2Avatar;
+    private final JLabel  p1Name           = playerName("-");
+    private final JLabel  p2Name           = playerName("-");
+    private final JLabel  p1Tag            = playerTag("You");
+    private final JLabel  p2Tag            = playerTag("Opponent");
+    private final JLabel  p1Status         = readyLabel();
+    private final JLabel  p2Status         = readyLabel();
 
-    // Players
-    private JPanel playersSection;
-    private JLabel p1Label, p2Label, p1ReadyLabel, p2ReadyLabel;
+    // ── validation badge per player ───────────────────────────────────────────
+    // Shows server-computed compliance state (risk, gear rules).  Colour-coded:
+    //   green ✓  — fully compliant
+    //   yellow ⚠ — warnings only (honor rules)
+    //   red ✗    — one or more errors (e.g. insufficient risk)
+    // The text comes directly from the server so the plugin has zero rule logic.
+    private final JLabel  p1Validation     = validationLabel();
+    private final JLabel  p2Validation     = validationLabel();
 
-    // Winner
-    private JPanel winnerSection;
-    private JLabel winnerLabel, eloLabel;
+    // ── result-card widgets ───────────────────────────────────────────────────
+    private final JPanel  resultCard       = vertPanel();
+    private final JLabel  resultName       = new JLabel();
+    private final JLabel  resultElo        = new JLabel();
 
-    // Actions
-    private JButton newMatchButton;
-    private JButton forfeitButton;
+    // ── gear-rules strip ─────────────────────────────────────────────────────
+    private final JPanel  rulesStrip       = new JPanel(
+            new WrapLayout(FlowLayout.LEFT, 4, 3));
 
-    // W/L record
-    private JLabel recordLabel;
+    private final JButton newMatchButton   = buildSecondaryButton("New Match");
 
     private boolean loading;
-    private String  lastCompletedMatchCode;
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Constructor
+    // ═════════════════════════════════════════════════════════════════════════
 
     @Inject
-    public MatchmakingPanel(MatchmakingManager matchmakingManager, RuneAlyticsState state)
+    public MatchmakingPanel(MatchmakingManager matchmakingManager,
+                            RuneAlyticsState   state)
     {
         this.matchmakingManager = matchmakingManager;
         this.state              = state;
 
         matchmakingManager.setListener(this);
-
-        setLayout(new BorderLayout());
-        setBackground(ColorScheme.DARK_GRAY_COLOR);
-        setOpaque(true);
-
-        add(buildScrollPane(), BorderLayout.CENTER);
-
+        buildUi();
+        wireEvents();
         refreshLoginState();
     }
 
-    private JScrollPane buildScrollPane()
+    // ═════════════════════════════════════════════════════════════════════════
+    //  UI construction
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void buildUi()
     {
-        JScrollPane scroll = new JScrollPane(buildContent());
-        scroll.setBorder(null);
-        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
-        scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        scroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
-        scroll.getVerticalScrollBar().setUnitIncrement(16);
-        scroll.getViewport().setBackground(ColorScheme.DARK_GRAY_COLOR);
-        scroll.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        return scroll;
+        // Use inline title/subtitle so we can control the gap tightly —
+        // addSectionTitle/addSubtitle add generous spacing suited for taller panels.
+        JLabel title = RuneAlyticsUi.titleLabel("Match Finder");
+        add(title);
+        add(RuneAlyticsUi.vSpace(2));
+        JLabel subtitle = RuneAlyticsUi.subtitleLabel("PvP Match Tracker");
+        add(subtitle);
+        add(RuneAlyticsUi.vSpace(6));
+
+        add(buildLoadCard());
+        add(RuneAlyticsUi.vSpace(5));
+        add(buildMatchCard());
+        add(RuneAlyticsUi.vSpace(5));
+        add(buildPlayersCard());
+        add(RuneAlyticsUi.vSpace(5));
+        add(buildResultCard());
+        add(RuneAlyticsUi.vSpace(5));
+        add(newMatchButton);
+        add(Box.createVerticalGlue());
+
+        hideActiveCards();
     }
 
-    private JPanel buildContent()
+    // ── Load card ─────────────────────────────────────────────────────────────
+
+    private JPanel buildLoadCard()
     {
-        JPanel root = new JPanel();
-        root.setLayout(new BoxLayout(root, BoxLayout.Y_AXIS));
-        root.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        root.setOpaque(true);
-        root.setBorder(new EmptyBorder(10, 12, 10, 12));
+        JPanel body = vertPanel();
 
-        // ── Header ──────────────────────────────────────────────────────────────
-        JLabel title = new JLabel("Matches");
-        title.setFont(cf(Font.BOLD, 17f));
-        title.setForeground(Color.WHITE);
-        title.setAlignmentX(Component.LEFT_ALIGNMENT);
-        root.add(title);
+        JLabel desc = new JLabel("Enter a match code from runeanalytics.com/pvp");
+        desc.setFont(cf(Font.PLAIN, 11f));
+        desc.setForeground(COL_MUTED);
+        desc.setAlignmentX(LEFT_ALIGNMENT);
 
-        JLabel subtitle = new JLabel("PvP Match Tracker");
-        subtitle.setFont(cf(Font.PLAIN, 12f));
-        subtitle.setForeground(MUTED);
-        subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
-        root.add(subtitle);
+        codeInput.setFont(cf(Font.PLAIN, 13f));
+        codeInput.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        codeInput.setAlignmentX(LEFT_ALIGNMENT);
 
-        root.add(vSpace(4));
+        loadButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        loadButton.setAlignmentX(LEFT_ALIGNMENT);
 
-        recordLabel = new JLabel(buildRecordText());
-        recordLabel.setFont(cf(Font.BOLD, 12f));
-        recordLabel.setForeground(GOLD);
-        recordLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        root.add(recordLabel);
+        entryStatus.setFont(cf(Font.PLAIN, 11f));
+        entryStatus.setForeground(COL_MUTED);
+        entryStatus.setAlignmentX(LEFT_ALIGNMENT);
 
-        root.add(vSpace(10));
+        body.add(desc);
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(codeInput);
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(loadButton);
+        body.add(RuneAlyticsUi.vSpace(3));
+        body.add(entryStatus);
 
-        // ── Status ──────────────────────────────────────────────────────────────
-        statusLabel = new JLabel(" ");
-        statusLabel.setFont(cf(Font.PLAIN, 11f));
-        statusLabel.setForeground(MUTED);
-        statusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        root.add(statusLabel);
-        root.add(vSpace(4));
-
-        // ── Load section ─────────────────────────────────────────────────────────
-        loadSection = buildLoadSection();
-        root.add(loadSection);
-        root.add(vSpace(8));
-
-        // ── Match details ────────────────────────────────────────────────────────
-        matchSection = buildMatchSection();
-        root.add(matchSection);
-        root.add(vSpace(6));
-
-        // ── Players ──────────────────────────────────────────────────────────────
-        playersSection = buildPlayersSection();
-        root.add(playersSection);
-        root.add(vSpace(6));
-
-        // ── Winner ───────────────────────────────────────────────────────────────
-        winnerSection = buildWinnerSection();
-        root.add(winnerSection);
-        root.add(vSpace(10));
-
-        // ── Actions ──────────────────────────────────────────────────────────────
-        root.add(buildActionsSection());
-        root.add(vSpace(8));
-
-        root.add(Box.createVerticalGlue());
-        return root;
+        return sectionCard("⊟", "Load Match", body);
     }
 
-    private JPanel buildLoadSection()
+    // ── Current Match card ────────────────────────────────────────────────────
+
+    private JPanel buildMatchCard()
     {
-        JPanel card = sectionCard();
+        JPanel body = vertPanel();
 
-        JLabel label = new JLabel("Match Code");
-        label.setFont(cf(Font.BOLD, 11f));
-        label.setForeground(DIM);
-        label.setAlignmentX(Component.LEFT_ALIGNMENT);
-        card.add(label);
-        card.add(vSpace(4));
+        body.add(infoRow("#",   "Match Code", matchCodeVal));
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(infoRow("⊕",  "World",      worldVal));
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(infoRow("◉",  "Location",   locationVal));
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(infoRow("◎",  "Stake",      stakeVal));
+        body.add(RuneAlyticsUi.vSpace(5));
 
-        matchCodeField = RuneAlyticsUi.inputField();
-        matchCodeField.setAlignmentX(Component.LEFT_ALIGNMENT);
-        matchCodeField.addActionListener(e -> submitMatchCode());
-        card.add(matchCodeField);
-        card.add(vSpace(6));
+        // gear rules strip
+        rulesStrip.setOpaque(false);
+        rulesStrip.setAlignmentX(LEFT_ALIGNMENT);
+        body.add(rulesStrip);
+        body.add(RuneAlyticsUi.vSpace(6));
 
-        loadButton = new JButton("Load Match");
-        styleBtn(loadButton, new Color(40, 80, 120), new Color(60, 110, 160), Color.WHITE);
-        loadButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
-        loadButton.addActionListener(e -> submitMatchCode());
-        card.add(loadButton);
+        // status badge row
+        styleStatusBadge(statusBadge, "Pending", STATUS_PENDING);
+        statusBadge.setAlignmentX(LEFT_ALIGNMENT);
+        body.add(statusBadge);
 
-        return card;
+        matchCard.add(sectionCard("⛨", "Current Match", body));
+        return matchCard;
     }
 
-    private JPanel buildMatchSection()
+    // ── Players card ──────────────────────────────────────────────────────────
+
+    private JPanel buildPlayersCard()
     {
-        JPanel card = sectionCard();
+        p1Avatar = new AvatarLabel("?");
+        p2Avatar = new AvatarLabel("?");
 
-        JLabel header = sectionTag("MATCH DETAILS");
-        card.add(header);
-        card.add(vSpace(6));
+        JPanel body = vertPanel();
+        body.add(buildPlayerRow(p1Avatar, p1Name, p1Tag, p1Status, p1Validation));
+        body.add(RuneAlyticsUi.vSpace(4));
+        body.add(buildPlayerRow(p2Avatar, p2Name, p2Tag, p2Status, p2Validation));
 
-        codeVal   = valLabel("—");
-        worldVal  = valLabel("—");
-        zoneVal   = valLabel("—");
-        riskVal   = valLabel("—");
-        rulesVal  = valLabel("—");
-        statusVal = valLabel("—");
-
-        card.add(kvRow("Code",   codeVal));
-        card.add(vSpace(2));
-        card.add(kvRow("World",  worldVal));
-        card.add(vSpace(2));
-        card.add(kvRow("Zone",   zoneVal));
-        card.add(vSpace(2));
-        card.add(kvRow("Risk",   riskVal));
-        card.add(vSpace(2));
-        card.add(kvRow("Status", statusVal));
-        card.add(vSpace(6));
-        card.add(rulesRow());
-
-        card.setVisible(false);
-        return card;
+        playersCard.add(sectionCard("⚐", "Players", body));
+        return playersCard;
     }
 
-    private JPanel buildPlayersSection()
+    private JPanel buildPlayerRow(AvatarLabel avatar, JLabel name, JLabel tag,
+                                  JLabel status, JLabel validation)
     {
-        JPanel card = sectionCard();
+        // Top sub-row: avatar | name + tag | status
+        // The status label now sits to the RIGHT of the name/tag block on the
+        // same line, so it does NOT steal horizontal space from the validation
+        // label.  Previously the validation lived inside the constrained centre
+        // column and was clipped by the EAST status panel.
+        JPanel topRow = new JPanel(new BorderLayout(8, 0));
+        topRow.setOpaque(false);
+        topRow.setAlignmentX(LEFT_ALIGNMENT);
 
-        card.add(sectionTag("PLAYERS"));
-        card.add(vSpace(6));
+        topRow.add(avatar, BorderLayout.WEST);
 
-        p1Label      = playerLabel("—");
-        p2Label      = playerLabel("—");
-        p1ReadyLabel = stateLabel("Waiting");
-        p2ReadyLabel = stateLabel("Waiting");
+        JPanel nameBlock = vertPanel();
+        nameBlock.setAlignmentY(Component.CENTER_ALIGNMENT);
+        name.setAlignmentX(LEFT_ALIGNMENT);
+        tag.setAlignmentX(LEFT_ALIGNMENT);
+        nameBlock.add(name);
+        nameBlock.add(RuneAlyticsUi.vSpace(1));
+        nameBlock.add(tag);
+        topRow.add(nameBlock, BorderLayout.CENTER);
 
-        card.add(playerRow(p1Label, p1ReadyLabel));
-        card.add(vSpace(3));
-        card.add(playerRow(p2Label, p2ReadyLabel));
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        right.setOpaque(false);
+        right.add(status);
+        topRow.add(right, BorderLayout.EAST);
 
-        card.setVisible(false);
-        return card;
+        // Validation label spans the full row width below the top sub-row so
+        // it is never truncated by the status label on the right.
+        validation.setAlignmentX(LEFT_ALIGNMENT);
+
+        JPanel wrapper = vertPanel();
+        wrapper.setAlignmentX(LEFT_ALIGNMENT);
+        wrapper.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
+        wrapper.add(topRow);
+        wrapper.add(RuneAlyticsUi.vSpace(3));
+        wrapper.add(validation);
+
+        return wrapper;
     }
 
-    private JPanel buildWinnerSection()
+    // ── Result card ───────────────────────────────────────────────────────────
+
+    private JPanel buildResultCard()
     {
-        JPanel card = sectionCard();
-        card.setBackground(new Color(25, 45, 25));
+        JPanel body = vertPanel();
 
-        card.add(sectionTag("RESULT"));
-        card.add(vSpace(4));
+        // large trophy circle
+        JPanel trophyRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        trophyRow.setOpaque(false);
+        trophyRow.setAlignmentX(LEFT_ALIGNMENT);
 
-        winnerLabel = new JLabel("—");
-        winnerLabel.setFont(cf(Font.BOLD, 14f));
-        winnerLabel.setForeground(GREEN);
-        winnerLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        card.add(winnerLabel);
+        TrophyIcon trophy = new TrophyIcon();
+        trophyRow.add(trophy);
+        trophyRow.add(RuneAlyticsUi.hSpace(8));
 
-        eloLabel = new JLabel(" ");
-        eloLabel.setFont(cf(Font.PLAIN, 11f));
-        eloLabel.setForeground(MUTED);
-        eloLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        card.add(eloLabel);
+        JPanel textCol = vertPanel();
+        resultName.setFont(cf(Font.BOLD, 14f));
+        resultName.setForeground(COL_GREEN);
+        resultName.setAlignmentX(LEFT_ALIGNMENT);
+        resultElo.setFont(cf(Font.PLAIN, 11f));
+        resultElo.setForeground(COL_MUTED);
+        resultElo.setAlignmentX(LEFT_ALIGNMENT);
+        textCol.add(resultName);
+        textCol.add(RuneAlyticsUi.vSpace(2));
+        textCol.add(resultElo);
 
-        card.setVisible(false);
-        return card;
+        trophyRow.add(textCol);
+        body.add(trophyRow);
+
+        resultCard.add(sectionCard("", "", body));
+        return resultCard;
     }
 
-    private JPanel buildActionsSection()
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Event wiring
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void wireEvents()
     {
-        JPanel row = new JPanel();
-        row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
-        row.setOpaque(false);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        newMatchButton = new JButton("New Match");
-        styleBtn(newMatchButton, new Color(35, 55, 35), new Color(55, 85, 55), GREEN);
-        newMatchButton.setVisible(false);
-        newMatchButton.addActionListener(e -> onNewMatch());
-
-        forfeitButton = new JButton("Forfeit");
-        styleBtn(forfeitButton, new Color(60, 28, 28), new Color(90, 42, 42), RED);
-        forfeitButton.setVisible(false);
-        forfeitButton.addActionListener(e -> onForfeit());
-
-        row.add(newMatchButton);
-        row.add(hSpace(6));
-        row.add(forfeitButton);
-        row.add(Box.createHorizontalGlue());
-        return row;
+        loadButton.addActionListener(e  -> submitMatchCode());
+        codeInput.addActionListener(e   -> submitMatchCode());
+        newMatchButton.addActionListener(e -> resetToIdle());
     }
 
-    // ── Event handlers ─────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Login state (called by plugin on every login / logout)
+    // ═════════════════════════════════════════════════════════════════════════
 
-    private void submitMatchCode()
+    public void refreshLoginState()
+    {
+        SwingUtilities.invokeLater(this::updateEntryCard);
+    }
+
+    private void updateEntryCard()
     {
         if (!state.isLoggedIn())
         {
-            setStatus("Log into RuneScape to load a match.", false);
+            setEntryEnabled(false);
+            setEntryStatus("Log in to RuneLite to use Match Finder.", COL_DIM);
             return;
         }
         if (!state.isVerified())
         {
-            setStatus("Verify your account before loading a match.", false);
+            setEntryEnabled(false);
+            setEntryStatus("Verify your account on the Settings tab first.", COL_DIM);
+            return;
+        }
+        if (loading)
+        {
+            setEntryEnabled(false);
+            setEntryStatus("Loading match…", COL_ORANGE);
+            return;
+        }
+        if (matchmakingManager.hasActiveMatch())
+        {
+            setEntryEnabled(false);
+            setEntryStatus("Match active — see below.", COL_GREEN);
             return;
         }
 
-        String code = matchCodeField.getText().trim();
+        setEntryEnabled(true);
+        setEntryStatus("Ready.", COL_DIM);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Submit / reset
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void submitMatchCode()
+    {
+        if (!state.isLoggedIn() || !state.isVerified())
+        {
+            updateEntryCard();
+            return;
+        }
+
+        String code = codeInput.getText().trim();
         if (code.isEmpty())
         {
-            setStatus("Enter a match code.", false);
+            setEntryStatus("Please enter a match code.", COL_RED);
             return;
         }
 
         loading = true;
-        setStatus("Loading match...", null);
-        loadButton.setEnabled(false);
-        matchCodeField.setEnabled(false);
+        hideActiveCards();
+        updateEntryCard();
         matchmakingManager.loadMatch(code);
     }
 
-    private void onNewMatch()
+    private void resetToIdle()
     {
         matchmakingManager.reset();
-        loadSection.setVisible(true);
-        matchSection.setVisible(false);
-        playersSection.setVisible(false);
-        winnerSection.setVisible(false);
-        forfeitButton.setVisible(false);
-        newMatchButton.setVisible(false);
-        matchCodeField.setText("");
-        matchCodeField.setEnabled(true);
-        loadButton.setEnabled(state.isLoggedIn() && state.isVerified());
-        setStatus(" ", null);
-        revalidate();
-        repaint();
+        hideActiveCards();
+        codeInput.setText("");
+        loading = false;
+        updateEntryCard();
     }
 
-    private void onForfeit()
-    {
-        int choice = JOptionPane.showConfirmDialog(
-                SwingUtilities.getWindowAncestor(this),
-                "Are you sure you want to forfeit?\nThis gives your opponent the win.",
-                "Forfeit Match",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.WARNING_MESSAGE);
-
-        if (choice == JOptionPane.YES_OPTION)
-        {
-            forfeitButton.setEnabled(false);
-            matchmakingManager.forfeitMatch();
-        }
-    }
+    // ═════════════════════════════════════════════════════════════════════════
+    //  MatchmakingUpdateListener
+    // ═════════════════════════════════════════════════════════════════════════
 
     @Override
     public void onMatchmakingUpdate(MatchmakingUpdate update)
     {
         loading = false;
-        loadButton.setEnabled(state.isLoggedIn() && state.isVerified());
-        matchCodeField.setEnabled(state.isLoggedIn() && state.isVerified());
 
-        if (update.isSuccess() && update.getSession() != null)
-        {
-            MatchmakingSession session = update.getSession();
-            boolean active = isActiveMatch(session);
-            boolean done   = isCompletedOrCanceled(session);
-
-            updateMatchDetails(session);
-
-            loadSection.setVisible(!active);
-            matchSection.setVisible(true);
-            playersSection.setVisible(true);
-            forfeitButton.setVisible(active);
-            forfeitButton.setEnabled(true);
-            newMatchButton.setVisible(done);
-
-            if (done)
-            {
-                updateWinnerSection(session);
-                winnerSection.setVisible(true);
-                forfeitButton.setVisible(false);
-                trackMatchResult(session);
-            }
-            else
-            {
-                winnerSection.setVisible(false);
-            }
-
-            setStatus("Status: " + session.getStatus(), true);
-        }
-        else if (!update.isSuccess())
+        if (!update.isSuccess() || update.getSession() == null)
         {
             String msg = update.getMessage();
-            setStatus(msg != null && !msg.isEmpty() ? msg : "Request failed.", false);
+            if (msg == null) msg = "";
+
+            // If a match is already active, a transient poll or background-call
+            // failure should be shown in the entry status bar but MUST NOT hide
+            // the active match cards — that would make the whole UI disappear on
+            // every blip (the root cause of the "death not reported" UX problem).
+            if (matchmakingManager.hasActiveMatch())
+            {
+                if (!msg.isEmpty())
+                {
+                    setEntryStatus(msg, COL_RED);
+                }
+                return;
+            }
+
+            // No active match — this is an explicit load failure; reset to idle.
+            // updateEntryCard() is called first so it restores the enabled state
+            // and sets "Ready." — then we immediately override the status label
+            // with the actual error so it is the last thing written and stays visible.
+            hideActiveCards();
+            updateEntryCard();
+            setEntryStatus(msg.isEmpty() ? "Failed to load match." : msg, COL_RED);
+            return;
         }
-        // success with no session = silent ack (e.g. acceptMatch returns "true")
+
+        applySession(update.getSession());
+        updateEntryCard();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Session rendering
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void applySession(MatchmakingSession s)
+    {
+        // ── match info card ──────────────────────────────────────────────────
+        matchCodeVal.setText(s.getMatchCode() != null ? s.getMatchCode() : "-");
+        worldVal.setText(s.getWorld() > 0 ? String.valueOf(s.getWorld()) : "-");
+        locationVal.setText(s.getZone() != null && !s.getZone().isEmpty() ? s.getZone() : "-");
+        stakeVal.setText(formatRisk(s.getRisk()));
+
+        // gear rules pills
+        rulesStrip.removeAll();
+        String rules = s.getGearRules();
+        if (rules != null && !rules.isEmpty())
+        {
+            // gear_rules arrives as a JSON array string like ["No Overheads","DDS Only"]
+            // Strip brackets/quotes and split
+            rules = rules.replaceAll("[\\[\\]\"]", "");
+            for (String rule : rules.split(","))
+            {
+                rule = rule.trim();
+                if (!rule.isEmpty())
+                    rulesStrip.add(rulePill(rule));
+            }
+        }
+        rulesStrip.revalidate();
+        rulesStrip.repaint();
+
+        String status = s.getStatus() != null ? s.getStatus() : "Unknown";
+        applyStatus(statusBadge, status);
+
+        // ── players card ─────────────────────────────────────────────────────
+        String localRsn = s.getLocalRsn();
+        boolean localIsP1 = s.getPlayer1Username() != null
+                && s.getPlayer1Username().equalsIgnoreCase(localRsn);
+
+        String myName   = localIsP1 ? s.getPlayer1Username() : s.getPlayer2Username();
+        String oppName  = localIsP1 ? s.getPlayer2Username() : s.getPlayer1Username();
+        boolean myJoined  = localIsP1 ? s.isPlayer1Joined()          : s.isPlayer2Joined();
+        boolean oppJoined = localIsP1 ? s.isPlayer2Joined()          : s.isPlayer1Joined();
+        boolean myReady   = localIsP1 ? s.isPlayer1ReadyToFight()    : s.isPlayer2ReadyToFight();
+        boolean oppReady  = localIsP1 ? s.isPlayer2ReadyToFight()    : s.isPlayer1ReadyToFight();
+
+        String p1n = myName  != null && !myName.isEmpty()  ? myName  : "—";
+        String p2n = oppName != null && !oppName.isEmpty() ? oppName : "—";
+
+        p1Name.setText(p1n);
+        p2Name.setText(p2n);
+        p1Avatar.setInitial(p1n.charAt(0));
+        p2Avatar.setInitial(p2n.charAt(0));
+
+        applyPlayerStatus(p1Status, myJoined,  myReady,  status);
+        applyPlayerStatus(p2Status, oppJoined, oppReady, status);
+
+        // ── validation badges (server-driven — zero rule logic here) ─────────
+        MatchmakingSession.PlayerValidation myVal  = localIsP1
+                ? s.getPlayer1Validation() : s.getPlayer2Validation();
+        MatchmakingSession.PlayerValidation oppVal = localIsP1
+                ? s.getPlayer2Validation() : s.getPlayer1Validation();
+        applyValidation(p1Validation, myVal);
+        applyValidation(p2Validation, oppVal);
+
+        // ── result card ──────────────────────────────────────────────────────
+        boolean terminal = status.equalsIgnoreCase("Completed")
+                || status.equalsIgnoreCase("Canceled");
+
+        if (terminal && s.getWinner() != null
+                && s.getWinner().getOsrsRsn() != null
+                && !s.getWinner().getOsrsRsn().isEmpty())
+        {
+            resultName.setText(s.getWinner().getOsrsRsn() + " wins!");
+            resultName.setForeground(COL_GREEN);
+            int elo = s.getWinner().getElo();
+            resultElo.setText(elo > 0 ? "ELO: " + elo : "");
+            resultCard.setVisible(true);
+        }
+        else if (status.equalsIgnoreCase("Canceled"))
+        {
+            resultName.setText("Match canceled");
+            resultName.setForeground(COL_MUTED);
+            resultElo.setText("");
+            resultCard.setVisible(true);
+        }
+        else
+        {
+            resultCard.setVisible(false);
+        }
+
+        newMatchButton.setVisible(terminal);
+        matchCard.setVisible(true);
+        playersCard.setVisible(true);
 
         revalidate();
         repaint();
     }
 
-    private void updateMatchDetails(MatchmakingSession session)
+    private void applyStatus(JLabel badge, String status)
     {
-        codeVal.setText(session.getMatchCode() != null ? session.getMatchCode() : "—");
-        worldVal.setText(String.valueOf(session.getWorld()));
-        zoneVal.setText(session.getZone() != null ? session.getZone() : "—");
-        riskVal.setText(session.getRisk() != null ? session.getRisk() : "—");
-        String rules = session.getGearRules();
-        if (rules != null && !rules.isEmpty())
-            rulesVal.setText("<html><body style='width:145px; margin:0; padding:0'>" + rules + "</body></html>");
-        else
-            rulesVal.setText("—");
-        statusVal.setText(session.getStatus() != null ? session.getStatus() : "—");
-
-        String localRsn = session.getLocalRsn();
-        String p1 = session.getPlayer1Username();
-        String p2 = session.getPlayer2Username();
-
-        boolean p1Local = localRsn != null && localRsn.equalsIgnoreCase(p1);
-        boolean p2Local = localRsn != null && localRsn.equalsIgnoreCase(p2);
-
-        p1Label.setText(p1 != null ? (p1Local ? p1 + " (You)" : p1) : "—");
-        p2Label.setText(p2 != null ? (p2Local ? p2 + " (You)" : p2) : "—");
-
-        applyReadyLabel(p1ReadyLabel, session.isPlayer1ReadyToFight(), session.isPlayer1Joined());
-        applyReadyLabel(p2ReadyLabel, session.isPlayer2ReadyToFight(), session.isPlayer2Joined());
+        Color bg;
+        String icon;
+        switch (status.toLowerCase())
+        {
+            case "pending":   bg = STATUS_PENDING;   icon = "●"; break;
+            case "ready":     bg = STATUS_READY;     icon = "↗"; break;
+            case "fighting":  bg = STATUS_FIGHTING;  icon = "⚔"; break;
+            case "completed": bg = STATUS_COMPLETED; icon = "✓"; break;
+            case "canceled":  bg = STATUS_CANCELED;  icon = "✕"; break;
+            default:          bg = STATUS_CANCELED;  icon = "?"; break;
+        }
+        styleStatusBadge(badge, icon + "  " + capitalize(status), bg);
     }
 
-    private void updateWinnerSection(MatchmakingSession session)
+    /**
+     * Updates the validation label for one player from the server's compliance
+     * result.  The plugin contains zero rule logic — it simply renders what
+     * the server returns.
+     *
+     * <ul>
+     *   <li>Green  ✓  — no issues (or only warnings)  → valid</li>
+     *   <li>Yellow ⚠  — warnings only (honor rules)    → technically valid</li>
+     *   <li>Red    ✗  — one or more errors             → invalid</li>
+     * </ul>
+     */
+    private void applyValidation(JLabel lbl, MatchmakingSession.PlayerValidation validation)
     {
-        MatchmakingWinner winner = session.getWinner();
-        if (winner != null && winner.getOsrsRsn() != null && !winner.getOsrsRsn().isEmpty())
+        if (validation == null || validation == MatchmakingSession.VALIDATION_UNKNOWN)
         {
-            String localRsn = session.getLocalRsn();
-            boolean localWon = localRsn != null && localRsn.equalsIgnoreCase(winner.getOsrsRsn());
-            winnerLabel.setText(localWon ? "You Won!" : "Winner: " + winner.getOsrsRsn());
-            winnerLabel.setForeground(localWon ? GREEN : RED);
-            eloLabel.setText("ELO: " + winner.getElo());
+            lbl.setText("");
+            return;
+        }
+
+        // ── Violation grace countdown — shown with high-urgency orange ────────
+        // The server injects a "violation_grace" issue at the front of the list
+        // when a countdown is active.  We render it before other error checks so
+        // it's always the most prominent message while the timer is running.
+        MatchmakingSession.ValidationIssue graceIssue =
+                validation.firstIssueByCode("violation_grace");
+        if (graceIssue != null)
+        {
+            lbl.setText("<html><div width=\"220\">\u23F1 " + escapeHtml(graceIssue.getMessage()) + "</div></html>");
+            lbl.setForeground(new Color(230, 120, 0)); // orange
+            return;
+        }
+
+        String firstError   = validation.firstErrorMessage();
+        String firstWarning = validation.firstWarningMessage();
+
+        // Validation now sits below the player row (full-panel width) so we
+        // can use a wider div — 220px fits the standard plugin panel width.
+        if (firstError != null)
+        {
+            lbl.setText("<html><div width=\"220\">\u2717 " + escapeHtml(firstError) + "</div></html>");
+            lbl.setForeground(COL_RED);
+        }
+        else if (firstWarning != null)
+        {
+            lbl.setText("<html><div width=\"220\">\u26A0 " + escapeHtml(firstWarning) + "</div></html>");
+            lbl.setForeground(new Color(230, 180, 40));
         }
         else
         {
-            winnerLabel.setText("Match " + session.getStatus());
-            winnerLabel.setForeground(MUTED);
-            eloLabel.setText(" ");
+            lbl.setText("\u2713 Rules met");
+            lbl.setForeground(COL_GREEN);
         }
     }
 
-    private void trackMatchResult(MatchmakingSession session)
+    private static String escapeHtml(String s)
     {
-        if (session.getMatchCode() == null) return;
-        if (session.getMatchCode().equals(lastCompletedMatchCode)) return;
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
 
-        MatchmakingWinner winner = session.getWinner();
-        if (winner == null || winner.getOsrsRsn() == null) return;
-
-        String localRsn = session.getLocalRsn();
-        if (localRsn == null) return;
-
-        lastCompletedMatchCode = session.getMatchCode();
-
-        if (localRsn.equalsIgnoreCase(winner.getOsrsRsn()))
-            state.setMatchWins(state.getMatchWins() + 1);
+    private void applyPlayerStatus(JLabel lbl, boolean joined, boolean ready, String matchStatus)
+    {
+        if (matchStatus.equalsIgnoreCase("Fighting")
+                || matchStatus.equalsIgnoreCase("Completed")
+                || matchStatus.equalsIgnoreCase("Canceled"))
+        {
+            lbl.setText("● Ready");
+            lbl.setForeground(COL_GREEN);
+            return;
+        }
+        if (ready)
+        {
+            lbl.setText("● Ready");
+            lbl.setForeground(COL_GREEN);
+        }
+        else if (joined)
+        {
+            lbl.setText("● Joined");
+            lbl.setForeground(COL_ORANGE);
+        }
         else
-            state.setMatchLosses(state.getMatchLosses() + 1);
-
-        recordLabel.setText(buildRecordText());
+        {
+            lbl.setText("○ Waiting");
+            lbl.setForeground(COL_DIM);
+        }
     }
 
-    private String buildRecordText()
+    private void hideActiveCards()
     {
-        return state.getMatchWins() + "W  —  " + state.getMatchLosses() + "L";
+        matchCard.setVisible(false);
+        playersCard.setVisible(false);
+        resultCard.setVisible(false);
+        newMatchButton.setVisible(false);
     }
 
-    // ── Public API ─────────────────────────────────────────────────────────────
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Builder helpers
+    // ═════════════════════════════════════════════════════════════════════════
 
-    public void refreshLoginState()
+    /**
+     * Wraps content in a card panel with an icon + title section header,
+     * consistent with the RuneAlyticsSettingsPanel step-card style.
+     */
+    private JPanel sectionCard(String icon, String title, JPanel body)
     {
-        if (loadButton == null) return;
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBackground(CARD_BG);
+        card.setOpaque(true);
+        card.setAlignmentX(LEFT_ALIGNMENT);
+        card.setBorder(new CompoundBorder(
+                new LineBorder(CARD_BORDER, 1, true),
+                new EmptyBorder(8, 10, 8, 10)));
 
-        boolean canLoad = state.isLoggedIn() && state.isVerified() && !loading;
-        loadButton.setEnabled(canLoad);
-        if (matchCodeField != null) matchCodeField.setEnabled(canLoad);
+        if (!title.isEmpty())
+        {
+            JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+            header.setOpaque(false);
+            header.setAlignmentX(LEFT_ALIGNMENT);
 
-        if (!state.isLoggedIn())
-            setStatus("Log into RuneScape to use Match Finder.", false);
-        else if (!state.isVerified())
-            setStatus("Verify your account to use Match Finder.", false);
-        else if (!matchmakingManager.hasActiveMatch())
-            setStatus(" ", null);
+            if (!icon.isEmpty())
+            {
+                JLabel iconLbl = new JLabel(icon);
+                iconLbl.setFont(cf(Font.BOLD, 13f));
+                iconLbl.setForeground(COL_MUTED);
+                header.add(iconLbl);
+                header.add(RuneAlyticsUi.hSpace(6));
+            }
+
+            JLabel titleLbl = new JLabel(title);
+            titleLbl.setFont(cf(Font.BOLD, 13f));
+            titleLbl.setForeground(COL_WHITE);
+            header.add(titleLbl);
+
+            card.add(header);
+            card.add(RuneAlyticsUi.vSpace(6));
+        }
+
+        card.add(body);
+        return card;
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
-
-    private boolean isActiveMatch(MatchmakingSession session)
+    private JPanel infoRow(String icon, String label, JLabel value)
     {
-        if (session == null) return false;
-        String s = session.getStatus();
-        return s != null && !s.equalsIgnoreCase("Completed") && !s.equalsIgnoreCase("Canceled");
+        JPanel row = new JPanel(new BorderLayout(6, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        left.setOpaque(false);
+
+        JLabel iconLbl = new JLabel(icon);
+        iconLbl.setFont(cf(Font.PLAIN, 11f));
+        iconLbl.setForeground(COL_DIM);
+        iconLbl.setPreferredSize(new Dimension(14, 16));
+
+        JLabel keyLbl = new JLabel(label);
+        keyLbl.setFont(cf(Font.PLAIN, 12f));
+        keyLbl.setForeground(COL_MUTED);
+
+        left.add(iconLbl);
+        left.add(RuneAlyticsUi.hSpace(4));
+        left.add(keyLbl);
+
+        row.add(left, BorderLayout.WEST);
+        row.add(value, BorderLayout.EAST);
+        return row;
     }
 
-    private boolean isCompletedOrCanceled(MatchmakingSession session)
+    // ── static factory helpers ────────────────────────────────────────────────
+
+    private static JLabel validationLabel()
     {
-        if (session == null) return false;
-        String s = session.getStatus();
-        return "Completed".equalsIgnoreCase(s) || "Canceled".equalsIgnoreCase(s);
+        JLabel lbl = new JLabel("");
+        lbl.setFont(cf(Font.PLAIN, 10f));
+        lbl.setForeground(COL_DIM);
+        return lbl;
     }
 
-    private void setStatus(String msg, Boolean positive)
-    {
-        if (statusLabel == null) return;
-        statusLabel.setText(msg != null && !msg.isEmpty() ? msg : " ");
-        if (positive == null)        statusLabel.setForeground(MUTED);
-        else if (positive)           statusLabel.setForeground(GREEN);
-        else                         statusLabel.setForeground(RED);
-    }
-
-    private void applyReadyLabel(JLabel lbl, boolean ready, boolean joined)
-    {
-        if (ready)         { lbl.setText("Ready");  lbl.setForeground(GREEN); }
-        else if (joined)   { lbl.setText("Joined");  lbl.setForeground(TEAL); }
-        else               { lbl.setText("Waiting"); lbl.setForeground(DIM);  }
-    }
-
-    // ── Layout builders ────────────────────────────────────────────────────────
-
-    private JPanel sectionCard()
+    private static JPanel vertPanel()
     {
         JPanel p = new JPanel();
         p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
-        p.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        p.setOpaque(true);
-        p.setBorder(new CompoundBorder(
-                new LineBorder(new Color(60, 60, 60, 180), 1, true),
-                new EmptyBorder(8, 10, 8, 10)));
+        p.setOpaque(false);
         p.setAlignmentX(Component.LEFT_ALIGNMENT);
         return p;
     }
 
-    private JLabel sectionTag(String text)
+    private static JLabel infoValue(String text)
     {
         JLabel l = new JLabel(text);
-        l.setFont(cf(Font.BOLD, 10f));
-        l.setForeground(TEAL);
-        l.setAlignmentX(Component.LEFT_ALIGNMENT);
-        return l;
-    }
-
-    private JLabel valLabel(String text)
-    {
-        JLabel l = new JLabel(text);
-        l.setFont(cf(Font.PLAIN, 11f));
-        l.setForeground(MUTED);
-        return l;
-    }
-
-    private JLabel playerLabel(String name)
-    {
-        JLabel l = new JLabel(name);
         l.setFont(cf(Font.BOLD, 12f));
-        l.setForeground(Color.WHITE);
+        l.setForeground(COL_WHITE);
         return l;
     }
 
-    private JLabel stateLabel(String text)
+    private static JLabel playerName(String text)
     {
         JLabel l = new JLabel(text);
-        l.setFont(cf(Font.PLAIN, 11f));
-        l.setForeground(DIM);
+        l.setFont(cf(Font.BOLD, 13f));
+        l.setForeground(COL_WHITE);
         return l;
     }
 
-    private JPanel playerRow(JLabel name, JLabel state)
+    private static JLabel playerTag(String text)
     {
-        JPanel row = new JPanel();
-        row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
-        row.setOpaque(false);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        row.add(name);
-        row.add(Box.createHorizontalGlue());
-        row.add(state);
-        return row;
+        JLabel l = new JLabel(text)
+        {
+            @Override
+            protected void paintComponent(Graphics g)
+            {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON);
+                Color bg = text.equalsIgnoreCase("You") ? COL_BLUE : COL_GRAY_TAG;
+                g2.setColor(bg);
+                g2.fill(new RoundRectangle2D.Float(0, 0, getWidth(), getHeight(), 10, 10));
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        l.setFont(cf(Font.BOLD, 10f));
+        l.setForeground(COL_WHITE);
+        l.setOpaque(false);
+        l.setBorder(new EmptyBorder(1, 6, 1, 6));
+        return l;
     }
 
-    private JPanel kvRow(String key, JLabel val)
+    private static JLabel readyLabel()
     {
-        JPanel row = new JPanel();
-        row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
-        row.setOpaque(false);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
-
-        JLabel k = new JLabel(key);
-        k.setFont(cf(Font.PLAIN, 11f));
-        k.setForeground(DIM);
-        Dimension kSize = new Dimension(52, 16);
-        k.setPreferredSize(kSize);
-        k.setMinimumSize(kSize);
-        k.setMaximumSize(new Dimension(52, 20));
-        row.add(k);
-        row.add(val);
-        row.add(Box.createHorizontalGlue());
-        return row;
+        JLabel l = new JLabel("○ Waiting");
+        l.setFont(cf(Font.PLAIN, 11f));
+        l.setForeground(COL_DIM);
+        return l;
     }
 
-    private JPanel rulesRow()
+    private static void styleStatusBadge(JLabel badge, String text, Color bg)
     {
-        JPanel row = new JPanel();
-        row.setLayout(new BoxLayout(row, BoxLayout.Y_AXIS));
-        row.setOpaque(false);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JLabel header = new JLabel("Rules");
-        header.setFont(cf(Font.PLAIN, 11f));
-        header.setForeground(DIM);
-        header.setAlignmentX(Component.LEFT_ALIGNMENT);
-        row.add(header);
-        row.add(vSpace(2));
-
-        rulesVal.setAlignmentX(Component.LEFT_ALIGNMENT);
-        rulesVal.setMaximumSize(new Dimension(Integer.MAX_VALUE, Short.MAX_VALUE));
-        row.add(rulesVal);
-        return row;
+        badge.setText("  " + text + "  ");
+        badge.setFont(cf(Font.BOLD, 11f));
+        badge.setForeground(COL_WHITE);
+        badge.setOpaque(true);
+        badge.setBackground(bg);
+        badge.setBorder(new CompoundBorder(
+                new LineBorder(bg.darker(), 1, true),
+                new EmptyBorder(2, 6, 2, 6)));
     }
 
-    private void styleBtn(JButton btn, Color bg, Color border, Color fg)
+    private static JLabel rulePill(String text)
     {
-        btn.setFont(cf(Font.BOLD, 12f));
+        JLabel l = new JLabel(text);
+        l.setFont(cf(Font.PLAIN, 10f));
+        l.setForeground(new Color(200, 200, 200));
+        l.setOpaque(true);
+        l.setBackground(new Color(55, 55, 60));
+        l.setBorder(new CompoundBorder(
+                new LineBorder(new Color(70, 70, 75), 1, true),
+                new EmptyBorder(1, 5, 1, 5)));
+        return l;
+    }
+
+    private static JButton buildBlueButton(String text)
+    {
+        JButton btn = new JButton(text);
+        btn.setFont(cf(Font.BOLD, 13f));
         btn.setFocusPainted(false);
         btn.setOpaque(true);
         btn.setContentAreaFilled(true);
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        btn.setBackground(bg);
-        btn.setForeground(fg);
+        btn.setBackground(COL_BLUE);
+        btn.setForeground(COL_WHITE);
         btn.setBorder(new CompoundBorder(
-                new LineBorder(border, 1, true),
+                new LineBorder(COL_BLUE.darker(), 1, true),
                 new EmptyBorder(5, 12, 5, 12)));
-        btn.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return btn;
     }
 
-    private Component vSpace(int px) { return Box.createRigidArea(new Dimension(0, px)); }
-    private Component hSpace(int px) { return Box.createRigidArea(new Dimension(px, 0)); }
+    private static JButton buildSecondaryButton(String text)
+    {
+        JButton btn = new JButton(text);
+        btn.setFont(cf(Font.PLAIN, 12f));
+        btn.setFocusPainted(false);
+        btn.setOpaque(true);
+        btn.setContentAreaFilled(true);
+        btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        btn.setBackground(new Color(50, 50, 50));
+        btn.setForeground(COL_WHITE);
+        btn.setAlignmentX(LEFT_ALIGNMENT);
+        btn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        btn.setBorder(new CompoundBorder(
+                new LineBorder(new Color(80, 80, 80), 1, true),
+                new EmptyBorder(5, 12, 5, 12)));
+        return btn;
+    }
+
+    // ── entry card helpers ────────────────────────────────────────────────────
+
+    private void setEntryEnabled(boolean enabled)
+    {
+        codeInput.setEnabled(enabled);
+        loadButton.setEnabled(enabled);
+    }
+
+    private void setEntryStatus(String msg, Color color)
+    {
+        entryStatus.setText(msg);
+        entryStatus.setForeground(color);
+    }
+
+    // ── formatting ────────────────────────────────────────────────────────────
+
+    private static String formatRisk(String raw)
+    {
+        if (raw == null || raw.isEmpty() || raw.equals("0") || raw.equals("0.0"))
+            return "No stake";
+        try
+        {
+            long v = (long) Double.parseDouble(raw);
+            if (v == 0)    return "No stake";
+            if (v >= 1_000_000) return String.format("%.1fM gp", v / 1_000_000.0);
+            if (v >= 1_000)     return String.format("%,d k gp", v / 1_000);
+            return v + " gp";
+        }
+        catch (NumberFormatException ignored) { return raw; }
+    }
+
+    private static String capitalize(String s)
+    {
+        if (s == null || s.isEmpty()) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1).toLowerCase();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Inner classes
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** Circular avatar with a single initial letter, matching the mockup style. */
+    private static class AvatarLabel extends JComponent
+    {
+        private char initial;
+        private static final int SIZE = 36;
+
+        AvatarLabel(String name)
+        {
+            this.initial = name != null && !name.isEmpty() ? Character.toUpperCase(name.charAt(0)) : '?';
+            Dimension d = new Dimension(SIZE, SIZE);
+            setPreferredSize(d);
+            setMinimumSize(d);
+            setMaximumSize(d);
+        }
+
+        void setInitial(char c)
+        {
+            this.initial = Character.toUpperCase(c);
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g)
+        {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                    RenderingHints.VALUE_ANTIALIAS_ON);
+
+            // circle background
+            g2.setColor(new Color(55, 55, 65));
+            g2.fillOval(0, 0, SIZE, SIZE);
+            g2.setColor(new Color(80, 80, 95));
+            g2.setStroke(new BasicStroke(1.5f));
+            g2.drawOval(0, 0, SIZE - 1, SIZE - 1);
+
+            // initial letter
+            g2.setColor(COL_WHITE);
+            g2.setFont(new Font("Calibri", Font.BOLD, 15));
+            FontMetrics fm = g2.getFontMetrics();
+            String s = String.valueOf(initial);
+            int x = (SIZE - fm.stringWidth(s)) / 2;
+            int y = (SIZE - fm.getHeight()) / 2 + fm.getAscent();
+            g2.drawString(s, x, y);
+            g2.dispose();
+        }
+    }
+
+    /** Green trophy circle, drawn entirely in code (no image dependency). */
+    private static class TrophyIcon extends JComponent
+    {
+        private static final int SIZE = 40;
+
+        TrophyIcon()
+        {
+            Dimension d = new Dimension(SIZE, SIZE);
+            setPreferredSize(d);
+            setMinimumSize(d);
+            setMaximumSize(d);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g)
+        {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                    RenderingHints.VALUE_ANTIALIAS_ON);
+
+            g2.setColor(new Color(30, 80, 50));
+            g2.fillOval(0, 0, SIZE, SIZE);
+            g2.setColor(COL_GREEN);
+            g2.setStroke(new BasicStroke(1.5f));
+            g2.drawOval(0, 0, SIZE - 1, SIZE - 1);
+
+            g2.setColor(COL_GREEN);
+            g2.setFont(new Font("Calibri", Font.BOLD, 20));
+            FontMetrics fm = g2.getFontMetrics();
+            String s = "🏆";
+            // fallback to text glyph for environments without emoji font
+            if (fm.stringWidth(s) == 0) s = "W";
+            int x = (SIZE - fm.stringWidth(s)) / 2;
+            int y = (SIZE - fm.getHeight()) / 2 + fm.getAscent();
+            g2.drawString(s, x, y);
+            g2.dispose();
+        }
+    }
+
+    /**
+     * FlowLayout variant that wraps items to a new row when the container
+     * is too narrow, rather than clipping.  Used for the gear-rules pill strip.
+     */
+    private static class WrapLayout extends FlowLayout
+    {
+        WrapLayout(int align, int hgap, int vgap)
+        { super(align, hgap, vgap); }
+
+        @Override
+        public Dimension preferredLayoutSize(Container target)
+        { return layoutSize(target, true); }
+
+        @Override
+        public Dimension minimumLayoutSize(Container target)
+        { return layoutSize(target, false); }
+
+        private Dimension layoutSize(Container target, boolean preferred)
+        {
+            synchronized (target.getTreeLock())
+            {
+                int targetWidth = target.getSize().width;
+                if (targetWidth == 0) targetWidth = Integer.MAX_VALUE;
+
+                int hgap = getHgap(), vgap = getVgap();
+                Insets insets = target.getInsets();
+                int maxWidth = targetWidth - (insets.left + insets.right + hgap * 2);
+
+                Dimension dim = new Dimension(0, 0);
+                int rowWidth = 0, rowHeight = 0;
+
+                int nmembers = target.getComponentCount();
+                for (int i = 0; i < nmembers; i++)
+                {
+                    Component m = target.getComponent(i);
+                    if (m.isVisible())
+                    {
+                        Dimension d = preferred ? m.getPreferredSize() : m.getMinimumSize();
+                        if (rowWidth + d.width > maxWidth && rowWidth > 0)
+                        {
+                            dim.width = Math.max(dim.width, rowWidth);
+                            dim.height += rowHeight + vgap;
+                            rowWidth = 0;
+                            rowHeight = 0;
+                        }
+                        rowWidth += d.width + hgap;
+                        rowHeight = Math.max(rowHeight, d.height);
+                    }
+                }
+                dim.width  = Math.max(dim.width, rowWidth);
+                dim.height += rowHeight + insets.top + insets.bottom + vgap * 2;
+                return dim;
+            }
+        }
+    }
+
+    @Override
+    public void onDataRefresh() { }
 }
