@@ -41,6 +41,9 @@ public class RuneAlyticsState
      * "unranked_group_ironman".
      */
     private String currentAccountSubtype = "normal";
+    private int matchWins;
+    private int matchLosses;
+
     // A map that stores Boss Name -> Number of Kills
     private Map<String, Integer> killCounts = new HashMap<>();
 

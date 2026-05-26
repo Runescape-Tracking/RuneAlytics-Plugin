@@ -1037,36 +1037,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             }
             else
             {
-                itemManager.getImage(drop.getItemId(), 1, false)
+                long qty = drop.getTotalQuantity();
+                itemManager.getImage(drop.getItemId(), (int) qty, qty > 1)
                         .addTo(iconLabel);
             }
 
             layers.add(iconLabel, JLayeredPane.DEFAULT_LAYER);
-
-            // Custom quantity badge with dark backing for readability
-            if (!isPet && drop.getTotalQuantity() > 1)
-            {
-                String qtyStr = formatNumber(drop.getTotalQuantity());
-                JLabel qtyLabel = new JLabel(qtyStr, SwingConstants.CENTER)
-                {
-                    @Override
-                    protected void paintComponent(Graphics g)
-                    {
-                        Graphics2D g2 = (Graphics2D) g.create();
-                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-                                RenderingHints.VALUE_ANTIALIAS_ON);
-                        g2.setColor(new Color(0, 0, 0, 170));
-                        g2.fillRoundRect(0, 0, getWidth(), getHeight(), 3, 3);
-                        g2.dispose();
-                        super.paintComponent(g);
-                    }
-                };
-                qtyLabel.setFont(new Font("Calibri", Font.BOLD, 9));
-                qtyLabel.setForeground(new Color(255, 224, 80));
-                qtyLabel.setOpaque(false);
-                qtyLabel.setBounds(1, ITEM_SIZE - 13, ITEM_SIZE - 2, 11);
-                layers.add(qtyLabel, JLayeredPane.PALETTE_LAYER);
-            }
 
             if (isPet)
             {
@@ -1078,7 +1054,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             }
 
             slot.add(layers, BorderLayout.CENTER);
-            itemSlotMap.put(slotKey, iconLabel);
             itemSlotMap.put(slotKey, iconLabel);
 
             JPopupMenu menu = new JPopupMenu();
