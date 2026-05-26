@@ -225,7 +225,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     }
 
     private JPanel buildPlayerRow(AvatarLabel avatar, JLabel name, JLabel tag,
-                                   JLabel status, JLabel validation)
+                                  JLabel status, JLabel validation)
     {
         // Top sub-row: avatar | name + tag | status
         // The status label now sits to the RIGHT of the name/tag block on the
