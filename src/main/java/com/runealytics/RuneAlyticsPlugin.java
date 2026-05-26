@@ -635,12 +635,12 @@ public class RuneAlyticsPlugin extends Plugin
         {
             final String token    = state.getVerificationCode();
             final String username = state.getVerifiedUsername();
-            // Capture containers on the client thread before handing off to executor
-            final net.runelite.api.ItemContainer bankContainer = event.getItemContainer();
-            final net.runelite.api.ItemContainer invContainer  = client.getItemContainer(InventoryID.INVENTORY);
-            final net.runelite.api.ItemContainer eqContainer   = client.getItemContainer(InventoryID.EQUIPMENT);
             executorService.execute(() ->
-                    bankDataManager.syncBankData(token, username, bankContainer, invContainer, eqContainer));
+                    bankDataManager.syncBankData(
+                            token, username,
+                            event.getItemContainer(),
+                            client.getItemContainer(InventoryID.INVENTORY),
+                            client.getItemContainer(InventoryID.EQUIPMENT)));
             return;
         }
 
