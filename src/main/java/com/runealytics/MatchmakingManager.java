@@ -151,6 +151,53 @@ public class MatchmakingManager
         clearHintArrow();
     }
 
+    public void forfeitMatch()
+    {
+        if (session == null || reportInFlight || resultReported)
+        {
+            return;
+        }
+
+        String localRsn = resolveLocalRsn();
+        if (localRsn == null || localRsn.isEmpty())
+        {
+            return;
+        }
+
+        String token = session.getLocalToken();
+        String verificationCode = resolveVerificationCode();
+
+        if (token == null || token.isEmpty() || verificationCode == null || verificationCode.isEmpty())
+        {
+            return;
+        }
+
+        reportInFlight = true;
+        final String deathName = localRsn;
+
+        executorService.submit(() -> {
+            MatchmakingApiResult result;
+            try
+            {
+                result = apiClient.reportMatch(verificationCode, session.getMatchCode(), localRsn, token, deathName);
+            }
+            catch (IOException ex)
+            {
+                result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
+            }
+
+            handleResult(result);
+
+            if (result.isSuccess() && result.getSession() != null)
+            {
+                session = result.getSession();
+                updateResultStatus();
+            }
+
+            reportInFlight = false;
+        });
+    }
+
     public void onActorDeath(Player player)
     {
         if (session == null || reportInFlight || resultReported)

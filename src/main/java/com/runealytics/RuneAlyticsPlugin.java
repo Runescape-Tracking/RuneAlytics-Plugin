@@ -1321,6 +1321,30 @@ public class RuneAlyticsPlugin extends Plugin
         lootManager.uploadUnsyncedKills();
     }
 
+    /**
+     * Polls feature flags from the server every 60 seconds while the player is
+     * logged in and verified. This keeps the UI consistent without relying solely
+     * on the one-time fetch that happens on each game-state change.
+     */
+    @net.runelite.client.task.Schedule(
+            period = 60000,
+            unit   = ChronoUnit.MILLIS,
+            asynchronous = true
+    )
+    public void pollFeatureFlags()
+    {
+        if (!state.isLoggedIn() || !state.isVerified()) return;
+        String rsn = state.getVerifiedUsername();
+        if (rsn == null || rsn.isEmpty()) return;
+
+        Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
+        boolean lootSync    = flags.getOrDefault(FEATURE_LOOT,    false);
+        boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
+
+        if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
+        SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, matchEnabled));
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     //  WHISPERER FLUSH
     // ═════════════════════════════════════════════════════════════════════════
