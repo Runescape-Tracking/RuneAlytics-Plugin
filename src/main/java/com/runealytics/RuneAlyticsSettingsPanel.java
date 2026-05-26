@@ -745,6 +745,10 @@ public class RuneAlyticsSettingsPanel extends JPanel
         lbl.setFont(font);
         lbl.setForeground(fg);
         lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // Cap the component width so BoxLayout actually allocates wrapPx pixels —
+        // without this the HTML renderer ignores the style width and paints to the
+        // full allocated width, sending text to the card's right padding boundary.
+        lbl.setMaximumSize(new Dimension(wrapPx, Short.MAX_VALUE));
         return lbl;
     }
 
