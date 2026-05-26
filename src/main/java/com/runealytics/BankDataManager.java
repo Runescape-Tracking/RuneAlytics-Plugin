@@ -27,23 +27,67 @@ public class BankDataManager
     }
 
     /**
-     * Syncs a complete wealth snapshot: bank + inventory + equipped items.
+     * Builds the complete wealth snapshot JSON object on the <strong>client
+     * thread</strong>.  This method calls {@link ItemManager#getItemComposition}
+     * internally, which requires the client thread — it must NOT be called from
+     * a background executor.
      *
-     * Call this when the player opens their bank so that all three containers
-     * are available simultaneously, giving an accurate total wealth figure.
+     * <p>Call this synchronously, then hand the returned {@link JsonObject} to
+     * {@link #syncBankData(String, String, JsonObject)} running on an executor
+     * thread for the actual HTTP call.</p>
      *
-     * @param token              auth token
-     * @param username           verified RSN
-     * @param bankContainer      InventoryID.BANK container
+     * @param username           verified RSN (added to the JSON payload)
+     * @param bankContainer      InventoryID.BANK container (required)
      * @param inventoryContainer InventoryID.INVENTORY container (may be null)
      * @param equipmentContainer InventoryID.EQUIPMENT container (may be null)
+     * @return pre-serialised JSON ready to pass to the network call
      */
-    public void syncBankData(
-            String token,
+    public JsonObject buildBankSnapshot(
             String username,
             ItemContainer bankContainer,
             ItemContainer inventoryContainer,
             ItemContainer equipmentContainer)
+    {
+        JsonObject data = new JsonObject();
+        data.addProperty("username",  username);
+        data.addProperty("timestamp", Instant.now().getEpochSecond());
+        data.addProperty("world",     0);
+
+        // fromContainerWithValues / containerTotalValue both call
+        // ItemManager.getItemComposition which requires the client thread.
+        JsonArray bankItems      = RuneAlyticsItemJson.fromContainerWithValues(bankContainer,      itemManager);
+        JsonArray inventoryItems = RuneAlyticsItemJson.fromContainerWithValues(inventoryContainer, itemManager);
+        JsonArray equipmentItems = RuneAlyticsItemJson.fromContainerWithValues(equipmentContainer, itemManager);
+
+        data.add("items",     bankItems);
+        data.add("inventory", inventoryItems);
+        data.add("equipment", equipmentItems);
+
+        long bankValue  = RuneAlyticsItemJson.containerTotalValue(bankContainer,      itemManager);
+        long invValue   = RuneAlyticsItemJson.containerTotalValue(inventoryContainer, itemManager);
+        long equipValue = RuneAlyticsItemJson.containerTotalValue(equipmentContainer, itemManager);
+        long total      = bankValue + invValue + equipValue;
+
+        data.addProperty("bank_value",      bankValue);
+        data.addProperty("inventory_value", invValue);
+        data.addProperty("equipment_value", equipValue);
+        data.addProperty("total_wealth",    total);
+
+        log.info("Wealth snapshot built: bank={} ({}gp) inv={} ({}gp) equip={} ({}gp) total={}gp",
+                bankItems.size(),      bankValue,
+                inventoryItems.size(), invValue,
+                equipmentItems.size(), equipValue,
+                total);
+
+        return data;
+    }
+
+    /**
+     * Sends a pre-built wealth snapshot to the API.  Safe to call from a
+     * background thread — all client API reads were already done by
+     * {@link #buildBankSnapshot}.
+     */
+    public void syncBankData(String token, String username, JsonObject snapshot)
     {
         if (token == null || token.isEmpty())
         {
@@ -57,25 +101,15 @@ public class BankDataManager
             return;
         }
 
-        if (bankContainer == null)
+        if (snapshot == null)
         {
-            log.warn("Bank container is null, skipping bank sync");
+            log.warn("Bank snapshot is null, skipping bank sync");
             return;
         }
 
         try
         {
-            JsonObject bankData = buildBankData(username, bankContainer, inventoryContainer, equipmentContainer);
-
-            int bankCount      = bankData.getAsJsonArray("items").size();
-            int inventoryCount = bankData.getAsJsonArray("inventory").size();
-            int equipmentCount = bankData.getAsJsonArray("equipment").size();
-
-            log.info("Syncing wealth snapshot for {}: bank={} inv={} equip={} items",
-                    username, bankCount, inventoryCount, equipmentCount);
-
-            boolean success = apiClient.syncBankData(token, bankData);
-
+            boolean success = apiClient.syncBankData(token, snapshot);
             if (success)
             {
                 log.info("Wealth snapshot synced successfully for {}", username);
@@ -92,57 +126,34 @@ public class BankDataManager
     }
 
     /**
-     * Backward-compatible overload for callers that only have the bank container.
-     * Inventory and equipment will be sent as empty arrays.
+     * Convenience wrapper kept for backward-compatible callers that have
+     * already captured containers on the client thread.
+     *
+     * <p><strong>IMPORTANT</strong> – this overload calls
+     * {@link #buildBankSnapshot} internally, which requires the client thread.
+     * Call it only from a handler that runs on the client thread, then pass
+     * the built snapshot to a background executor via
+     * {@link #syncBankData(String, String, JsonObject)}.</p>
      */
-    public void syncBankData(String token, String username, ItemContainer bankContainer)
-    {
-        syncBankData(token, username, bankContainer, null, null);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private JsonObject buildBankData(
+    public void syncBankData(
+            String token,
             String username,
             ItemContainer bankContainer,
             ItemContainer inventoryContainer,
             ItemContainer equipmentContainer)
     {
-        JsonObject data = new JsonObject();
-        data.addProperty("username",  username);
-        data.addProperty("timestamp", Instant.now().getEpochSecond());
-        data.addProperty("world",     0); // Future: populate if you track world
+        if (bankContainer == null)
+        {
+            log.warn("Bank container is null, skipping bank sync");
+            return;
+        }
 
-        // Each item now carries its resolved per-item GE value + line total so the
-        // server doesn't have to look prices up itself. Untradeable / charged
-        // variants (Scythe, Sanguinesti, Ferocious Gloves, etc.) are
-        // decomposed into their tradeable components by ItemValueResolver
-        // (issue #5 — bank totals previously under-counted these by tens of
-        // thousands of GP each).
-        JsonArray bankItems      = RuneAlyticsItemJson.fromContainerWithValues(bankContainer,      itemManager);
-        JsonArray inventoryItems = RuneAlyticsItemJson.fromContainerWithValues(inventoryContainer, itemManager);
-        JsonArray equipmentItems = RuneAlyticsItemJson.fromContainerWithValues(equipmentContainer, itemManager);
-
-        data.add("items",     bankItems);
-        data.add("inventory", inventoryItems);
-        data.add("equipment", equipmentItems);
-
-        long bankValue  = RuneAlyticsItemJson.containerTotalValue(bankContainer,      itemManager);
-        long invValue   = RuneAlyticsItemJson.containerTotalValue(inventoryContainer, itemManager);
-        long equipValue = RuneAlyticsItemJson.containerTotalValue(equipmentContainer, itemManager);
-        long total      = bankValue + invValue + equipValue;
-
-        data.addProperty("bank_value",        bankValue);
-        data.addProperty("inventory_value",   invValue);
-        data.addProperty("equipment_value",   equipValue);
-        data.addProperty("total_wealth",      total);
-
-        log.info("Wealth snapshot: bank={} (gp={}) inv={} (gp={}) equip={} (gp={}) total={} gp",
-                bankItems.size(), bankValue,
-                inventoryItems.size(), invValue,
-                equipmentItems.size(), equipValue,
-                total);
-
-        return data;
+        JsonObject snapshot = buildBankSnapshot(username, bankContainer, inventoryContainer, equipmentContainer);
+        syncBankData(token, username, snapshot);
     }
-}
+
+    /** Backward-compatible overload for callers that only have the bank container. */
+    public void syncBankData(String token, String username, ItemContainer bankContainer)
+    {
+        syncBankData(token, username, bankContainer, null, null);
+    }}
