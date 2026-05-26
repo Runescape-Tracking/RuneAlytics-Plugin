@@ -186,10 +186,6 @@ public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListene
         card.add(header);
         card.add(vSpace(6));
 
-        JPanel grid = new JPanel(new GridLayout(0, 2, 6, 2));
-        grid.setOpaque(false);
-        grid.setAlignmentX(Component.LEFT_ALIGNMENT);
-
         codeVal   = valLabel("—");
         worldVal  = valLabel("—");
         zoneVal   = valLabel("—");
@@ -197,14 +193,18 @@ public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListene
         rulesVal  = valLabel("—");
         statusVal = valLabel("—");
 
-        addKV(grid, "Code",   codeVal);
-        addKV(grid, "World",  worldVal);
-        addKV(grid, "Zone",   zoneVal);
-        addKV(grid, "Risk",   riskVal);
-        addKV(grid, "Rules",  rulesVal);
-        addKV(grid, "Status", statusVal);
+        card.add(kvRow("Code",   codeVal));
+        card.add(vSpace(2));
+        card.add(kvRow("World",  worldVal));
+        card.add(vSpace(2));
+        card.add(kvRow("Zone",   zoneVal));
+        card.add(vSpace(2));
+        card.add(kvRow("Risk",   riskVal));
+        card.add(vSpace(2));
+        card.add(kvRow("Rules",  rulesVal));
+        card.add(vSpace(2));
+        card.add(kvRow("Status", statusVal));
 
-        card.add(grid);
         card.setVisible(false);
         return card;
     }
@@ -560,13 +560,25 @@ public class MatchmakingPanel extends JPanel implements MatchmakingUpdateListene
         return row;
     }
 
-    private void addKV(JPanel grid, String key, JLabel val)
+    private JPanel kvRow(String key, JLabel val)
     {
+        JPanel row = new JPanel();
+        row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+
         JLabel k = new JLabel(key);
         k.setFont(cf(Font.PLAIN, 11f));
         k.setForeground(DIM);
-        grid.add(k);
-        grid.add(val);
+        Dimension kSize = new Dimension(52, 16);
+        k.setPreferredSize(kSize);
+        k.setMinimumSize(kSize);
+        k.setMaximumSize(new Dimension(52, 20));
+        row.add(k);
+        row.add(val);
+        row.add(Box.createHorizontalGlue());
+        return row;
     }
 
     private void styleBtn(JButton btn, Color bg, Color border, Color fg)

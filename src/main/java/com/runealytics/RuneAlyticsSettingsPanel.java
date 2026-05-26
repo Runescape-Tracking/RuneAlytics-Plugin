@@ -171,12 +171,12 @@ public class RuneAlyticsSettingsPanel extends JPanel
         bankTitle.setForeground(Color.WHITE);
         bankTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
         bankCard.add(bankTitle);
-        bankCard.add(vSpace(3));
-        bankCard.add(wrapText(
+        bankCard.add(vSpace(4));
+        bankCard.add(compactLabel(
                 "Controls who can see your bank value and contents on RuneAlytics.com.",
                 BODY_TEXT, cf(Font.PLAIN, 11f)));
-        bankCard.add(vSpace(2));
-        bankCard.add(wrapText(
+        bankCard.add(vSpace(3));
+        bankCard.add(compactLabel(
                 "Private: bank data used only for gear crafting and your personal view.",
                 DIM_TEXT, cf(Font.ITALIC, 10f)));
         bankCard.add(vSpace(8));
@@ -192,12 +192,12 @@ public class RuneAlyticsSettingsPanel extends JPanel
         visTitle.setForeground(Color.WHITE);
         visTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
         visCard.add(visTitle);
-        visCard.add(vSpace(3));
-        visCard.add(wrapText(
+        visCard.add(vSpace(4));
+        visCard.add(compactLabel(
                 "Controls who can see when you are online on RuneAlytics.com.",
                 BODY_TEXT, cf(Font.PLAIN, 11f)));
-        visCard.add(vSpace(2));
-        visCard.add(wrapText(
+        visCard.add(vSpace(3));
+        visCard.add(compactLabel(
                 "Friends: only visible to verified players you are tracking.",
                 DIM_TEXT, cf(Font.ITALIC, 10f)));
         visCard.add(vSpace(8));
@@ -256,10 +256,11 @@ public class RuneAlyticsSettingsPanel extends JPanel
     {
         if (btn.isSelected())
         {
-            btn.setBackground(TEAL_COLOR);
-            btn.setForeground(new Color(20, 20, 20));
+            Color red = new Color(185, 42, 42);
+            btn.setBackground(red);
+            btn.setForeground(Color.BLACK);
             btn.setBorder(new CompoundBorder(
-                    new LineBorder(TEAL_COLOR.darker(), 1),
+                    new LineBorder(red.darker(), 1),
                     new EmptyBorder(4, 10, 4, 10)));
         }
         else
@@ -383,7 +384,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
             BufferedImage icon = tryLoadImage("/runealytics_icon.png");
             JLabel logo;
             if (icon != null)
-                logo = scaledImageLabel(icon, 64, 64);
+                logo = scaledImageLabel(icon, 32, 32);
             else
             {
                 logo = new JLabel("RA", SwingConstants.CENTER);
@@ -754,6 +755,15 @@ public class RuneAlyticsSettingsPanel extends JPanel
         area.setMargin(new Insets(0, 0, 0, 0));
         area.setMinimumSize(new Dimension(0, 0));
         return area;
+    }
+
+    private static JLabel compactLabel(String text, Color fg, Font font)
+    {
+        JLabel lbl = new JLabel("<html><body style='width:155px'>" + text + "</body></html>");
+        lbl.setFont(font);
+        lbl.setForeground(fg);
+        lbl.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return lbl;
     }
 
     private static JPanel verticalPanel()
