@@ -311,7 +311,7 @@ public final class RuneAlyticsUi
         JPanel outer = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
         outer.setOpaque(false);
         outer.setAlignmentX(Component.LEFT_ALIGNMENT);
-        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 120));
+        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
 
         JPanel inner = new JPanel();
         inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
@@ -323,7 +323,7 @@ public final class RuneAlyticsUi
 
         if (img != null)
         {
-            JLabel logoLbl = scaledImageLabel(img, 42);
+            JLabel logoLbl = scaledImageLabel(img, 72);
             logoLbl.setAlignmentX(Component.CENTER_ALIGNMENT);
             inner.add(logoLbl);
             inner.add(vSpace(5));
