@@ -226,7 +226,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
             PrivacySetting v = values[i];
 
             JToggleButton btn = new JToggleButton(v.getLabel());
-            btn.setFont(cf(Font.PLAIN, 10f));
+            btn.setFont(cf(Font.PLAIN, 12f));
             btn.setFocusPainted(false);
             btn.setOpaque(true);
             btn.setContentAreaFilled(true);
