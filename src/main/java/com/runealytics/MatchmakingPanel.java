@@ -1,6 +1,8 @@
 package com.runealytics;
 
+import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.util.AsyncBufferedImage;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -9,7 +11,10 @@ import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.geom.RoundRectangle2D;
+import java.util.List;
 
 /**
  * Match Finder sidebar panel.
@@ -53,6 +58,11 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     // ── dependencies ─────────────────────────────────────────────────────────
     private final MatchmakingManager matchmakingManager;
     private final RuneAlyticsState   state;
+    private final ItemManager        itemManager;
+
+    private static final Color RISK_GREEN  = new Color(64, 200, 120);
+    private static final Color SUMMARY_BG   = new Color(45, 38, 20);
+    private static final Color SUMMARY_LINE = new Color(120, 95, 35);
 
     // ── entry-card widgets ────────────────────────────────────────────────────
     private final JTextField codeInput     = RuneAlyticsUi.inputField();
@@ -64,8 +74,13 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     private final JLabel  matchCodeVal     = infoValue("-");
     private final JLabel  worldVal         = infoValue("-");
     private final JLabel  locationVal      = infoValue("-");
-    private final JLabel  stakeVal         = infoValue("-");
     private final JLabel  statusBadge      = new JLabel();
+
+    // ── risk-value display holders (rebuilt every update) ─────────────────────
+    // These render the server-computed, purely informational item-value cards.
+    private final JPanel  localRiskHolder  = vertPanel();
+    private final JPanel  oppRiskHolder    = vertPanel();
+    private final JPanel  summaryHolder    = vertPanel();
 
     // ── players-card widgets ──────────────────────────────────────────────────
     private final JPanel  playersCard      = vertPanel();
@@ -106,10 +121,12 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     @Inject
     public MatchmakingPanel(MatchmakingManager matchmakingManager,
-                            RuneAlyticsState   state)
+                            RuneAlyticsState   state,
+                            ItemManager        itemManager)
     {
         this.matchmakingManager = matchmakingManager;
         this.state              = state;
+        this.itemManager        = itemManager;
 
         setBackground(BG);
         setBorder(new EmptyBorder(10, 12, 10, 12));
@@ -135,10 +152,20 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         add(RuneAlyticsUi.vSpace(5));
         add(buildPlayersCard());
         add(RuneAlyticsUi.vSpace(5));
+        add(localRiskHolder);
+        add(RuneAlyticsUi.vSpace(5));
+        add(oppRiskHolder);
+        add(RuneAlyticsUi.vSpace(5));
+        add(summaryHolder);
+        add(RuneAlyticsUi.vSpace(5));
         add(buildResultCard());
         add(RuneAlyticsUi.vSpace(5));
         add(newMatchButton);
         add(Box.createVerticalGlue());
+
+        localRiskHolder.setAlignmentX(LEFT_ALIGNMENT);
+        oppRiskHolder.setAlignmentX(LEFT_ALIGNMENT);
+        summaryHolder.setAlignmentX(LEFT_ALIGNMENT);
 
         hideActiveCards();
     }
@@ -187,8 +214,6 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         body.add(infoRow("⊕",  "World",      worldVal));
         body.add(RuneAlyticsUi.vSpace(4));
         body.add(infoRow("◉",  "Location",   locationVal));
-        body.add(RuneAlyticsUi.vSpace(4));
-        body.add(infoRow("◎",  "Stake",      stakeVal));
         body.add(RuneAlyticsUi.vSpace(5));
 
         // gear rules strip
@@ -433,7 +458,6 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         matchCodeVal.setText(s.getMatchCode() != null ? s.getMatchCode() : "-");
         worldVal.setText(s.getWorld() > 0 ? String.valueOf(s.getWorld()) : "-");
         locationVal.setText(s.getZone() != null && !s.getZone().isEmpty() ? s.getZone() : "-");
-        stakeVal.setText(formatRisk(s.getRisk()));
 
         // gear rules pills
         rulesStrip.removeAll();
@@ -486,6 +510,15 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
                 ? s.getPlayer2Validation() : s.getPlayer1Validation();
         applyValidation(p1Validation, myVal);
         applyValidation(p2Validation, oppVal);
+
+        // ── risk-value cards (server-computed, informational only) ───────────
+        renderRiskCard(localRiskHolder, "Your Risk Value", p1n, s.getLocalRisk(),    true);
+        renderRiskCard(oppRiskHolder,   "Opponent Risk",   p2n, s.getOpponentRisk(), false);
+        renderSummaryCard(summaryHolder, s.getLocalRisk(), s.getOpponentRisk(), s.getMatchTotalRiskLabel());
+
+        localRiskHolder.setVisible(true);
+        oppRiskHolder.setVisible(true);
+        summaryHolder.setVisible(true);
 
         // ── result card ──────────────────────────────────────────────────────
         boolean terminal = status.equalsIgnoreCase("Completed")
@@ -628,8 +661,339 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     {
         matchCard.setVisible(false);
         playersCard.setVisible(false);
+        localRiskHolder.setVisible(false);
+        oppRiskHolder.setVisible(false);
+        summaryHolder.setVisible(false);
         resultCard.setVisible(false);
         newMatchButton.setVisible(false);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Risk-value card rendering (server-computed — informational only)
+    //
+    //  The plugin performs ZERO valuation logic.  Every number, label and item
+    //  list is computed on the server (MatchItemValuationService) and rendered
+    //  verbatim here.  This lets the website change valuation / retention rules
+    //  on the fly without shipping a new plugin build.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** Max item tiles shown inline before collapsing the rest behind a "+N" tile. */
+    private static final int RISK_TILE_SLOTS = 4;
+
+    private void renderRiskCard(JPanel holder, String title, String playerName,
+                                MatchmakingSession.RiskInfo risk, boolean local)
+    {
+        holder.removeAll();
+        if (risk == null || risk == MatchmakingSession.RISK_UNKNOWN)
+        {
+            holder.setVisible(false);
+            return;
+        }
+
+        JPanel body = vertPanel();
+
+        // ── player header ────────────────────────────────────────────────────
+        JLabel header = new JLabel(playerName + (local ? "  (You)" : "  (Opponent)"));
+        header.setFont(cf(Font.BOLD, 12f));
+        header.setForeground(local ? COL_BLUE.brighter() : COL_ORANGE);
+        header.setAlignmentX(LEFT_ALIGNMENT);
+        body.add(header);
+        body.add(RuneAlyticsUi.vSpace(4));
+
+        // ── skull status + kept-count line (labels come fully formed) ─────────
+        JPanel skullRow = new JPanel(new BorderLayout(6, 0));
+        skullRow.setOpaque(false);
+        skullRow.setAlignmentX(LEFT_ALIGNMENT);
+        skullRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 18));
+
+        JLabel skull = new JLabel(risk.getSkullLabel());
+        skull.setFont(cf(Font.PLAIN, 11f));
+        skull.setForeground(COL_DIM);
+
+        JLabel kept = new JLabel(risk.getKeptLabel());
+        kept.setFont(cf(Font.PLAIN, 11f));
+        kept.setForeground(COL_DIM);
+
+        skullRow.add(skull, BorderLayout.WEST);
+        skullRow.add(kept, BorderLayout.EAST);
+        body.add(skullRow);
+        body.add(RuneAlyticsUi.vSpace(6));
+
+        // ── RISK VALUE headline ───────────────────────────────────────────────
+        JLabel rv = new JLabel("RISK VALUE");
+        rv.setFont(cf(Font.BOLD, 9f));
+        rv.setForeground(COL_DIM);
+        rv.setAlignmentX(LEFT_ALIGNMENT);
+        body.add(rv);
+
+        JLabel rvVal = new JLabel(risk.getRiskValueLabel());
+        rvVal.setFont(cf(Font.BOLD, 20f));
+        rvVal.setForeground(RISK_GREEN);
+        rvVal.setAlignmentX(LEFT_ALIGNMENT);
+        body.add(rvVal);
+        body.add(RuneAlyticsUi.vSpace(6));
+
+        // ── most valuable kept item (local card only, matches mockup) ─────────
+        if (local && risk.getMostValuableKept() != null)
+        {
+            JLabel mv = new JLabel("Most Valuable Kept Item");
+            mv.setFont(cf(Font.PLAIN, 10f));
+            mv.setForeground(COL_DIM);
+            mv.setAlignmentX(LEFT_ALIGNMENT);
+            body.add(mv);
+            body.add(RuneAlyticsUi.vSpace(2));
+            body.add(itemRowWithLabel(risk.getMostValuableKept()));
+            body.add(RuneAlyticsUi.vSpace(6));
+        }
+
+        // ── item grid: "At Risk" for local, "Top Kept Items" for opponent ────
+        if (local && !risk.getAtRiskItems().isEmpty())
+        {
+            JLabel atr = new JLabel("At Risk (Will Be Lost)");
+            atr.setFont(cf(Font.PLAIN, 10f));
+            atr.setForeground(COL_RED);
+            atr.setAlignmentX(LEFT_ALIGNMENT);
+            body.add(atr);
+            body.add(RuneAlyticsUi.vSpace(3));
+            body.add(itemGrid(risk.getAtRiskItems()));
+            body.add(RuneAlyticsUi.vSpace(6));
+        }
+        else if (!local && !risk.getKeptItems().isEmpty())
+        {
+            JLabel tk = new JLabel("Top Kept Items");
+            tk.setFont(cf(Font.PLAIN, 10f));
+            tk.setForeground(COL_DIM);
+            tk.setAlignmentX(LEFT_ALIGNMENT);
+            body.add(tk);
+            body.add(RuneAlyticsUi.vSpace(3));
+            body.add(itemGrid(risk.getKeptItems()));
+            body.add(RuneAlyticsUi.vSpace(6));
+        }
+
+        // ── total-risk footer ─────────────────────────────────────────────────
+        JPanel totalRow = new JPanel(new BorderLayout(6, 0));
+        totalRow.setOpaque(false);
+        totalRow.setAlignmentX(LEFT_ALIGNMENT);
+        totalRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 18));
+
+        JLabel tl = new JLabel("Total Risk");
+        tl.setFont(cf(Font.PLAIN, 11f));
+        tl.setForeground(COL_MUTED);
+
+        JLabel tv = new JLabel(risk.getRiskValueLabel());
+        tv.setFont(cf(Font.BOLD, 11f));
+        tv.setForeground(COL_WHITE);
+
+        totalRow.add(tl, BorderLayout.WEST);
+        totalRow.add(tv, BorderLayout.EAST);
+        body.add(totalRow);
+
+        holder.add(sectionCard("\u2696", title, body));
+        holder.setVisible(true);
+        holder.revalidate();
+        holder.repaint();
+    }
+
+    private void renderSummaryCard(JPanel holder,
+                                   MatchmakingSession.RiskInfo local,
+                                   MatchmakingSession.RiskInfo opp,
+                                   String totalLabel)
+    {
+        holder.removeAll();
+
+        JPanel body = vertPanel();
+
+        JPanel split = new JPanel(new GridLayout(1, 2, 8, 0));
+        split.setOpaque(false);
+        split.setAlignmentX(LEFT_ALIGNMENT);
+        split.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+        split.add(summaryCol("Your Risk",
+                local != null ? local.getRiskValueLabel() : "0 gp"));
+        split.add(summaryCol("Opponent Risk",
+                opp != null ? opp.getRiskValueLabel() : "0 gp"));
+        body.add(split);
+        body.add(RuneAlyticsUi.vSpace(6));
+
+        JPanel banner = new JPanel();
+        banner.setLayout(new BoxLayout(banner, BoxLayout.Y_AXIS));
+        banner.setBackground(SUMMARY_BG);
+        banner.setAlignmentX(LEFT_ALIGNMENT);
+        banner.setMaximumSize(new Dimension(Integer.MAX_VALUE, 50));
+        banner.setBorder(new CompoundBorder(
+                new LineBorder(SUMMARY_LINE, 1, true),
+                new EmptyBorder(6, 8, 6, 8)));
+
+        JLabel tlbl = new JLabel("Total Risk in Match");
+        tlbl.setFont(cf(Font.PLAIN, 10f));
+        tlbl.setForeground(COL_MUTED);
+        tlbl.setAlignmentX(CENTER_ALIGNMENT);
+
+        JLabel tval = new JLabel(totalLabel != null ? totalLabel : "0 gp");
+        tval.setFont(cf(Font.BOLD, 16f));
+        tval.setForeground(COL_ORANGE);
+        tval.setAlignmentX(CENTER_ALIGNMENT);
+
+        banner.add(tlbl);
+        banner.add(tval);
+        body.add(banner);
+        body.add(RuneAlyticsUi.vSpace(4));
+
+        JLabel foot = new JLabel("<html><div width=\"220\">Values calculated using OSRS Wild Item Retention Rules</div></html>");
+        foot.setFont(cf(Font.ITALIC, 9f));
+        foot.setForeground(COL_DIM);
+        foot.setAlignmentX(LEFT_ALIGNMENT);
+        body.add(foot);
+
+        holder.add(sectionCard("\u2694", "Match Summary", body));
+        holder.setVisible(true);
+        holder.revalidate();
+        holder.repaint();
+    }
+
+    private JPanel summaryCol(String label, String value)
+    {
+        JPanel col = vertPanel();
+        JLabel l = new JLabel(label);
+        l.setFont(cf(Font.PLAIN, 10f));
+        l.setForeground(COL_DIM);
+        l.setAlignmentX(LEFT_ALIGNMENT);
+
+        JLabel v = new JLabel(value);
+        v.setFont(cf(Font.BOLD, 13f));
+        v.setForeground(COL_RED);
+        v.setAlignmentX(LEFT_ALIGNMENT);
+
+        col.add(l);
+        col.add(v);
+        return col;
+    }
+
+    // ── item rendering helpers ─────────────────────────────────────────────────
+
+    /** A labelled item row: [icon] name ............. value (right-aligned). */
+    private JPanel itemRowWithLabel(MatchmakingSession.RiskItem item)
+    {
+        JPanel row = new JPanel(new BorderLayout(6, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
+
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        left.setOpaque(false);
+        left.add(itemIcon(item));
+
+        JLabel name = new JLabel(item.getName());
+        name.setFont(cf(Font.PLAIN, 11f));
+        name.setForeground(COL_MUTED);
+        left.add(name);
+
+        JLabel val = new JLabel(item.getValueLabel());
+        val.setFont(cf(Font.BOLD, 11f));
+        val.setForeground(COL_WHITE);
+
+        row.add(left, BorderLayout.WEST);
+        row.add(val, BorderLayout.EAST);
+        return row;
+    }
+
+    /**
+     * Builds a wrapping grid of item tiles.  When there are more items than
+     * {@link #RISK_TILE_SLOTS} the overflow collapses behind a clickable "+N"
+     * tile that expands a second grid below (per the user's requested UX).
+     */
+    private JPanel itemGrid(List<MatchmakingSession.RiskItem> items)
+    {
+        JPanel container = vertPanel();
+        container.setAlignmentX(LEFT_ALIGNMENT);
+
+        JPanel inline = new JPanel(new WrapLayout(FlowLayout.LEFT, 3, 3));
+        inline.setOpaque(false);
+        inline.setAlignmentX(LEFT_ALIGNMENT);
+
+        JPanel overflow = new JPanel(new WrapLayout(FlowLayout.LEFT, 3, 3));
+        overflow.setOpaque(false);
+        overflow.setAlignmentX(LEFT_ALIGNMENT);
+        overflow.setVisible(false);
+
+        boolean overflowing = items.size() > RISK_TILE_SLOTS;
+        int inlineCount = overflowing ? RISK_TILE_SLOTS - 1 : items.size();
+
+        for (int i = 0; i < inlineCount; i++)
+            inline.add(iconTile(items.get(i)));
+
+        if (overflowing)
+        {
+            int remaining = items.size() - inlineCount;
+            inline.add(plusTile(remaining, overflow));
+            for (int i = inlineCount; i < items.size(); i++)
+                overflow.add(iconTile(items.get(i)));
+        }
+
+        container.add(inline);
+        container.add(overflow);
+        return container;
+    }
+
+    /** A bordered square holding one item icon, with a value tooltip on hover. */
+    private JComponent iconTile(MatchmakingSession.RiskItem item)
+    {
+        JLabel tile = itemIcon(item);
+        tile.setHorizontalAlignment(SwingConstants.CENTER);
+        tile.setVerticalAlignment(SwingConstants.CENTER);
+        tile.setPreferredSize(new Dimension(34, 34));
+        tile.setOpaque(true);
+        tile.setBackground(new Color(40, 40, 44));
+        tile.setBorder(new CompoundBorder(
+                new LineBorder(CARD_BORDER, 1, true),
+                new EmptyBorder(1, 1, 1, 1)));
+        return tile;
+    }
+
+    /** The "+N" tile that toggles the overflow grid open/closed. */
+    private JComponent plusTile(int remaining, JPanel overflow)
+    {
+        JLabel tile = new JLabel("+" + remaining);
+        tile.setHorizontalAlignment(SwingConstants.CENTER);
+        tile.setFont(cf(Font.BOLD, 12f));
+        tile.setForeground(COL_MUTED);
+        tile.setPreferredSize(new Dimension(34, 34));
+        tile.setOpaque(true);
+        tile.setBackground(new Color(55, 55, 60));
+        tile.setBorder(new CompoundBorder(
+                new LineBorder(CARD_BORDER, 1, true),
+                new EmptyBorder(1, 1, 1, 1)));
+        tile.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        tile.setToolTipText("Show " + remaining + " more item" + (remaining == 1 ? "" : "s"));
+        tile.addMouseListener(new MouseAdapter()
+        {
+            @Override
+            public void mouseClicked(MouseEvent e)
+            {
+                boolean show = !overflow.isVisible();
+                overflow.setVisible(show);
+                tile.setText(show ? "\u2212" : "+" + remaining);
+                overflow.revalidate();
+                overflow.repaint();
+                MatchmakingPanel.this.revalidate();
+                MatchmakingPanel.this.repaint();
+            }
+        });
+        return tile;
+    }
+
+    /** Creates a JLabel bound to the (async) item image with a value tooltip. */
+    private JLabel itemIcon(MatchmakingSession.RiskItem item)
+    {
+        JLabel lbl = new JLabel();
+        lbl.setPreferredSize(new Dimension(32, 32));
+        lbl.setToolTipText(item.getTooltip());
+        if (item.getId() > 0)
+        {
+            AsyncBufferedImage img = itemManager.getImage(
+                    item.getId(), Math.max(1, item.getQty()), item.getQty() > 1);
+            img.addTo(lbl);
+        }
+        return lbl;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -848,21 +1212,6 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     }
 
     // ── formatting ────────────────────────────────────────────────────────────
-
-    private static String formatRisk(String raw)
-    {
-        if (raw == null || raw.isEmpty() || raw.equals("0") || raw.equals("0.0"))
-            return "No stake";
-        try
-        {
-            long v = (long) Double.parseDouble(raw);
-            if (v == 0)    return "No stake";
-            if (v >= 1_000_000) return String.format("%.1fM gp", v / 1_000_000.0);
-            if (v >= 1_000)     return String.format("%,d k gp", v / 1_000);
-            return v + " gp";
-        }
-        catch (NumberFormatException ignored) { return raw; }
-    }
 
     private static String capitalize(String s)
     {

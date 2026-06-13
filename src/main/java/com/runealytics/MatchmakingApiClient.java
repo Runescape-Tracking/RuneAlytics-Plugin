@@ -58,11 +58,12 @@ public class MatchmakingApiClient
             JsonArray playerInventory,
             JsonArray playerGear,
             int overheadIconOrdinal,
-            boolean isSkulled
+            boolean isSkulled,
+            boolean protectItem
     ) throws IOException
     {
         JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
-        addPlayerStateToPayload(payload, playerInventory, playerGear, overheadIconOrdinal, isSkulled);
+        addPlayerStateToPayload(payload, playerInventory, playerGear, overheadIconOrdinal, isSkulled, protectItem);
         return executeRequest(GET_MATCH_PATH, payload, matchCode, osrsRsn);
     }
 
@@ -70,7 +71,7 @@ public class MatchmakingApiClient
     public MatchmakingApiResult getMatch(String verificationCode, String matchCode, String osrsRsn)
             throws IOException
     {
-        return getMatch(verificationCode, matchCode, osrsRsn, null, null, -1, false);
+        return getMatch(verificationCode, matchCode, osrsRsn, null, null, -1, false, false);
     }
 
     /**
@@ -85,7 +86,8 @@ public class MatchmakingApiClient
             JsonArray playerInventory,
             JsonArray playerGear,
             int overheadIconOrdinal,
-            boolean isSkulled
+            boolean isSkulled,
+            boolean protectItem
     ) throws IOException
     {
         JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
@@ -93,7 +95,7 @@ public class MatchmakingApiClient
         addPlayerStateToPayload(payload,
                 playerInventory != null ? playerInventory : new JsonArray(),
                 playerGear      != null ? playerGear      : new JsonArray(),
-                overheadIconOrdinal, isSkulled);
+                overheadIconOrdinal, isSkulled, protectItem);
         return executeRequest(ACCEPT_MATCH_PATH, payload, matchCode, osrsRsn);
     }
 
@@ -110,12 +112,13 @@ public class MatchmakingApiClient
             JsonArray playerInventory,
             JsonArray playerGear,
             int overheadIconOrdinal,
-            boolean isSkulled
+            boolean isSkulled,
+            boolean protectItem
     ) throws IOException
     {
         JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
         payload.addProperty("authentication_token", authenticationToken);
-        addPlayerStateToPayload(payload, playerInventory, playerGear, overheadIconOrdinal, isSkulled);
+        addPlayerStateToPayload(payload, playerInventory, playerGear, overheadIconOrdinal, isSkulled, protectItem);
         return executeRequest(BEGIN_MATCH_PATH, payload, matchCode, osrsRsn);
     }
 
@@ -127,7 +130,7 @@ public class MatchmakingApiClient
             String authenticationToken
     ) throws IOException
     {
-        return beginMatch(verificationCode, matchCode, osrsRsn, authenticationToken, null, null, -1, false);
+        return beginMatch(verificationCode, matchCode, osrsRsn, authenticationToken, null, null, -1, false, false);
     }
 
     /**
@@ -159,7 +162,8 @@ public class MatchmakingApiClient
             JsonElement playerInventory,
             JsonElement playerGear,
             int overheadIconOrdinal,
-            boolean isSkulled
+            boolean isSkulled,
+            boolean protectItem
     ) throws IOException
     {
         JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
@@ -167,7 +171,7 @@ public class MatchmakingApiClient
         addPlayerStateToPayload(payload,
                 playerInventory != null && playerInventory.isJsonArray() ? playerInventory.getAsJsonArray() : null,
                 playerGear      != null && playerGear.isJsonArray()      ? playerGear.getAsJsonArray()      : null,
-                overheadIconOrdinal, isSkulled);
+                overheadIconOrdinal, isSkulled, protectItem);
         return executeRequest(REPORT_ITEMS_PATH, payload, matchCode, osrsRsn);
     }
 
@@ -193,8 +197,11 @@ public class MatchmakingApiClient
             JsonArray inventory,
             JsonArray gear,
             int overheadIconOrdinal,
-            boolean isSkulled)
+            boolean isSkulled,
+            boolean protectItem)
     {
+        // Lean item data only — {id, qty} / {slot, id, qty}.  The website
+        // prices every item itself so the plugin ships no GE values.
         if (inventory != null) payload.add("player_inventory", inventory);
         if (gear      != null) payload.add("player_gear",      gear);
 
@@ -204,6 +211,10 @@ public class MatchmakingApiClient
         // last-known value forever.
         payload.addProperty("overhead_icon", overheadIconOrdinal);
         payload.addProperty("is_skulled",    isSkulled);
+
+        // Protect Item prayer — drives the OSRS keep-on-death count the server
+        // uses for the informational risk-value display.
+        payload.addProperty("protect_item",  protectItem);
     }
 
     private MatchmakingApiResult executeRequest(
@@ -282,7 +293,6 @@ public class MatchmakingApiClient
         int     world         = getInt(json,     "world");
         String  zone          = getString(json,  "zone");
         String  status        = getString(json,  "status");
-        String  risk          = getString(json,  "risk");
         String  gearRules     = stringify(json.get("gear_rules"));
 
         MatchmakingRally rally = null;
@@ -322,14 +332,81 @@ public class MatchmakingApiClient
             p2Validation = parsePlayerValidation(validations, "player2");
         }
 
-        return new MatchmakingSession(
+        MatchmakingSession session = new MatchmakingSession(
                 matchCode, osrsRsn,
                 player1, player2,
                 player1Joined, player2Joined,
                 player1Ready, player2Ready,
-                world, zone, status, risk, gearRules,
+                world, zone, status, gearRules,
                 rally, winner, token, tokenExpiresAt,
                 p1Validation, p2Validation
+        );
+
+        // ── Server-computed risk-value display (no gold wager) ───────────────
+        MatchmakingSession.RiskInfo p1Risk = parseRiskInfo(json, "player1_risk");
+        MatchmakingSession.RiskInfo p2Risk = parseRiskInfo(json, "player2_risk");
+        long   matchTotalRisk      = json.has("match_total_risk_value")
+                ? getLong(json, "match_total_risk_value") : 0L;
+        String matchTotalRiskLabel = getString(json, "match_total_risk_label");
+        if (matchTotalRiskLabel.isEmpty()) matchTotalRiskLabel = "0 gp";
+        session.setRiskData(p1Risk, p2Risk, matchTotalRisk, matchTotalRiskLabel);
+
+        return session;
+    }
+
+    /**
+     * Parses a player's risk block:
+     * {@code {is_skulled, protect_item, kept_count, skull_label, kept_label,
+     *         total_value, total_value_label, risk_value, risk_value_label,
+     *         most_valuable_kept, kept_items[], at_risk_items[]}}
+     */
+    private MatchmakingSession.RiskInfo parseRiskInfo(JsonObject json, String key)
+    {
+        if (!json.has(key) || !json.get(key).isJsonObject())
+        {
+            return MatchmakingSession.RISK_UNKNOWN;
+        }
+
+        JsonObject obj = json.getAsJsonObject(key);
+
+        return new MatchmakingSession.RiskInfo(
+                getBoolean(obj, "is_skulled"),
+                getBoolean(obj, "protect_item"),
+                getInt(obj,     "kept_count"),
+                getString(obj,  "skull_label"),
+                getString(obj,  "kept_label"),
+                getLong(obj,    "total_value"),
+                getString(obj,  "total_value_label"),
+                getLong(obj,    "risk_value"),
+                getString(obj,  "risk_value_label"),
+                parseRiskItem(obj.get("most_valuable_kept")),
+                parseRiskItems(obj.get("kept_items")),
+                parseRiskItems(obj.get("at_risk_items"))
+        );
+    }
+
+    private List<MatchmakingSession.RiskItem> parseRiskItems(JsonElement el)
+    {
+        List<MatchmakingSession.RiskItem> items = new ArrayList<>();
+        if (el == null || !el.isJsonArray()) return items;
+        for (JsonElement e : el.getAsJsonArray())
+        {
+            MatchmakingSession.RiskItem item = parseRiskItem(e);
+            if (item != null) items.add(item);
+        }
+        return items;
+    }
+
+    private MatchmakingSession.RiskItem parseRiskItem(JsonElement el)
+    {
+        if (el == null || !el.isJsonObject()) return null;
+        JsonObject obj = el.getAsJsonObject();
+        return new MatchmakingSession.RiskItem(
+                getInt(obj,    "id"),
+                getString(obj, "name"),
+                getInt(obj,    "qty"),
+                getLong(obj,   "value"),
+                getString(obj, "value_label")
         );
     }
 
@@ -388,6 +465,14 @@ public class MatchmakingApiClient
         JsonElement element = json.get(field);
         if (!element.isJsonPrimitive()) return 0;
         try { return element.getAsInt(); } catch (Exception ignored) { return 0; }
+    }
+
+    private long getLong(JsonObject json, String field)
+    {
+        if (json == null || !json.has(field) || json.get(field).isJsonNull()) return 0L;
+        JsonElement element = json.get(field);
+        if (!element.isJsonPrimitive()) return 0L;
+        try { return element.getAsLong(); } catch (Exception ignored) { return 0L; }
     }
 
     private String stringify(JsonElement element)

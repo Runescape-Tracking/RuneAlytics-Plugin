@@ -52,6 +52,37 @@ public final class RuneAlyticsItemJson
         return arr;
     }
 
+    /**
+     * Serialises an <em>equipment</em> container into {@code [{slot, id, qty}, ...]}
+     * (no GE values).  Slot index lets the server identify the weapon slot (3)
+     * for gear-rule validation and the website prices every item itself.
+     *
+     * <p>Used by the matchmaking path so the plugin sends lean item data and
+     * the website owns all valuation.</p>
+     */
+    public static JsonArray fromEquipment(ItemContainer container)
+    {
+        JsonArray arr = new JsonArray();
+        if (container == null) return arr;
+
+        Item[] items = container.getItems();
+        if (items == null) return arr;
+
+        for (int slot = 0; slot < items.length; slot++)
+        {
+            Item item = items[slot];
+            if (item == null) continue;
+            if (item.getId() <= 0 || item.getQuantity() <= 0) continue;
+
+            JsonObject entry = new JsonObject();
+            entry.addProperty("slot", slot);
+            entry.addProperty("id",   item.getId());
+            entry.addProperty("qty",  item.getQuantity());
+            arr.add(entry);
+        }
+        return arr;
+    }
+
     /** Same as {@link #fromContainer} but for a list of {@link ItemStack}. */
     public static JsonArray fromStacks(List<ItemStack> stacks)
     {
