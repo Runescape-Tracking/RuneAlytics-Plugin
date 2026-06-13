@@ -23,14 +23,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateListener
 {
     private static final int  ITEMS_PER_ROW    = 5;
-    private static final int  ITEM_SIZE        = 42;
-    private static final int  ITEM_GAP         = 3;
+    private static final int  ITEM_SIZE        = 36;
+    private static final int  ITEM_GAP         = 2;
     private static final int  PAD              = 6;
     private static final int  HIGHLIGHT_TIMEOUT_MS = 10_000;
     private static final long SYNC_COOLDOWN_MS = 5 * 60 * 1_000L;
 
-    private static final Font CALIBRI_BOLD  = new Font("Calibri", Font.BOLD, 14);
-    private static final Font CALIBRI_PLAIN = new Font("Calibri", Font.PLAIN, 12);
+    private static final Font CALIBRI_BOLD  = new Font("Calibri", Font.BOLD, 12);
+    private static final Font CALIBRI_PLAIN = new Font("Calibri", Font.PLAIN, 11);
     private static final Font FILTER_FONT   = new Font("Calibri", Font.BOLD, 11);
 
     private static final Color PICKPOCKET_HEADER_HL   = new Color(30, 18, 55);
@@ -59,8 +59,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private final ItemManager        itemManager;
     private final RuneAlyticsPlugin  plugin;
 
-    private final JLabel totalKillsLabel = new JLabel("0 kills");
-    private final JLabel totalValueLabel = new JLabel("0 gp");
+    private final JLabel totalKillsLabel = new JLabel("Kills: 0");
+    private final JLabel totalValueLabel = new JLabel("Value: 0 gp");
     private final JPanel bossListPanel   = new JPanel();
 
     private JButton           eyeButton;
@@ -163,30 +163,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         scrollPane.getViewport().setBackground(ColorScheme.DARK_GRAY_COLOR);
         scrollPane.getVerticalScrollBar().setUnitIncrement(16);
         scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-        scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
-        scrollPane.getVerticalScrollBar().addComponentListener(new ComponentAdapter()
-        {
-            @Override public void componentShown (ComponentEvent e) { setScrollPadding(true);  }
-            @Override public void componentHidden(ComponentEvent e) { setScrollPadding(false); }
-        });
+        scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS);
+        scrollPane.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
 
         add(scrollPane, BorderLayout.CENTER);
-    }
-
-    private void setScrollPadding(boolean visible)
-    {
-        int leftPad  = visible ? 2 : PAD;
-        int rightPad = PAD;
-        if (visible)
-        {
-            int sbw = scrollPane.getVerticalScrollBar().getWidth();
-            if (sbw <= 0) sbw = UIManager.getInt("ScrollBar.width");
-            if (sbw <= 0) sbw = 13;
-            rightPad = PAD + sbw;
-        }
-        bossListPanel.setBorder(new EmptyBorder(PAD, leftPad, PAD, rightPad));
-        bossListPanel.revalidate();
-        bossListPanel.repaint();
     }
 
     private JPanel buildHeader()
@@ -195,6 +175,17 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
         header.setBackground(new Color(28, 28, 28));
         header.setBorder(new EmptyBorder(8, 8, 8, 8));
+
+        // ── Shared branding header ────────────────────────────────────────────
+        header.add(RuneAlyticsUi.buildPanelHeader("Loot Tracker"));
+        header.add(Box.createVerticalStrut(8));
+
+        JSeparator topSep = new JSeparator();
+        topSep.setForeground(new Color(55, 55, 55));
+        topSep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        topSep.setAlignmentX(Component.LEFT_ALIGNMENT);
+        header.add(topSep);
+        header.add(Box.createVerticalStrut(8));
 
         // ── Stats row ────────────────────────────────────────────────────────
         JPanel statsRow = new JPanel(new BorderLayout(8, 0));
@@ -596,6 +587,26 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     }
 
     /**
+     * Enables or disables the Sync button based on whether the RuneAlytics
+     * server-side loot tracker feature is active for this player.
+     * When disabled, the button is greyed out with an explanatory tooltip.
+     */
+    public void setSyncEnabled(boolean enabled)
+    {
+        SwingUtilities.invokeLater(() -> {
+            if (syncButton == null) return;
+            syncButton.setEnabled(enabled);
+            syncButton.setToolTipText(enabled
+                    ? "Sync with RuneAlytics server"
+                    : "Loot syncing is disabled — enable Loot Tracker on RuneAlytics.com");
+            syncButton.setBackground(enabled ? new Color(40, 60, 90) : new Color(35, 35, 35));
+            syncButton.setForeground(enabled ? Color.WHITE : new Color(100, 100, 100));
+            syncButton.setBorder(BorderFactory.createLineBorder(
+                    enabled ? new Color(60, 90, 130) : new Color(55, 55, 55), 1));
+        });
+    }
+
+    /**
      * Animates the sync button and status label to reflect the outcome.
      * Reverts automatically after 2.5 seconds — no modal dialog.
      *
@@ -811,8 +822,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                                 bossListPanel.add(buildBossCard(stats));
                                 bossListPanel.add(Box.createVerticalStrut(5));
                             }
-                            totalKillsLabel.setText(formatNumber(totalKills) + " kills");
-                            totalValueLabel.setText(formatGp(totalVal));
+                            totalKillsLabel.setText("Kills " + formatNumber(totalKills));
+                            totalValueLabel.setText("Value " + formatGp(totalVal));
                         }
 
                         bossListPanel.revalidate();
@@ -889,11 +900,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     {
         boolean ip = lootManager.isPickpocketSource(npcName);
         boolean is = lootManager.isSkillingSource(npcName);
-        String  ic = ip ? "👜" : (is ? "🌿" : "⚔");
         String  dn = ip ? lootManager.stripPickpocketPrefix(npcName)
                 : is ? lootManager.stripSkillingPrefix(npcName)
                 : npcName;
-        return ic + " " + truncate(dn, 18) + " × " + String.format("%,d", killCount);
+        return truncate(dn, 18) + " × " + String.format("%,d", killCount);
     }
 
     private JPanel buildBossCard(BossKillStats stats)
@@ -1038,7 +1048,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             }
             else
             {
-                itemManager.getImage(drop.getItemId(), drop.getTotalQuantity(), drop.getTotalQuantity() > 1)
+                long qty = drop.getTotalQuantity();
+                itemManager.getImage(drop.getItemId(), (int) qty, qty > 1)
                         .addTo(iconLabel);
             }
 
@@ -1054,7 +1065,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             }
 
             slot.add(layers, BorderLayout.CENTER);
-            itemSlotMap.put(slotKey, iconLabel);
             itemSlotMap.put(slotKey, iconLabel);
 
             JPopupMenu menu = new JPopupMenu();
@@ -1107,8 +1117,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         p.add(Box.createVerticalStrut(8));
         p.add(msgLabel);
 
-        totalKillsLabel.setText("0 kills");
-        totalValueLabel.setText("0 gp total");
+        totalKillsLabel.setText("Kills: 0");
+        totalValueLabel.setText("Value: 0 gp");
         return p;
     }
 

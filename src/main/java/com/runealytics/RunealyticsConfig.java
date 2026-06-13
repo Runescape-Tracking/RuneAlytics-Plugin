@@ -217,6 +217,57 @@ public interface RunealyticsConfig extends Config
         return false;
     }
 
+    // ==================== PRIVACY ====================
+
+    @ConfigSection(
+            name = "Privacy",
+            description = "Control who can see your data on RuneAlytics.com",
+            position = 4
+    )
+    String privacySection = "privacy";
+
+    @ConfigItem(
+            keyName = "bankPrivacy",
+            name = "Bank Visibility",
+            description = "Who can see your bank value and contents on RuneAlytics.com",
+            section = privacySection,
+            position = 0
+    )
+    default PrivacySetting bankPrivacy()
+    {
+        return PrivacySetting.PUBLIC;
+    }
+
+    @ConfigItem(
+            keyName = "bankPrivacy",
+            name = "Bank Visibility",
+            description = "Who can see your bank value and contents on RuneAlytics.com",
+            section = privacySection,
+            position = 0
+    )
+    void bankPrivacy(PrivacySetting value);
+
+    @ConfigItem(
+            keyName = "playerVisibility",
+            name = "Online Status",
+            description = "Who can see your online status on RuneAlytics.com",
+            section = privacySection,
+            position = 1
+    )
+    default PrivacySetting playerVisibility()
+    {
+        return PrivacySetting.PUBLIC;
+    }
+
+    @ConfigItem(
+            keyName = "playerVisibility",
+            name = "Online Status",
+            description = "Who can see your online status on RuneAlytics.com",
+            section = privacySection,
+            position = 1
+    )
+    void playerVisibility(PrivacySetting value);
+
     // ==================== ADVANCED ====================
 
     @ConfigItem(

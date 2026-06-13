@@ -103,6 +103,46 @@ public final class RuneAlyticsItemJson
     }
 
     /**
+     * Serialises an <em>equipment</em> container (e.g. {@code InventoryID.EQUIPMENT})
+     * including each item's slot index, GE price and total value.
+     *
+     * <p>Slot index is critical for server-side gear-rule validation:
+     * slot&nbsp;3 is the weapon slot, which the server uses to enforce
+     * rules like "DDS Only" or "Whip Only" without any rule logic in the
+     * plugin.</p>
+     *
+     * <p>The output shape per item:
+     * {@code {"slot": 3, "id": 4151, "qty": 1, "ge_per": 2500000, "total": 2500000}}</p>
+     */
+    public static JsonArray fromEquipmentWithValues(ItemContainer container, ItemManager itemManager)
+    {
+        JsonArray arr = new JsonArray();
+        if (container == null) return arr;
+
+        Item[] items = container.getItems();
+        if (items == null) return arr;
+
+        for (int slot = 0; slot < items.length; slot++)
+        {
+            Item item = items[slot];
+            if (item == null) continue;
+            if (item.getId() <= 0 || item.getQuantity() <= 0) continue;
+
+            int  gePer = ItemValueResolver.perItemGeValue(itemManager, item.getId());
+            long total = (long) gePer * item.getQuantity();
+
+            JsonObject entry = new JsonObject();
+            entry.addProperty("slot",   slot);
+            entry.addProperty("id",     item.getId());
+            entry.addProperty("qty",    item.getQuantity());
+            entry.addProperty("ge_per", gePer);
+            entry.addProperty("total",  total);
+            arr.add(entry);
+        }
+        return arr;
+    }
+
+    /**
      * Sum total GE value (with decomposition) of every item in {@code container}.
      * Returns 0 for a null/empty container.
      */

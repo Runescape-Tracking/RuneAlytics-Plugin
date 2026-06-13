@@ -24,13 +24,14 @@ import java.awt.geom.RoundRectangle2D;
 @Singleton
 public class MatchmakingPanel extends RuneAlyticsPanelBase implements MatchmakingUpdateListener
 {
-    // ── colour palette (consistent with RuneAlyticsUi) ──────────────────────
-    private static final Color BG           = ColorScheme.DARK_GRAY_COLOR;
-    private static final Color CARD_BG      = ColorScheme.DARKER_GRAY_COLOR;
-    private static final Color CARD_BORDER  = new Color(60, 60, 60, 200);
+    // ── colour palette (mirrors RuneAlyticsSettingsPanel) ────────────────────
+    private static final Color BG           = new Color(38, 38, 38);
+    private static final Color CARD_BG      = new Color(27, 27, 28);
+    private static final Color CARD_BORDER  = new Color(70, 70, 74);
+    private static final Color TEAL_COLOR   = new Color(82, 196, 196);
     private static final Color COL_WHITE    = Color.WHITE;
-    private static final Color COL_MUTED    = new Color(170, 170, 170);
-    private static final Color COL_DIM      = new Color(120, 120, 120);
+    private static final Color COL_MUTED    = new Color(220, 220, 220);
+    private static final Color COL_DIM      = new Color(190, 190, 190);
 
     private static final Color COL_GREEN    = new Color(72, 199, 116);
     private static final Color COL_RED      = new Color(220, 80,  80);
@@ -77,6 +78,15 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     private final JLabel  p1Status         = readyLabel();
     private final JLabel  p2Status         = readyLabel();
 
+    // ── validation badge per player ───────────────────────────────────────────
+    // Shows server-computed compliance state (risk, gear rules).  Colour-coded:
+    //   green ✓  — fully compliant
+    //   yellow ⚠ — warnings only (honor rules)
+    //   red ✗    — one or more errors (e.g. insufficient risk)
+    // The text comes directly from the server so the plugin has zero rule logic.
+    private final JLabel  p1Validation     = validationLabel();
+    private final JLabel  p2Validation     = validationLabel();
+
     // ── result-card widgets ───────────────────────────────────────────────────
     private final JPanel  resultCard       = vertPanel();
     private final JLabel  resultName       = new JLabel();
@@ -101,6 +111,9 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         this.matchmakingManager = matchmakingManager;
         this.state              = state;
 
+        setBackground(BG);
+        setBorder(new EmptyBorder(10, 12, 10, 12));
+
         matchmakingManager.setListener(this);
         buildUi();
         wireEvents();
@@ -113,14 +126,8 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     private void buildUi()
     {
-        // Use inline title/subtitle so we can control the gap tightly —
-        // addSectionTitle/addSubtitle add generous spacing suited for taller panels.
-        JLabel title = RuneAlyticsUi.titleLabel("Match Finder");
-        add(title);
-        add(RuneAlyticsUi.vSpace(2));
-        JLabel subtitle = RuneAlyticsUi.subtitleLabel("PvP Match Tracker");
-        add(subtitle);
-        add(RuneAlyticsUi.vSpace(6));
+        add(RuneAlyticsUi.buildPanelHeader("Match Finder"));
+        add(RuneAlyticsUi.vSpace(8));
 
         add(buildLoadCard());
         add(RuneAlyticsUi.vSpace(5));
@@ -142,7 +149,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     {
         JPanel body = vertPanel();
 
-        JLabel desc = new JLabel("Enter a match code from runeanalytics.com/pvp");
+        JLabel desc = new JLabel("<html><body style='width:155px; margin:0; padding:0'>Enter a match code from runealytics.com/pvp</body></html>");
         desc.setFont(cf(Font.PLAIN, 11f));
         desc.setForeground(COL_MUTED);
         desc.setAlignmentX(LEFT_ALIGNMENT);
@@ -207,41 +214,54 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         p2Avatar = new AvatarLabel("?");
 
         JPanel body = vertPanel();
-        body.add(buildPlayerRow(p1Avatar, p1Name, p1Tag, p1Status));
+        body.add(buildPlayerRow(p1Avatar, p1Name, p1Tag, p1Status, p1Validation));
         body.add(RuneAlyticsUi.vSpace(4));
-        body.add(buildPlayerRow(p2Avatar, p2Name, p2Tag, p2Status));
+        body.add(buildPlayerRow(p2Avatar, p2Name, p2Tag, p2Status, p2Validation));
 
         playersCard.add(sectionCard("⚐", "Players", body));
         return playersCard;
     }
 
-    private JPanel buildPlayerRow(AvatarLabel avatar, JLabel name, JLabel tag, JLabel status)
+    private JPanel buildPlayerRow(AvatarLabel avatar, JLabel name, JLabel tag,
+                                  JLabel status, JLabel validation)
     {
-        JPanel row = new JPanel(new BorderLayout(8, 0));
-        row.setOpaque(false);
-        row.setAlignmentX(LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+        // Top sub-row: avatar | name + tag | status
+        // The status label now sits to the RIGHT of the name/tag block on the
+        // same line, so it does NOT steal horizontal space from the validation
+        // label.  Previously the validation lived inside the constrained centre
+        // column and was clipped by the EAST status panel.
+        JPanel topRow = new JPanel(new BorderLayout(8, 0));
+        topRow.setOpaque(false);
+        topRow.setAlignmentX(LEFT_ALIGNMENT);
 
-        // left: avatar
-        row.add(avatar, BorderLayout.WEST);
+        topRow.add(avatar, BorderLayout.WEST);
 
-        // centre: name + tag
-        JPanel centre = vertPanel();
-        centre.setAlignmentY(Component.CENTER_ALIGNMENT);
+        JPanel nameBlock = vertPanel();
+        nameBlock.setAlignmentY(Component.CENTER_ALIGNMENT);
         name.setAlignmentX(LEFT_ALIGNMENT);
         tag.setAlignmentX(LEFT_ALIGNMENT);
-        centre.add(name);
-        centre.add(RuneAlyticsUi.vSpace(1));
-        centre.add(tag);
-        row.add(centre, BorderLayout.CENTER);
+        nameBlock.add(name);
+        nameBlock.add(RuneAlyticsUi.vSpace(1));
+        nameBlock.add(tag);
+        topRow.add(nameBlock, BorderLayout.CENTER);
 
-        // right: ready status
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
         right.setOpaque(false);
         right.add(status);
-        row.add(right, BorderLayout.EAST);
+        topRow.add(right, BorderLayout.EAST);
 
-        return row;
+        // Validation label spans the full row width below the top sub-row so
+        // it is never truncated by the status label on the right.
+        validation.setAlignmentX(LEFT_ALIGNMENT);
+
+        JPanel wrapper = vertPanel();
+        wrapper.setAlignmentX(LEFT_ALIGNMENT);
+        wrapper.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
+        wrapper.add(topRow);
+        wrapper.add(RuneAlyticsUi.vSpace(3));
+        wrapper.add(validation);
+
+        return wrapper;
     }
 
     // ── Result card ───────────────────────────────────────────────────────────
@@ -374,10 +394,28 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         if (!update.isSuccess() || update.getSession() == null)
         {
             String msg = update.getMessage();
-            if (msg == null || msg.isEmpty()) msg = "Failed to load match.";
-            setEntryStatus(msg, COL_RED);
+            if (msg == null) msg = "";
+
+            // If a match is already active, a transient poll or background-call
+            // failure should be shown in the entry status bar but MUST NOT hide
+            // the active match cards — that would make the whole UI disappear on
+            // every blip (the root cause of the "death not reported" UX problem).
+            if (matchmakingManager.hasActiveMatch())
+            {
+                if (!msg.isEmpty())
+                {
+                    setEntryStatus(msg, COL_RED);
+                }
+                return;
+            }
+
+            // No active match — this is an explicit load failure; reset to idle.
+            // updateEntryCard() is called first so it restores the enabled state
+            // and sets "Ready." — then we immediately override the status label
+            // with the actual error so it is the last thing written and stays visible.
             hideActiveCards();
             updateEntryCard();
+            setEntryStatus(msg.isEmpty() ? "Failed to load match." : msg, COL_RED);
             return;
         }
 
@@ -441,6 +479,14 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         applyPlayerStatus(p1Status, myJoined,  myReady,  status);
         applyPlayerStatus(p2Status, oppJoined, oppReady, status);
 
+        // ── validation badges (server-driven — zero rule logic here) ─────────
+        MatchmakingSession.PlayerValidation myVal  = localIsP1
+                ? s.getPlayer1Validation() : s.getPlayer2Validation();
+        MatchmakingSession.PlayerValidation oppVal = localIsP1
+                ? s.getPlayer2Validation() : s.getPlayer1Validation();
+        applyValidation(p1Validation, myVal);
+        applyValidation(p2Validation, oppVal);
+
         // ── result card ──────────────────────────────────────────────────────
         boolean terminal = status.equalsIgnoreCase("Completed")
                 || status.equalsIgnoreCase("Canceled");
@@ -491,6 +537,66 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         styleStatusBadge(badge, icon + "  " + capitalize(status), bg);
     }
 
+    /**
+     * Updates the validation label for one player from the server's compliance
+     * result.  The plugin contains zero rule logic — it simply renders what
+     * the server returns.
+     *
+     * <ul>
+     *   <li>Green  ✓  — no issues (or only warnings)  → valid</li>
+     *   <li>Yellow ⚠  — warnings only (honor rules)    → technically valid</li>
+     *   <li>Red    ✗  — one or more errors             → invalid</li>
+     * </ul>
+     */
+    private void applyValidation(JLabel lbl, MatchmakingSession.PlayerValidation validation)
+    {
+        if (validation == null || validation == MatchmakingSession.VALIDATION_UNKNOWN)
+        {
+            lbl.setText("");
+            return;
+        }
+
+        // ── Violation grace countdown — shown with high-urgency orange ────────
+        // The server injects a "violation_grace" issue at the front of the list
+        // when a countdown is active.  We render it before other error checks so
+        // it's always the most prominent message while the timer is running.
+        MatchmakingSession.ValidationIssue graceIssue =
+                validation.firstIssueByCode("violation_grace");
+        if (graceIssue != null)
+        {
+            lbl.setText("<html><div width=\"220\">\u23F1 " + escapeHtml(graceIssue.getMessage()) + "</div></html>");
+            lbl.setForeground(new Color(230, 120, 0)); // orange
+            return;
+        }
+
+        String firstError   = validation.firstErrorMessage();
+        String firstWarning = validation.firstWarningMessage();
+
+        // Validation now sits below the player row (full-panel width) so we
+        // can use a wider div — 220px fits the standard plugin panel width.
+        if (firstError != null)
+        {
+            lbl.setText("<html><div width=\"220\">\u2717 " + escapeHtml(firstError) + "</div></html>");
+            lbl.setForeground(COL_RED);
+        }
+        else if (firstWarning != null)
+        {
+            lbl.setText("<html><div width=\"220\">\u26A0 " + escapeHtml(firstWarning) + "</div></html>");
+            lbl.setForeground(new Color(230, 180, 40));
+        }
+        else
+        {
+            lbl.setText("\u2713 Rules met");
+            lbl.setForeground(COL_GREEN);
+        }
+    }
+
+    private static String escapeHtml(String s)
+    {
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
     private void applyPlayerStatus(JLabel lbl, boolean joined, boolean ready, String matchStatus)
     {
         if (matchStatus.equalsIgnoreCase("Fighting")
@@ -536,14 +642,14 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
      */
     private JPanel sectionCard(String icon, String title, JPanel body)
     {
-        JPanel card = new JPanel();
+        JPanel card = new AutoHeightPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
         card.setBackground(CARD_BG);
         card.setOpaque(true);
         card.setAlignmentX(LEFT_ALIGNMENT);
         card.setBorder(new CompoundBorder(
-                new LineBorder(CARD_BORDER, 1, true),
-                new EmptyBorder(8, 10, 8, 10)));
+                new LineBorder(CARD_BORDER, 1),
+                new EmptyBorder(10, 10, 10, 10)));
 
         if (!title.isEmpty())
         {
@@ -554,19 +660,19 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             if (!icon.isEmpty())
             {
                 JLabel iconLbl = new JLabel(icon);
-                iconLbl.setFont(cf(Font.BOLD, 13f));
-                iconLbl.setForeground(COL_MUTED);
+                iconLbl.setFont(cf(Font.BOLD, 11f));
+                iconLbl.setForeground(TEAL_COLOR);
                 header.add(iconLbl);
-                header.add(RuneAlyticsUi.hSpace(6));
+                header.add(RuneAlyticsUi.hSpace(5));
             }
 
             JLabel titleLbl = new JLabel(title);
-            titleLbl.setFont(cf(Font.BOLD, 13f));
-            titleLbl.setForeground(COL_WHITE);
+            titleLbl.setFont(cf(Font.BOLD, 11f));
+            titleLbl.setForeground(TEAL_COLOR);
             header.add(titleLbl);
 
             card.add(header);
-            card.add(RuneAlyticsUi.vSpace(6));
+            card.add(RuneAlyticsUi.vSpace(8));
         }
 
         card.add(body);
@@ -603,9 +709,17 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     // ── static factory helpers ────────────────────────────────────────────────
 
+    private static JLabel validationLabel()
+    {
+        JLabel lbl = new JLabel("");
+        lbl.setFont(cf(Font.PLAIN, 10f));
+        lbl.setForeground(COL_DIM);
+        return lbl;
+    }
+
     private static JPanel vertPanel()
     {
-        JPanel p = new JPanel();
+        JPanel p = new AutoHeightPanel();
         p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
         p.setOpaque(false);
         p.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -899,6 +1013,16 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
                 dim.height += rowHeight + insets.top + insets.bottom + vgap * 2;
                 return dim;
             }
+        }
+    }
+
+    private static final class AutoHeightPanel extends JPanel
+    {
+        @Override
+        public Dimension getMaximumSize()
+        {
+            Dimension preferred = getPreferredSize();
+            return new Dimension(Integer.MAX_VALUE, preferred.height);
         }
     }
 

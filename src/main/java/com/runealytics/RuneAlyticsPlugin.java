@@ -1,6 +1,7 @@
 package com.runealytics;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import com.google.inject.Provides;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -141,7 +142,8 @@ public class RuneAlyticsPlugin extends Plugin
 
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
-    private NavigationButton navButton;
+    private NavigationButton         navButton;
+    private LootTrackerPanel         lootTrackerPanel;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT TRACKING STATE
@@ -337,12 +339,18 @@ public class RuneAlyticsPlugin extends Plugin
                 MatchmakingPanel        matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
                 RuneAlyticsSettingsPanel settingsPanel   = injector.getInstance(RuneAlyticsSettingsPanel.class);
 
+                lootTrackerPanel = lootPanel;
+                // Sync starts disabled until feature flags confirm it is active
+                lootPanel.setSyncEnabled(false);
+
                 SwingUtilities.invokeLater(() ->
                 {
                     try
                     {
-                        mainPanel.addTab("Loot Tracker", FEATURE_LOOT,         lootPanel);
-                        mainPanel.addTab("Match Finder", FEATURE_MATCHES,      matchmakingPanel);
+                        // Loot Tracker has no feature gate — local tracking is always available.
+                        // Sync availability is controlled separately via setSyncEnabled().
+                        mainPanel.addTab("Loot Tracker", null,             lootPanel);
+                        mainPanel.addTab("Matches",      FEATURE_MATCHES,  matchmakingPanel);
                         mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
                         log.info("RuneAlytics tabs populated");
                     }
@@ -634,20 +642,29 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onItemContainerChanged(ItemContainerChanged event)
     {
+        // ── Matchmaking: refresh gear snapshot and report on change ──────────
+        // Runs on the client thread, so ItemContainer reads inside the manager
+        // are safe.  The manager only acts if a match is active.
+        matchmakingManager.onItemContainerChanged(event);
+
         // ── Bank sync ─────────────────────────────────────────────────────────
         if (event.getContainerId() == InventoryID.BANK.getId()
                 && config.enableBankSync()
                 && state.isLoggedIn()
                 && state.isVerified())
         {
-            final String token    = state.getVerificationCode();
-            final String username = state.getVerifiedUsername();
-            executorService.execute(() ->
-                    bankDataManager.syncBankData(
-                            token, username,
-                            event.getItemContainer(),
-                            client.getItemContainer(InventoryID.INVENTORY),
-                            client.getItemContainer(InventoryID.EQUIPMENT)));
+            final String token          = state.getVerificationCode();
+            final String username       = state.getVerifiedUsername();
+            // Build the complete JSON snapshot HERE on the client thread because
+            // fromContainerWithValues calls ItemManager.getItemComposition which
+            // requires client.getItemDefinition — a client-thread-only API.
+            // Only the HTTP call is handed off to the background executor.
+            final JsonObject bankSnapshot = bankDataManager.buildBankSnapshot(
+                    username,
+                    event.getItemContainer(),
+                    client.getItemContainer(InventoryID.INVENTORY),
+                    client.getItemContainer(InventoryID.EQUIPMENT));
+            executorService.execute(() -> bankDataManager.syncBankData(token, username, bankSnapshot));
             return;
         }
 
@@ -1163,6 +1180,7 @@ public class RuneAlyticsPlugin extends Plugin
         {
             state.setLoggedIn(false);
             matchmakingManager.reset(); // clear any active match on logout
+            if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(false);
             SwingUtilities.invokeLater(() -> {
                 mainPanel.showLoggedOutState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
@@ -1211,18 +1229,15 @@ public class RuneAlyticsPlugin extends Plugin
             executorService.submit(() ->
             {
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
+                boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
+                boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
+                if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
                 SwingUtilities.invokeLater(() ->
-                {
-                    mainPanel.showMainFeatures(
-                            flags.getOrDefault(FEATURE_LOOT, false),
-                            flags.getOrDefault(FEATURE_MATCHES, false));
-                    // Re-refresh matchmaking panel AFTER the tab becomes visible,
-                    // so the input and button reflect the now-enabled state.
-                    injector.getInstance(MatchmakingPanel.class).refreshLoginState();
-                });
+                        mainPanel.showMainFeatures(true, matchEnabled));
             });
         }
     }
+
 
     private void handlePostLogin()
     {
@@ -1240,7 +1255,12 @@ public class RuneAlyticsPlugin extends Plugin
 
         executorService.submit(() -> {
             Map<String, Boolean> flags = apiClient.fetchFeatureFlags(username.toLowerCase());
-            SwingUtilities.invokeLater(() -> mainPanel.applyFeatureFlags(flags));
+            boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
+            if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
+            // Loot Tracker tab is always visible; only Match Finder is flag-controlled
+            Map<String, Boolean> tabFlags = new java.util.HashMap<>(flags);
+            tabFlags.put(FEATURE_LOOT, true);
+            SwingUtilities.invokeLater(() -> mainPanel.applyFeatureFlags(tabFlags));
         });
     }
 
@@ -1267,6 +1287,18 @@ public class RuneAlyticsPlugin extends Plugin
         executorService.schedule(
                 () -> SwingUtilities.invokeLater(mainPanel::restoreLastTab),
                 2_500, TimeUnit.MILLISECONDS);
+    }
+
+    @Subscribe
+    public void onConfigChanged(net.runelite.client.events.ConfigChanged event)
+    {
+        if (!"runealytics".equals(event.getGroup())) return;
+        String key = event.getKey();
+        if ("bankPrivacy".equals(key) || "playerVisibility".equals(key))
+        {
+            SwingUtilities.invokeLater(() ->
+                    injector.getInstance(RuneAlyticsSettingsPanel.class).refreshPrivacySettings());
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1343,6 +1375,30 @@ public class RuneAlyticsPlugin extends Plugin
     {
         if (!config.syncLootToServer() || !state.isLoggedIn() || !state.isVerified()) return;
         lootManager.uploadUnsyncedKills();
+    }
+
+    /**
+     * Polls feature flags from the server every 60 seconds while the player is
+     * logged in and verified. This keeps the UI consistent without relying solely
+     * on the one-time fetch that happens on each game-state change.
+     */
+    @net.runelite.client.task.Schedule(
+            period = 60000,
+            unit   = ChronoUnit.MILLIS,
+            asynchronous = true
+    )
+    public void pollFeatureFlags()
+    {
+        if (!state.isLoggedIn() || !state.isVerified()) return;
+        String rsn = state.getVerifiedUsername();
+        if (rsn == null || rsn.isEmpty()) return;
+
+        Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
+        boolean lootSync    = flags.getOrDefault(FEATURE_LOOT,    false);
+        boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
+
+        if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
+        SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, matchEnabled));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1521,6 +1577,7 @@ public class RuneAlyticsPlugin extends Plugin
             RuneAlyticsSettingsPanel sp = injector.getInstance(RuneAlyticsSettingsPanel.class);
             sp.updateVerificationStatus(verified, verified ? rsn : null);
             vp.refreshLoginState();
+            injector.getInstance(MatchmakingPanel.class).refreshLoginState();
         });
 
         // If the account is now verified, fetch feature flags and show the full
