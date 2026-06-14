@@ -83,6 +83,21 @@ public class RunealyticsApiClient
         payload.addProperty("game_mode",    state.getCurrentGameMode()    != null ? state.getCurrentGameMode()    : "regular");
         payload.addProperty("account_type", state.getCurrentAccountSubtype() != null ? state.getCurrentAccountSubtype() : "normal");
 
+        // Optional shared location object (top-level for the batch). Omitted
+        // entirely when unavailable so the server's nullable handling and older
+        // website code keep working.
+        PlayerLocationSnapshot location = state.getCurrentLocation();
+        if (location != null)
+        {
+            JsonObject locationJson = location.toJson();
+            payload.add("location", locationJson);
+            log.debug("[XP Batch] location payload: {}", locationJson);
+        }
+        else
+        {
+            log.debug("[XP Batch] no location captured — omitting location field");
+        }
+
         String payloadJson = gson.toJson(payload);
         String url         = config.apiUrl() + "/xp/batch";
 

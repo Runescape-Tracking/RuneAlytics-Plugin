@@ -90,6 +90,16 @@ public final class LootKillJsonBuilder
         payload.add("drops", dropsArr);
         payload.addProperty("total_loot_value", totalValue);
         payload.addProperty("drop_count",       dropCount);
+
+        // Optional shared location object, per-kill. Omitted when the kill has
+        // no captured location (older storage records / location unavailable) so
+        // the server's nullable handling and older website code keep working.
+        PlayerLocationSnapshot location = kill.getLocation();
+        if (location != null)
+        {
+            payload.add("location", location.toJson());
+        }
+
         return payload;
     }
 

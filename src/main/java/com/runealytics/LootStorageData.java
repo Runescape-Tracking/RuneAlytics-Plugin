@@ -88,6 +88,16 @@ public class LootStorageData
          */
         @SerializedName("account_type")
         private String accountType = "normal";
+
+        /**
+         * Where the local player was standing when this kill happened.
+         * Captured on the client thread at record time and uploaded per-kill in
+         * the {@code /loot/bulk-sync} payload. {@code null} for kills recorded by
+         * older plugin builds (loaded from storage) or when location was
+         * unavailable — the field is then omitted from the request.
+         */
+        @SerializedName("location")
+        private PlayerLocationSnapshot location;
     }
 
     @Data

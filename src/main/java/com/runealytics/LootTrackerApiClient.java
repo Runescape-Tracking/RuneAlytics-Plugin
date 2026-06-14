@@ -98,7 +98,16 @@ public class LootTrackerApiClient
                     continue;
                 }
 
-                killPayloads.add(LootKillJsonBuilder.buildKill(kill, npcName, npcId, prestige));
+                JsonObject killPayload = LootKillJsonBuilder.buildKill(kill, npcName, npcId, prestige);
+
+                if (log.isDebugEnabled())
+                {
+                    log.debug("[bulk-sync] kill '{}' #{} location payload: {}",
+                            npcName, kill.getKillNumber(),
+                            killPayload.has("location") ? killPayload.get("location") : "<none>");
+                }
+
+                killPayloads.add(killPayload);
             }
         }
 

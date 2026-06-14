@@ -44,6 +44,14 @@ public class RuneAlyticsState
     private int matchWins;
     private int matchLosses;
 
+    /**
+     * Most recent local-player location, captured on the client thread at each
+     * XP gain. Read off-thread by the API client when the 30s XP batch flushes,
+     * so it is {@code volatile}. May be {@code null} (e.g. not logged in) in
+     * which case the {@code location} field is simply omitted from the payload.
+     */
+    private volatile PlayerLocationSnapshot currentLocation;
+
     // A map that stores Boss Name -> Number of Kills
     private Map<String, Integer> killCounts = new HashMap<>();
 
@@ -58,6 +66,7 @@ public class RuneAlyticsState
         pendingLootCount = 0;
         currentGameMode = "regular";
         currentAccountSubtype = "normal";
+        currentLocation = null;
     }
 
     public boolean canSync()

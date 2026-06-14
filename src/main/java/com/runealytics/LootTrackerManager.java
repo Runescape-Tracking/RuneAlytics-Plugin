@@ -1173,7 +1173,11 @@ public class LootTrackerManager
                 ? gameKC
                 : stats.getKillCount() + 1;
 
-        // 3. Create the storage-compatible record
+        // 3. Snapshot the player's location at kill time. Loot events fire on
+        //    the client thread, so reading the live client state here is safe.
+        PlayerLocationSnapshot location = PlayerLocationSnapshot.capture(client);
+
+        // 4. Create the storage-compatible record
         LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
         killRecord.setTimestamp(System.currentTimeMillis());
         killRecord.setKillNumber(killNumber);
@@ -1183,12 +1187,13 @@ public class LootTrackerManager
         killRecord.setSyncedToServer(false); // picked up by the next batch
         killRecord.setGameMode(state.getCurrentGameMode());
         killRecord.setAccountType(state.getCurrentAccountSubtype());
+        killRecord.setLocation(location);
 
-        // 4. Update the in-memory UI stats and persistent storage
+        // 5. Update the in-memory UI stats and persistent storage
         stats.addKill(killRecord);
         storageManager.addKill(
                 npcName, npcId, combatLevel, killNumber,
-                world, state.getPrestige(), drops);
+                world, state.getPrestige(), drops, location);
 
         notifyListeners(stats, killRecord);
 

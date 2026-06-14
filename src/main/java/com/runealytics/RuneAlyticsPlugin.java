@@ -1352,6 +1352,11 @@ public class RuneAlyticsPlugin extends Plugin
         // Snapshot game mode at XP-gain time (player may have world-hopped)
         updateCurrentGameMode();
 
+        // Snapshot the player's location at XP-gain time (client thread) so the
+        // batched /xp/batch POST can report where the XP was earned. Captured
+        // here because the batch flushes off-thread where client reads are unsafe.
+        state.setCurrentLocation(PlayerLocationSnapshot.capture(client));
+
         // ── Delegate XP batching to XpTrackerManager ──────────────────────────
         // The manager opens a 30-second window on the first call and accumulates
         // all subsequent gains within that window.  At T+30s it drains the buffer

@@ -226,10 +226,22 @@ public class LootStorageManager
     }
 
     /**
-     * Add a kill to storage
+     * Add a kill to storage (no location — kept for callers that don't capture one).
      */
     public void addKill(String npcName, int npcId, int combatLevel, int killNumber, int world,
                         int prestige, List<LootStorageData.DropRecord> drops)
+    {
+        addKill(npcName, npcId, combatLevel, killNumber, world, prestige, drops, null);
+    }
+
+    /**
+     * Add a kill to storage, recording the player's location at kill time so it
+     * can be uploaded per-kill in the bulk-sync payload. {@code location} may be
+     * {@code null}, in which case the kill simply carries no location.
+     */
+    public void addKill(String npcName, int npcId, int combatLevel, int killNumber, int world,
+                        int prestige, List<LootStorageData.DropRecord> drops,
+                        PlayerLocationSnapshot location)
     {
         if (currentData == null)
         {
@@ -256,6 +268,7 @@ public class LootStorageManager
         killRecord.setCombatLevel(combatLevel);
         killRecord.setDrops(drops);
         killRecord.setSyncedToServer(false);
+        killRecord.setLocation(location);
 
         // Add kill to list
         bossData.getKills().add(killRecord);
