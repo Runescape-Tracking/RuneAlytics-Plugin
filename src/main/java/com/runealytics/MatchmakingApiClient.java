@@ -26,6 +26,7 @@ public class MatchmakingApiClient
     private static final String GET_MATCH_PATH    = MATCHMAKING_BASE + "/get-match";
     private static final String ACCEPT_MATCH_PATH = MATCHMAKING_BASE + "/accept";
     private static final String BEGIN_MATCH_PATH  = MATCHMAKING_BASE + "/begin-match";
+    private static final String ENGAGE_COMBAT_PATH = MATCHMAKING_BASE + "/engage-combat";
     private static final String REPORT_MATCH_PATH = MATCHMAKING_BASE + "/report-match";
     private static final String REPORT_ITEMS_PATH = MATCHMAKING_BASE + "/report-items";
 
@@ -131,6 +132,33 @@ public class MatchmakingApiClient
     ) throws IOException
     {
         return beginMatch(verificationCode, matchCode, osrsRsn, authenticationToken, null, null, -1, false, false);
+    }
+
+    /**
+     * Signals that real combat has started between the two match participants
+     * (a hit landed between the pair).  This is the ONLY call that transitions
+     * the match from Ready → Fighting server-side.  Readying up no longer
+     * starts the fight; only an actual exchange of blows does.
+     *
+     * <p>The server treats this idempotently, so it is safe for both clients
+     * to report the same engagement.</p>
+     */
+    public MatchmakingApiResult engageCombat(
+            String verificationCode,
+            String matchCode,
+            String osrsRsn,
+            String authenticationToken,
+            JsonArray playerInventory,
+            JsonArray playerGear,
+            int overheadIconOrdinal,
+            boolean isSkulled,
+            boolean protectItem
+    ) throws IOException
+    {
+        JsonObject payload = basePayload(verificationCode, matchCode, osrsRsn);
+        payload.addProperty("authentication_token", authenticationToken);
+        addPlayerStateToPayload(payload, playerInventory, playerGear, overheadIconOrdinal, isSkulled, protectItem);
+        return executeRequest(ENGAGE_COMBAT_PATH, payload, matchCode, osrsRsn);
     }
 
     /**

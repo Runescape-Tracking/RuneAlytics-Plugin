@@ -1,8 +1,10 @@
 package com.runealytics;
 
 import com.google.gson.JsonArray;
+import net.runelite.api.Actor;
 import net.runelite.api.Client;
 import net.runelite.api.HeadIcon;
+import net.runelite.api.Hitsplat;
 import net.runelite.api.InventoryID;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
@@ -51,6 +53,10 @@ public class MatchmakingManager
     private boolean itemsReportInFlight;
     private boolean resultReported;
     private boolean itemsReported;
+
+    /** True once we have told the server combat started, so we only report once. */
+    private boolean combatReported;
+    private boolean combatInFlight;
     private WorldPoint lastRallyPoint;
     private String     lastHintPlayerName;
 
@@ -208,6 +214,17 @@ public class MatchmakingManager
             return;
         }
 
+        // Once the match is over (Completed/Canceled) there is nothing left to
+        // coordinate, so stop ALL server traffic — no polling, accepting,
+        // ready-up, combat or item reports.  The final result already lives in
+        // `session` and is rendered; continuing to talk to the server would be
+        // pointless noise.  (The poll that *discovered* completion set the
+        // terminal status, so we naturally stop on the very next tick.)
+        if (isMatchCompletedOrCanceled())
+        {
+            return;
+        }
+
         tickCounter++;
 
         // ── Accept: done on first tick where snapshot is ready ────────────────
@@ -255,6 +272,113 @@ public class MatchmakingManager
         }
     }
 
+    /**
+     * Called from the plugin's {@code onHitsplatApplied} handler for every
+     * hitsplat in the world.  Detects the first real exchange of blows between
+     * the two match participants and reports it so the server transitions the
+     * match Ready → Fighting.  Both players merely accepting/readying no longer
+     * starts the fight — only an actual hit does.
+     *
+     * <p>Two directions are accepted, each strictly scoped to the opponent so
+     * an NPC or an unrelated player can never trigger the fight:</p>
+     * <ul>
+     *   <li><b>We hit the opponent</b> — {@code target == opponent} and the
+     *       hitsplat is ours ({@link Hitsplat#isMine()}).</li>
+     *   <li><b>The opponent hits us</b> — {@code target == localPlayer} and the
+     *       opponent is currently interacting with us, so a third party's
+     *       splat landing on us is ignored.</li>
+     * </ul>
+     *
+     * <p>Only fires while the match is "Ready" and reports at most once
+     * (retried by a later hit if the report fails).</p>
+     */
+    public void onCombatHitsplat(Actor target, Hitsplat hitsplat)
+    {
+        if (session == null || target == null || hitsplat == null) return;
+        if (combatReported || combatInFlight) return;
+
+        String status = session.getStatus();
+        if (status == null || !status.equalsIgnoreCase("Ready")) return;
+
+        Player local    = client.getLocalPlayer();
+        Player opponent = findPlayerByName(session.getOpponentRsn());
+        if (local == null || opponent == null) return;
+
+        boolean weHitOpponent = target == opponent && hitsplat.isMine();
+        boolean opponentHitUs = target == local && opponent.getInteracting() == local;
+
+        if (!weHitOpponent && !opponentHitUs) return;
+
+        log.info("[engage] combat detected ({}) — reporting Ready → Fighting (match={})",
+                weHitOpponent ? "we hit opponent" : "opponent hit us", session.getMatchCode());
+
+        reportCombatEngaged();
+    }
+
+    /**
+     * Sends {@code /engage-combat} so the server flips the match to "Fighting".
+     * Idempotent server-side, so it is harmless if both clients report the same
+     * engagement.  {@link #combatReported} only latches on success so a
+     * transient failure is retried by the next qualifying hit.
+     */
+    private void reportCombatEngaged()
+    {
+        String token            = session.getLocalToken();
+        String verificationCode = resolveVerificationCode();
+        String rsn              = resolveLocalRsn();
+
+        if (token == null || token.isEmpty()
+                || verificationCode == null || verificationCode.isEmpty()
+                || rsn == null || rsn.isEmpty())
+        {
+            return;
+        }
+
+        combatInFlight = true;
+
+        final JsonArray inv      = currentInventorySnapshot;
+        final JsonArray gear     = currentGearSnapshot;
+        final int       overhead = currentOverheadIconOrdinal;
+        final boolean   skulled  = currentIsSkulled;
+        final boolean   protect  = currentProtectItem;
+
+        executorService.submit(() -> {
+            MatchmakingApiResult result;
+            try
+            {
+                result = apiClient.engageCombat(
+                        verificationCode, session.getMatchCode(), rsn, token, inv, gear, overhead, skulled, protect);
+            }
+            catch (IOException ex)
+            {
+                log.warn("[engage] IO error: {}", ex.getMessage());
+                result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
+            }
+
+            handleResult(result);
+
+            if (result.isSuccess())
+            {
+                combatReported = true;
+                if (result.getSession() != null)
+                {
+                    log.info("[engage] success — status now {}", result.getSession().getStatus());
+                    session = result.getSession();
+                    updateResultStatus();
+                }
+            }
+            else
+            {
+                String body = result.getRawResponse();
+                log.warn("[engage] failed — msg='{}' body={}",
+                        result.getMessage(),
+                        body != null && body.length() > 200 ? body.substring(0, 200) : body);
+            }
+
+            combatInFlight = false;
+        });
+    }
+
     public void reset()
     {
         session                  = null;
@@ -266,6 +390,8 @@ public class MatchmakingManager
         itemsReportInFlight      = false;
         resultReported           = false;
         itemsReported            = false;
+        combatReported           = false;
+        combatInFlight           = false;
         gearChangedDuringFight   = false;
         acceptCooldownUntilTick  = 0;
         beginCooldownUntilTick   = 0;

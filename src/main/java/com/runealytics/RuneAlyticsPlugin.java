@@ -484,12 +484,22 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onHitsplatApplied(HitsplatApplied event)
     {
+        Actor target = event.getActor();
+        Hitsplat hs   = event.getHitsplat();
+
+        // ── Matchmaking: a hit between the two participants starts the fight ──
+        // Runs independently of loot tracking — combat detection must work
+        // even when loot tracking is disabled.  The manager scopes the splat
+        // strictly to the opponent before reporting Ready → Fighting.
+        if (target instanceof Player)
+        {
+            matchmakingManager.onCombatHitsplat(target, hs);
+        }
+
+        // ── Loot tracking: remember every NPC the local player damaged ───────
         if (!config.enableLootTracking()) return;
 
-        Actor target = event.getActor();
         if (!(target instanceof NPC)) return;
-
-        Hitsplat hs = event.getHitsplat();
         if (hs == null || !hs.isMine()) return;
 
         damagedNpcs.put(((NPC) target).getIndex(), (NPC) target);
