@@ -143,29 +143,55 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     private void buildUi()
     {
-        add(RuneAlyticsUi.buildPanelHeader("Match Finder"));
-        add(RuneAlyticsUi.vSpace(8));
+        // ── Structural width fix ──────────────────────────────────────────────
+        // The cards live inside a vertical-only JScrollPane.  This is critical:
+        // a JViewport reports a tiny minimum size, so however wide a card's
+        // content becomes it can NEVER bubble its width up through the
+        // JTabbedPane → RuneAlyticsPanel → sidebar and force the RuneLite client
+        // to grow (which previously pushed the inventory bar out and blocked
+        // resizing).  The content tracks the viewport width so cards fill the
+        // panel instead of being clipped, and any overflow scrolls vertically.
+        setLayout(new BorderLayout());
+        setBorder(new EmptyBorder(0, 0, 0, 0));
 
-        add(buildLoadCard());
-        add(RuneAlyticsUi.vSpace(5));
-        add(buildMatchCard());
-        add(RuneAlyticsUi.vSpace(5));
-        add(buildPlayersCard());
-        add(RuneAlyticsUi.vSpace(5));
-        add(localRiskHolder);
-        add(RuneAlyticsUi.vSpace(5));
-        add(oppRiskHolder);
-        add(RuneAlyticsUi.vSpace(5));
-        add(summaryHolder);
-        add(RuneAlyticsUi.vSpace(5));
-        add(buildResultCard());
-        add(RuneAlyticsUi.vSpace(5));
-        add(newMatchButton);
-        add(Box.createVerticalGlue());
+        ScrollableContentPanel content = new ScrollableContentPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setBackground(BG);
+        content.setBorder(new EmptyBorder(10, 12, 10, 12));
+        content.setAlignmentX(LEFT_ALIGNMENT);
+
+        content.add(RuneAlyticsUi.buildPanelHeader("Match Finder"));
+        content.add(RuneAlyticsUi.vSpace(8));
+        content.add(buildLoadCard());
+        content.add(RuneAlyticsUi.vSpace(5));
+        content.add(buildMatchCard());
+        content.add(RuneAlyticsUi.vSpace(5));
+        content.add(buildPlayersCard());
+        content.add(RuneAlyticsUi.vSpace(5));
+        content.add(localRiskHolder);
+        content.add(RuneAlyticsUi.vSpace(5));
+        content.add(oppRiskHolder);
+        content.add(RuneAlyticsUi.vSpace(5));
+        content.add(summaryHolder);
+        content.add(RuneAlyticsUi.vSpace(5));
+        content.add(buildResultCard());
+        content.add(RuneAlyticsUi.vSpace(5));
+        content.add(newMatchButton);
 
         localRiskHolder.setAlignmentX(LEFT_ALIGNMENT);
         oppRiskHolder.setAlignmentX(LEFT_ALIGNMENT);
         summaryHolder.setAlignmentX(LEFT_ALIGNMENT);
+
+        JScrollPane scroll = new JScrollPane(content);
+        scroll.setBorder(null);
+        scroll.setBackground(BG);
+        scroll.getViewport().setBackground(BG);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
+        scroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
+
+        add(scroll, BorderLayout.CENTER);
 
         hideActiveCards();
     }
@@ -265,6 +291,9 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         nameBlock.setAlignmentY(Component.CENTER_ALIGNMENT);
         name.setAlignmentX(LEFT_ALIGNMENT);
         tag.setAlignmentX(LEFT_ALIGNMENT);
+        // Let a long RSN clip in the centre column rather than widen the row.
+        makeShrinkable(name);
+        name.setToolTipText(name.getText());
         nameBlock.add(name);
         nameBlock.add(RuneAlyticsUi.vSpace(1));
         nameBlock.add(tag);
@@ -497,6 +526,8 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
         p1Name.setText(p1n);
         p2Name.setText(p2n);
+        p1Name.setToolTipText(p1n);
+        p2Name.setToolTipText(p2n);
         p1Avatar.setInitial(p1n.charAt(0));
         p2Avatar.setInitial(p2n.charAt(0));
 
@@ -597,7 +628,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
                 validation.firstIssueByCode("violation_grace");
         if (graceIssue != null)
         {
-            lbl.setText("<html><div width=\"220\">\u23F1 " + escapeHtml(graceIssue.getMessage()) + "</div></html>");
+            lbl.setText("<html><div width=\"185\">\u23F1 " + escapeHtml(graceIssue.getMessage()) + "</div></html>");
             lbl.setForeground(new Color(230, 120, 0)); // orange
             return;
         }
@@ -609,12 +640,12 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         // can use a wider div — 220px fits the standard plugin panel width.
         if (firstError != null)
         {
-            lbl.setText("<html><div width=\"220\">\u2717 " + escapeHtml(firstError) + "</div></html>");
+            lbl.setText("<html><div width=\"185\">\u2717 " + escapeHtml(firstError) + "</div></html>");
             lbl.setForeground(COL_RED);
         }
         else if (firstWarning != null)
         {
-            lbl.setText("<html><div width=\"220\">\u26A0 " + escapeHtml(firstWarning) + "</div></html>");
+            lbl.setText("<html><div width=\"185\">\u26A0 " + escapeHtml(firstWarning) + "</div></html>");
             lbl.setForeground(new Color(230, 180, 40));
         }
         else
@@ -701,6 +732,9 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         body.add(RuneAlyticsUi.vSpace(4));
 
         // ── skull status + kept-count line (labels come fully formed) ─────────
+        // The skull label sits in CENTER and is shrinkable so a long status
+        // string ("Not Skulled (No Protect Item)") clips gracefully instead of
+        // overlapping the kept-count or widening the card.
         JPanel skullRow = new JPanel(new BorderLayout(6, 0));
         skullRow.setOpaque(false);
         skullRow.setAlignmentX(LEFT_ALIGNMENT);
@@ -709,12 +743,14 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         JLabel skull = new JLabel(risk.getSkullLabel());
         skull.setFont(cf(Font.PLAIN, 11f));
         skull.setForeground(COL_DIM);
+        skull.setToolTipText(risk.getSkullLabel());
+        makeShrinkable(skull);
 
         JLabel kept = new JLabel(risk.getKeptLabel());
         kept.setFont(cf(Font.PLAIN, 11f));
         kept.setForeground(COL_DIM);
 
-        skullRow.add(skull, BorderLayout.WEST);
+        skullRow.add(skull, BorderLayout.CENTER);
         skullRow.add(kept, BorderLayout.EAST);
         body.add(skullRow);
         body.add(RuneAlyticsUi.vSpace(6));
@@ -838,7 +874,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         body.add(banner);
         body.add(RuneAlyticsUi.vSpace(4));
 
-        JLabel foot = new JLabel("<html><div width=\"220\">Values calculated using OSRS Wild Item Retention Rules</div></html>");
+        JLabel foot = new JLabel("<html><div width=\"185\">Values calculated using OSRS Wild Item Retention Rules</div></html>");
         foot.setFont(cf(Font.ITALIC, 9f));
         foot.setForeground(COL_DIM);
         foot.setAlignmentX(LEFT_ALIGNMENT);
@@ -873,25 +909,27 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     /** A labelled item row: [icon] name ............. value (right-aligned). */
     private JPanel itemRowWithLabel(MatchmakingSession.RiskItem item)
     {
-        JPanel row = new JPanel(new BorderLayout(6, 0));
+        JPanel row = new JPanel(new BorderLayout(4, 0));
         row.setOpaque(false);
         row.setAlignmentX(LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
 
-        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        left.setOpaque(false);
-        left.add(itemIcon(item));
+        // Icon pinned left, value pinned right; the name takes the centre and is
+        // shrinkable so a long item name clips instead of pushing the card wide.
+        row.add(itemIcon(item), BorderLayout.WEST);
 
         JLabel name = new JLabel(item.getName());
         name.setFont(cf(Font.PLAIN, 11f));
         name.setForeground(COL_MUTED);
-        left.add(name);
+        name.setBorder(new EmptyBorder(0, 4, 0, 4));
+        name.setToolTipText(item.getTooltip());
+        makeShrinkable(name);
 
         JLabel val = new JLabel(item.getValueLabel());
         val.setFont(cf(Font.BOLD, 11f));
         val.setForeground(COL_WHITE);
 
-        row.add(left, BorderLayout.WEST);
+        row.add(name, BorderLayout.CENTER);
         row.add(val, BorderLayout.EAST);
         return row;
     }
@@ -1373,6 +1411,56 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             Dimension preferred = getPreferredSize();
             return new Dimension(Integer.MAX_VALUE, preferred.height);
         }
+    }
+
+    /**
+     * Scroll-pane content panel that always matches the viewport width (so cards
+     * fill the panel rather than being clipped) but keeps its natural height (so
+     * vertical overflow scrolls).  Tracking the viewport width — together with
+     * the shrinkable long-text labels — guarantees a card can never demand more
+     * horizontal space than the sidebar provides.
+     */
+    private static final class ScrollableContentPanel extends JPanel implements Scrollable
+    {
+        @Override
+        public Dimension getPreferredScrollableViewportSize()
+        {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction)
+        {
+            return 16;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction)
+        {
+            return Math.max(16, visibleRect.height - 32);
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth()
+        {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight()
+        {
+            return false;
+        }
+    }
+
+    /**
+     * Allows a label/component to shrink below its preferred (text) width so it
+     * clips instead of forcing its container — and therefore the whole sidebar —
+     * to grow.  The full text is still available via a tooltip.
+     */
+    private static void makeShrinkable(JComponent c)
+    {
+        c.setMinimumSize(new Dimension(0, c.getPreferredSize().height));
     }
 
     @Override
