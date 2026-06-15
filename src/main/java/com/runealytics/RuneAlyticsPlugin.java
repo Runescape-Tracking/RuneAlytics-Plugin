@@ -138,6 +138,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private BankDataManager          bankDataManager;
     @Inject private MatchmakingManager       matchmakingManager;
     @Inject private MatchmakingMinimapOverlay matchmakingOverlay;
+    @Inject private LiveMapMinimapOverlay     liveMapOverlay;
     @Inject private OverlayManager           overlayManager;
 
     // ── UI ───────────────────────────────────────────────────────────────────
@@ -338,6 +339,7 @@ public class RuneAlyticsPlugin extends Plugin
                 .build();
         clientToolbar.addNavigation(navButton);
         overlayManager.add(matchmakingOverlay);
+        overlayManager.add(liveMapOverlay);
         log.info("RuneAlytics nav button registered");
 
         // Heavy panel construction stays async — it can take a few ms and we
@@ -393,6 +395,7 @@ public class RuneAlyticsPlugin extends Plugin
         try { lootManager.shutdown();             } catch (Exception e) { log.warn("Loot manager shutdown failed: {}", e.getMessage()); }
         try { matchmakingManager.reset();         } catch (Exception e) { log.warn("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
         try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.warn("Matchmaking overlay removal failed: {}", e.getMessage()); }
+        try { overlayManager.remove(liveMapOverlay);     } catch (Exception e) { log.warn("Live-map overlay removal failed: {}", e.getMessage()); }
 
         // Always attempt to remove the nav button — even if some other code
         // path nulled the reference, leaving an orphan would mean the next
@@ -1390,6 +1393,8 @@ public class RuneAlyticsPlugin extends Plugin
             heartbeatTask.cancel(false);
             heartbeatTask = null;
         }
+        // Drop any cached map players so the overlay clears immediately on logout.
+        state.setVisibleMapPlayers(new ArrayList<>());
     }
 
     /**

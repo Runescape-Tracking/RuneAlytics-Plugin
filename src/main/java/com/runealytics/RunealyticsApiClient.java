@@ -322,9 +322,18 @@ public class RunealyticsApiClient
                 {
                     String responseBody = response.body() != null ? response.body().string() : "";
                     if (response.isSuccessful())
+                    {
                         log.debug("[Heartbeat] OK HTTP {} — {}", response.code(), responseBody);
+                        // The website replies with the players this account is
+                        // allowed to see; cache them for the minimap overlay.
+                        List<MapPlayer> players = parseVisiblePlayers(responseBody);
+                        state.setVisibleMapPlayers(players);
+                        log.debug("[Heartbeat] {} visible map player(s) received", players.size());
+                    }
                     else
+                    {
                         log.warn("[Heartbeat] FAILED HTTP {} — {}", response.code(), responseBody);
+                    }
                 }
                 catch (IOException e)
                 {
@@ -336,6 +345,31 @@ public class RunealyticsApiClient
                 }
             }
         });
+    }
+
+    /**
+     * Parses the {@code players} array from a heartbeat response into the list of
+     * players the local account may see on the live map. Tolerant of a missing /
+     * malformed array (returns an empty list) so a bad response never throws.
+     */
+    private List<MapPlayer> parseVisiblePlayers(String responseBody)
+    {
+        try
+        {
+            JsonObject json = gson.fromJson(responseBody, JsonObject.class);
+            if (json == null || !json.has("players") || !json.get("players").isJsonArray())
+            {
+                return new java.util.ArrayList<>();
+            }
+            Type listType = new TypeToken<List<MapPlayer>>() {}.getType();
+            List<MapPlayer> players = gson.fromJson(json.get("players"), listType);
+            return players != null ? players : new java.util.ArrayList<>();
+        }
+        catch (RuntimeException e)
+        {
+            log.warn("[Heartbeat] Could not parse visible players: {}", e.getMessage());
+            return new java.util.ArrayList<>();
+        }
     }
 
     /** Normalizes a {@link PrivacySetting} to its lowercase wire token. */

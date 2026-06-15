@@ -52,6 +52,14 @@ public class RuneAlyticsState
      */
     private volatile PlayerLocationSnapshot currentLocation;
 
+    /**
+     * Players the website says the local player is allowed to see on the live
+     * map, refreshed from each {@code /plugin/heartbeat} response. Written on the
+     * OkHttp callback thread and read on the client thread by
+     * {@link LiveMapMinimapOverlay}, hence {@code volatile} + an immutable list.
+     */
+    private volatile List<MapPlayer> visibleMapPlayers = new ArrayList<>();
+
     // A map that stores Boss Name -> Number of Kills
     private Map<String, Integer> killCounts = new HashMap<>();
 
@@ -67,6 +75,7 @@ public class RuneAlyticsState
         currentGameMode = "regular";
         currentAccountSubtype = "normal";
         currentLocation = null;
+        visibleMapPlayers = new ArrayList<>();
     }
 
     public boolean canSync()
