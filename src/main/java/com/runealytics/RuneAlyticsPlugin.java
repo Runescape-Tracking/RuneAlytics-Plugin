@@ -145,6 +145,18 @@ public class RuneAlyticsPlugin extends Plugin
     private NavigationButton         navButton;
     private LootTrackerPanel         lootTrackerPanel;
 
+    // ── Live-map heartbeat ─────────────────────────────────────────────────────
+    /** Heartbeat period — how often the live map location is pushed to the site. */
+    private static final long HEARTBEAT_PERIOD_MS        = 60_000;
+    /** Delay before the first heartbeat after login so player/RSN state settles. */
+    private static final long HEARTBEAT_INITIAL_DELAY_MS = 5_000;
+    /**
+     * Repeating heartbeat task, alive only while the player is logged in. Started
+     * on the {@code LOGGED_IN} game-state transition and cancelled on
+     * {@code LOGIN_SCREEN} so no heartbeats fire while idle at the login screen.
+     */
+    private ScheduledFuture<?> heartbeatTask;
+
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT TRACKING STATE
     // ═════════════════════════════════════════════════════════════════════════
@@ -371,6 +383,9 @@ public class RuneAlyticsPlugin extends Plugin
     protected void shutDown()
     {
         log.info("RuneAlytics shutting down");
+
+        // Stop the live-map heartbeat so no pings fire after the plugin is gone.
+        stopHeartbeat();
 
         // Flush any XP that accumulated in the current 30-second window before
         // the executor shuts down, so the player's last session gains are not lost.
@@ -1189,6 +1204,9 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGIN_SCREEN)
         {
             state.setLoggedIn(false);
+            // Stop the live-map heartbeat: while idle at the login screen there is
+            // no player to locate, so we must not keep pinging the server.
+            stopHeartbeat();
             matchmakingManager.reset(); // clear any active match on logout
             if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(false);
             SwingUtilities.invokeLater(() -> {
@@ -1204,6 +1222,12 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGGED_IN)
         {
             state.setLoggedIn(true);
+
+            // (Re)start the live-map heartbeat now that the player is in-game.
+            // Idempotent — a no-op if one is already running (e.g. world hop).
+            // The heartbeat itself waits until the account is verified before
+            // sending, so it is safe to start before verification completes.
+            startHeartbeat();
 
             // Resolve the player's RSN.  getLocalPlayer() can briefly return null
             // during the early LOGGED_IN transition (before the character fully
@@ -1308,7 +1332,109 @@ public class RuneAlyticsPlugin extends Plugin
         {
             SwingUtilities.invokeLater(() ->
                     injector.getInstance(RuneAlyticsSettingsPanel.class).refreshPrivacySettings());
+
+            // Push the new preference to the site so it immediately knows whether
+            // the player wants to be seen (visibility is enforced server-side).
+            syncPrivacySettings();
         }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  PRIVACY SYNC
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Sends the current bank/player privacy preferences to the website on the
+     * background executor. No-ops (inside the API client) when the account is not
+     * verified yet, so it is always safe to call.
+     */
+    private void syncPrivacySettings()
+    {
+        if (!state.isVerified()) return;
+        final PrivacySetting bank   = config.bankPrivacy();
+        final PrivacySetting player = config.playerVisibility();
+        executorService.execute(() -> apiClient.syncPrivacySettings(bank, player));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  LIVE-MAP HEARTBEAT
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Starts the repeating live-map heartbeat if it is not already running.
+     *
+     * <p>Called on every {@code LOGGED_IN} transition. Idempotent so repeated
+     * transitions (e.g. world hopping, which momentarily passes through
+     * {@code LOGGED_IN}) don't spawn duplicate tasks.</p>
+     */
+    private synchronized void startHeartbeat()
+    {
+        if (heartbeatTask != null && !heartbeatTask.isCancelled() && !heartbeatTask.isDone())
+        {
+            return;
+        }
+        log.debug("[Heartbeat] starting live-map heartbeat ({} ms period)", HEARTBEAT_PERIOD_MS);
+        heartbeatTask = executorService.scheduleAtFixedRate(
+                this::sendHeartbeatTick,
+                HEARTBEAT_INITIAL_DELAY_MS,
+                HEARTBEAT_PERIOD_MS,
+                TimeUnit.MILLISECONDS);
+    }
+
+    /** Cancels the live-map heartbeat (called on logout / shutdown). */
+    private synchronized void stopHeartbeat()
+    {
+        if (heartbeatTask != null)
+        {
+            log.debug("[Heartbeat] stopping live-map heartbeat");
+            heartbeatTask.cancel(false);
+            heartbeatTask = null;
+        }
+    }
+
+    /**
+     * One heartbeat iteration: captures the live location, friends list and
+     * ignore list on the client thread (those reads are client-thread-only) and
+     * then hands the payload off to the API client on the executor.
+     */
+    private void sendHeartbeatTick()
+    {
+        if (!state.isLoggedIn() || !state.isVerified()) return;
+
+        clientThread.invokeLater(() ->
+        {
+            if (client.getGameState() != GameState.LOGGED_IN) return;
+
+            final PlayerLocationSnapshot location = PlayerLocationSnapshot.capture(client);
+            final List<String> friends = readNames(client.getFriendContainer());
+            final List<String> ignores = readNames(client.getIgnoreContainer());
+            final PrivacySetting visibility = config.playerVisibility();
+
+            executorService.execute(() ->
+                    apiClient.sendHeartbeat(location, friends, ignores, visibility));
+        });
+    }
+
+    /**
+     * Reads the display names out of a RuneLite {@link NameableContainer}
+     * (friends or ignores). MUST run on the client thread. Returns an empty list
+     * when the container is unavailable.
+     */
+    private List<String> readNames(NameableContainer<? extends Nameable> container)
+    {
+        List<String> names = new ArrayList<>();
+        if (container == null) return names;
+
+        Nameable[] members = container.getMembers();
+        if (members == null) return names;
+
+        for (Nameable member : members)
+        {
+            if (member == null) continue;
+            String name = member.getName();
+            if (name != null && !name.isEmpty()) names.add(name);
+        }
+        return names;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1603,6 +1729,10 @@ public class RuneAlyticsPlugin extends Plugin
         // logic so every tab (including Match Finder) appears correctly.
         if (verified)
         {
+            // Push current privacy preferences so the site's stored visibility
+            // mirrors the in-client setting the moment the account links.
+            syncPrivacySettings();
+
             executorService.submit(() ->
             {
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);

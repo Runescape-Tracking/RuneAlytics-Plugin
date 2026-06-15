@@ -1,6 +1,7 @@
 package com.runealytics;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 import okhttp3.*;
@@ -12,6 +13,7 @@ import javax.inject.Singleton;
 import java.io.IOException;
 import java.lang.reflect.Type;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -143,6 +145,217 @@ public class RunealyticsApiClient
                 }
             }
         });
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  PRIVACY SETTINGS
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Pushes the player's current privacy preferences to {@code /plugin/privacy}
+     * so the website knows whether the account wants to be visible.
+     *
+     * <p>Sent whenever a privacy toggle changes and once on login, so the site's
+     * stored visibility always mirrors the in-client setting. {@code bank_privacy}
+     * controls who can see bank/wealth; {@code player_visibility} controls who can
+     * see online status and map location ({@code public}/{@code friends}/{@code private}).</p>
+     */
+    public void syncPrivacySettings(PrivacySetting bankPrivacy, PrivacySetting playerVisibility)
+    {
+        String token    = state.getVerificationCode();
+        String username = state.getVerifiedUsername();
+
+        if (token == null || token.isEmpty())
+        {
+            log.debug("[Privacy] Skipping — no verification token in state");
+            return;
+        }
+        if (username == null || username.isEmpty())
+        {
+            log.debug("[Privacy] Skipping — no username in state");
+            return;
+        }
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("username",          username);
+        payload.addProperty("bank_privacy",      wireValue(bankPrivacy));
+        payload.addProperty("player_visibility", wireValue(playerVisibility));
+        payload.addProperty("timestamp",         System.currentTimeMillis() / 1000);
+
+        String payloadJson = gson.toJson(payload);
+        String url         = config.apiUrl() + "/plugin/privacy";
+
+        log.info("[Privacy] POST {} | bank={} player={}", url,
+                wireValue(bankPrivacy), wireValue(playerVisibility));
+
+        RequestBody body    = RequestBody.create(JSON, payloadJson);
+        Request     request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("Authorization", "Bearer " + token)
+                .addHeader("Content-Type",  "application/json")
+                .addHeader("Accept",        "application/json")
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback()
+        {
+            @Override
+            @SuppressWarnings("NullableProblems")
+            public void onFailure(Call call, IOException e)
+            {
+                log.warn("[Privacy] Network failure: {}", e.getMessage());
+            }
+
+            @Override
+            @SuppressWarnings("NullableProblems")
+            public void onResponse(Call call, Response response)
+            {
+                try
+                {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (response.isSuccessful())
+                        log.debug("[Privacy] OK HTTP {} — {}", response.code(), responseBody);
+                    else
+                        log.warn("[Privacy] FAILED HTTP {} — {}", response.code(), responseBody);
+                }
+                catch (IOException e)
+                {
+                    log.warn("[Privacy] Could not read response body: {}", e.getMessage());
+                }
+                finally
+                {
+                    response.close();
+                }
+            }
+        });
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  HEARTBEAT  (live map location)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Sends a periodic heartbeat to {@code /plugin/heartbeat} while the player is
+     * logged in. Carries the live map location plus the player's friends and
+     * ignore lists (as reported by OSRS) so the website can render the player on
+     * the live map and enforce who may see them:
+     *
+     * <ul>
+     *   <li>{@code public}  — anyone can see the location.</li>
+     *   <li>{@code friends} — only players on {@code friends} and/or players who
+     *       are mutually tracking each other may see the location.</li>
+     *   <li>{@code private} — nobody but the player themself can see it.</li>
+     * </ul>
+     *
+     * <p>The {@code ignores} list lets the server hide the player from anyone the
+     * player has ignored regardless of the chosen visibility. Visibility is
+     * enforced server-side; the plugin only reports the raw inputs.</p>
+     *
+     * @param location   current world location (omitted when {@code null})
+     * @param friends    in-game friends list names
+     * @param ignores    in-game ignore list names
+     * @param visibility the player's map/online {@link PrivacySetting}
+     */
+    public void sendHeartbeat(PlayerLocationSnapshot location, List<String> friends,
+                              List<String> ignores, PrivacySetting visibility)
+    {
+        String token    = state.getVerificationCode();
+        String username = state.getVerifiedUsername();
+
+        if (token == null || token.isEmpty())
+        {
+            log.debug("[Heartbeat] Skipping — no verification token in state");
+            return;
+        }
+        if (username == null || username.isEmpty())
+        {
+            log.debug("[Heartbeat] Skipping — no username in state");
+            return;
+        }
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("username",   username);
+        payload.addProperty("visibility", wireValue(visibility));
+        payload.add("friends",            toJsonArray(friends));
+        payload.add("ignores",            toJsonArray(ignores));
+        payload.addProperty("timestamp",  System.currentTimeMillis() / 1000);
+
+        // Location is optional — omit entirely when unavailable so the server's
+        // nullable handling keeps working.
+        if (location != null)
+        {
+            payload.add("location", location.toJson());
+        }
+
+        String payloadJson = gson.toJson(payload);
+        String url         = config.apiUrl() + "/plugin/heartbeat";
+
+        log.debug("[Heartbeat] POST {} | visibility={} friends={} ignores={} location={}",
+                url, wireValue(visibility),
+                friends != null ? friends.size() : 0,
+                ignores != null ? ignores.size() : 0,
+                location != null);
+
+        RequestBody body    = RequestBody.create(JSON, payloadJson);
+        Request     request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("Authorization", "Bearer " + token)
+                .addHeader("Content-Type",  "application/json")
+                .addHeader("Accept",        "application/json")
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback()
+        {
+            @Override
+            @SuppressWarnings("NullableProblems")
+            public void onFailure(Call call, IOException e)
+            {
+                log.warn("[Heartbeat] Network failure: {}", e.getMessage());
+            }
+
+            @Override
+            @SuppressWarnings("NullableProblems")
+            public void onResponse(Call call, Response response)
+            {
+                try
+                {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (response.isSuccessful())
+                        log.debug("[Heartbeat] OK HTTP {} — {}", response.code(), responseBody);
+                    else
+                        log.warn("[Heartbeat] FAILED HTTP {} — {}", response.code(), responseBody);
+                }
+                catch (IOException e)
+                {
+                    log.warn("[Heartbeat] Could not read response body: {}", e.getMessage());
+                }
+                finally
+                {
+                    response.close();
+                }
+            }
+        });
+    }
+
+    /** Normalizes a {@link PrivacySetting} to its lowercase wire token. */
+    private static String wireValue(PrivacySetting setting)
+    {
+        return (setting != null ? setting : PrivacySetting.PUBLIC).name().toLowerCase();
+    }
+
+    /** Builds a JSON string array, tolerating a {@code null} input list. */
+    private static JsonArray toJsonArray(List<String> values)
+    {
+        JsonArray arr = new JsonArray();
+        if (values != null)
+        {
+            for (String v : values)
+            {
+                if (v != null && !v.isEmpty()) arr.add(v);
+            }
+        }
+        return arr;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
