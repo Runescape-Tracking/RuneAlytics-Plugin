@@ -268,6 +268,18 @@ public interface RunealyticsConfig extends Config
     )
     void playerVisibility(PrivacySetting value);
 
+    @ConfigItem(
+            keyName = "showMapPlayers",
+            name = "Show Tracked Players",
+            description = "Draw players shared with you by RuneAlytics on the minimap and game scene",
+            section = privacySection,
+            position = 2
+    )
+    default boolean showMapPlayers()
+    {
+        return true;
+    }
+
     // ==================== ADVANCED ====================
 
     @ConfigItem(
