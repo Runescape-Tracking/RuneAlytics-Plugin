@@ -5,6 +5,7 @@ import lombok.Setter;
 
 import javax.inject.Singleton;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 @Singleton
@@ -54,7 +55,20 @@ public class RuneAlyticsState
      * OkHttp callback thread and read on the client thread by
      * {@link LiveMapMinimapOverlay}, hence {@code volatile} + an immutable list.
      */
-    private volatile List<MapPlayer> visibleMapPlayers = new ArrayList<>();
+    private volatile List<MapPlayer> visibleMapPlayers = Collections.emptyList();
+
+    /**
+     * Stores an unmodifiable snapshot so the client-thread overlay can iterate
+     * {@link #visibleMapPlayers} without risk of the writing thread mutating the
+     * backing list mid-render. Defined explicitly so Lombok's {@code @Setter}
+     * does not generate a plain assignment.
+     */
+    public void setVisibleMapPlayers(List<MapPlayer> players)
+    {
+        this.visibleMapPlayers = (players == null || players.isEmpty())
+                ? Collections.emptyList()
+                : Collections.unmodifiableList(new ArrayList<>(players));
+    }
 
     public void reset()
     {
@@ -67,7 +81,7 @@ public class RuneAlyticsState
         currentGameMode = "regular";
         currentAccountSubtype = "normal";
         currentLocation = null;
-        visibleMapPlayers = new ArrayList<>();
+        visibleMapPlayers = Collections.emptyList();
     }
 
     public boolean canSync()

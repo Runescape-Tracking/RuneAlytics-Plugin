@@ -264,9 +264,12 @@ public class MatchmakingSession
     )
     {
         this.matchCode = matchCode;
-        this.localRsn = localRsn;
-        this.player1Username = player1Username;
-        this.player2Username = player2Username;
+        // Normalise RSNs once here so all the equalsIgnoreCase comparisons below
+        // (local vs player1/player2) are robust against RuneLite's NBSP (U+00A0)
+        // name form vs server forms that use a regular space or underscore.
+        this.localRsn = normalizeRsn(localRsn);
+        this.player1Username = normalizeRsn(player1Username);
+        this.player2Username = normalizeRsn(player2Username);
         this.player1Joined = player1Joined;
         this.player2Joined = player2Joined;
         this.player1ReadyToFight = player1ReadyToFight;
@@ -281,6 +284,17 @@ public class MatchmakingSession
         this.tokenExpiresAt = tokenExpiresAt;
         this.player1Validation = player1Validation != null ? player1Validation : VALIDATION_UNKNOWN;
         this.player2Validation = player2Validation != null ? player2Validation : VALIDATION_UNKNOWN;
+    }
+
+    /**
+     * Normalises an OSRS RSN for comparison: converts RuneLite's NBSP (U+00A0)
+     * and underscores to plain spaces and trims. Preserves {@code null} so the
+     * caller's null-guards remain meaningful.
+     */
+    private static String normalizeRsn(String name)
+    {
+        if (name == null) return null;
+        return name.replace('\u00A0', ' ').replace('_', ' ').trim();
     }
 
     public String getMatchCode()

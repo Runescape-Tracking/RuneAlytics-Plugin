@@ -62,7 +62,6 @@ public final class RewardSources
     public static final int CONTAINER_ZALCANO   = 631;
     public static final int CONTAINER_WILDY_LOOT_CHEST = InventoryID.WILDERNESS_LOOT_CHEST.getId();
     public static final int CONTAINER_LUNAR_CHEST      = InventoryID.LUNAR_CHEST.getId();
-    public static final int CONTAINER_COLOSSEUM        = InventoryID.FORTIS_COLOSSEUM_REWARD_CHEST.getId();
 
     /** Describes how to read one reward source. */
     public static final class Source

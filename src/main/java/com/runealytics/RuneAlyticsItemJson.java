@@ -6,8 +6,6 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.client.game.ItemManager;
 
-import java.util.List;
-
 /**
  * Shared helpers for converting RuneLite {@link ItemContainer}s and
  * {@link ItemStack} lists into the {@code [{id, qty}, ...]} JSON shape used
@@ -78,25 +76,6 @@ public final class RuneAlyticsItemJson
             entry.addProperty("slot", slot);
             entry.addProperty("id",   item.getId());
             entry.addProperty("qty",  item.getQuantity());
-            arr.add(entry);
-        }
-        return arr;
-    }
-
-    /** Same as {@link #fromContainer} but for a list of {@link ItemStack}. */
-    public static JsonArray fromStacks(List<ItemStack> stacks)
-    {
-        JsonArray arr = new JsonArray();
-        if (stacks == null) return arr;
-
-        for (ItemStack s : stacks)
-        {
-            if (s == null) continue;
-            if (s.getId() <= 0 || s.getQuantity() <= 0) continue;
-
-            JsonObject entry = new JsonObject();
-            entry.addProperty("id",  s.getId());
-            entry.addProperty("qty", s.getQuantity());
             arr.add(entry);
         }
         return arr;

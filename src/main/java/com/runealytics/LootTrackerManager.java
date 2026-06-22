@@ -286,14 +286,24 @@ public class LootTrackerManager
     /** In-memory boss stats, keyed by normalised NPC name. */
     private final Map<String, BossKillStats> bossKillStats = new ConcurrentHashMap<>();
 
-    /** Listeners notified on every kill or data refresh. */
-    private final List<LootTrackerUpdateListener> listeners = new ArrayList<>();
+    /**
+     * Listeners notified on every kill or data refresh. CopyOnWriteArrayList
+     * because {@code addListener} runs on the EDT (panel construction) while
+     * {@code notifyListeners}/{@code notifyDataRefresh} iterate from the client
+     * thread, so registration and iteration can race.
+     */
+    private final List<LootTrackerUpdateListener> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /**
      * Per-boss hidden item sets.
      * Key = normalised NPC name; value = set of hidden itemIds.
+     *
+     * <p>Concurrent because it is read while building the display (refresh
+     * executor thread, via {@link #isDropHidden}) and mutated from the EDT
+     * (right-click hide/unhide). The value sets are also concurrent so iteration
+     * in {@link #persistHiddenDrops} can't throw {@link java.util.ConcurrentModificationException}.</p>
      */
-    private final Map<String, Set<Integer>> hiddenDrops = new HashMap<>();
+    private final Map<String, Set<Integer>> hiddenDrops = new ConcurrentHashMap<>();
 
     /**
      * Dedup map for player / chest loot sources only.
@@ -1837,7 +1847,7 @@ public class LootTrackerManager
 
     public void hideDropForNpc(String npcName, int itemId)
     {
-        hiddenDrops.computeIfAbsent(npcName, k -> new HashSet<>()).add(itemId);
+        hiddenDrops.computeIfAbsent(npcName, k -> ConcurrentHashMap.newKeySet()).add(itemId);
         persistHiddenDrops();
     }
 
@@ -1882,7 +1892,11 @@ public class LootTrackerManager
         if (saved == null) return;
         hiddenDrops.clear();
         for (Map.Entry<String, Set<Integer>> e : saved.entrySet())
-            hiddenDrops.put(e.getKey(), new HashSet<>(e.getValue()));
+        {
+            Set<Integer> concurrentSet = ConcurrentHashMap.newKeySet();
+            concurrentSet.addAll(e.getValue());
+            hiddenDrops.put(e.getKey(), concurrentSet);
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════

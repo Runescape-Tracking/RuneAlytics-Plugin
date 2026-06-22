@@ -375,12 +375,19 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     {
         if (!state.isLoggedIn())
         {
+            // On logout the match session is reset by the plugin before this
+            // runs; make sure no stale "loading" state or active match cards are
+            // left on screen.
+            loading = false;
+            hideActiveCards();
             setEntryEnabled(false);
             setEntryStatus("Log in to RuneLite to use Match Finder.", COL_DIM);
             return;
         }
         if (!state.isVerified())
         {
+            loading = false;
+            hideActiveCards();
             setEntryEnabled(false);
             setEntryStatus("Verify your account on the Settings tab first.", COL_DIM);
             return;
@@ -424,7 +431,15 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         loading = true;
         hideActiveCards();
         updateEntryCard();
-        matchmakingManager.loadMatch(code);
+
+        // If the manager couldn't start the load (e.g. a request is already in
+        // flight), it won't fire a listener callback — clear the loading state
+        // here so the UI doesn't get stuck on "Loading match…".
+        if (!matchmakingManager.loadMatch(code))
+        {
+            loading = false;
+            updateEntryCard();
+        }
     }
 
     private void resetToIdle()

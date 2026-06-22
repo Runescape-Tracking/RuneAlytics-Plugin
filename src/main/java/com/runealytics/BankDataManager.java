@@ -37,6 +37,7 @@ public class BankDataManager
      * thread for the actual HTTP call.</p>
      *
      * @param username           verified RSN (added to the JSON payload)
+     * @param world              the current world (captured on the client thread)
      * @param bankContainer      InventoryID.BANK container (required)
      * @param inventoryContainer InventoryID.INVENTORY container (may be null)
      * @param equipmentContainer InventoryID.EQUIPMENT container (may be null)
@@ -44,6 +45,7 @@ public class BankDataManager
      */
     public JsonObject buildBankSnapshot(
             String username,
+            int world,
             ItemContainer bankContainer,
             ItemContainer inventoryContainer,
             ItemContainer equipmentContainer)
@@ -51,7 +53,7 @@ public class BankDataManager
         JsonObject data = new JsonObject();
         data.addProperty("username",  username);
         data.addProperty("timestamp", Instant.now().getEpochSecond());
-        data.addProperty("world",     0);
+        data.addProperty("world",     world);
 
         // fromContainerWithValues / containerTotalValue both call
         // ItemManager.getItemComposition which requires the client thread.

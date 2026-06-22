@@ -1,61 +1,42 @@
 package com.runealytics;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 public final class RuneAlyticsJson
 {
     private RuneAlyticsJson() {}
 
-    public static String escape(String value)
-    {
-        if (value == null)
-        {
-            return "";
-        }
-        return value
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"");
-    }
-
     /**
-     * Generic helper to pull a string field out of a simple JSON object without full parsing.
-     * e.g. extractStringField("{\"foo\":\"bar\"}", "foo") -> "bar"
+     * Extracts the top-level {@code "message"} string from a JSON object, or
+     * {@code null} if the input isn't a JSON object with a string message.
+     * Uses a real JSON parser so escaped quotes inside the value are handled
+     * correctly (unlike naive string scanning).
      */
-    public static String extractStringField(String json, String fieldName)
-    {
-        if (json == null || json.isEmpty() || fieldName == null || fieldName.isEmpty())
-        {
-            return null;
-        }
-
-        String key = "\"" + fieldName + "\"";
-        int idx = json.indexOf(key);
-        if (idx == -1)
-        {
-            return null;
-        }
-
-        int colonIdx = json.indexOf(':', idx + key.length());
-        if (colonIdx == -1)
-        {
-            return null;
-        }
-
-        int firstQuote = json.indexOf('"', colonIdx + 1);
-        if (firstQuote == -1)
-        {
-            return null;
-        }
-
-        int secondQuote = json.indexOf('"', firstQuote + 1);
-        if (secondQuote == -1)
-        {
-            return null;
-        }
-
-        return json.substring(firstQuote + 1, secondQuote);
-    }
-
     public static String extractMessage(String json)
     {
-        return extractStringField(json, "message");
+        if (json == null || json.isEmpty())
+        {
+            return null;
+        }
+        try
+        {
+            JsonElement el = new JsonParser().parse(json);
+            if (el.isJsonObject())
+            {
+                JsonObject obj = el.getAsJsonObject();
+                JsonElement msg = obj.get("message");
+                if (msg != null && msg.isJsonPrimitive())
+                {
+                    return msg.getAsString();
+                }
+            }
+        }
+        catch (RuntimeException ignored)
+        {
+            // Not valid JSON / unexpected shape — fall through to null.
+        }
+        return null;
     }
 }

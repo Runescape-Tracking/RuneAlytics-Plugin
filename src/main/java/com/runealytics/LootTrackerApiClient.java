@@ -2,6 +2,7 @@ package com.runealytics;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
@@ -9,10 +10,13 @@ import okhttp3.*;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static com.runealytics.RuneAlyticsHttp.JSON;
 
@@ -44,7 +48,13 @@ public class LootTrackerApiClient
             RuneAlyticsState state,
             Gson gson)
     {
-        this.httpClient = httpClient;
+        // Apply the configured timeout so loot uploads/downloads don't hang on
+        // RuneLite's shared-client defaults (mirrors RunealyticsApiClient).
+        this.httpClient = httpClient.newBuilder()
+                .connectTimeout(config.syncTimeout(), TimeUnit.SECONDS)
+                .readTimeout(config.syncTimeout(),    TimeUnit.SECONDS)
+                .writeTimeout(config.syncTimeout(),   TimeUnit.SECONDS)
+                .build();
         this.config     = config;
         this.state      = state;
         this.gson       = gson;
@@ -135,7 +145,7 @@ public class LootTrackerApiClient
     public Map<String, LootStorageData.BossKillData> fetchKillHistoryFromServer(String username) throws IOException
     {
         Request request = new Request.Builder()
-                .url(config.apiUrl() + LOOT_HISTORY_PATH + username)
+                .url(config.apiUrl() + LOOT_HISTORY_PATH + encodePathSegment(username))
                 .get()
                 .build();
 
@@ -169,66 +179,141 @@ public class LootTrackerApiClient
     private Map<String, LootStorageData.BossKillData> parseHistory(JsonArray killsArray)
     {
         Map<String, LootStorageData.BossKillData> result = new HashMap<>();
+        int skipped = 0;
 
         for (int i = 0; i < killsArray.size(); i++)
         {
-            JsonObject killObj = killsArray.get(i).getAsJsonObject();
-
-            String bossName        = killObj.get("boss_name").getAsString();
-            int    bossId          = killObj.get("boss_id").getAsInt();
-            int    combatLevel     = killObj.get("combat_level").getAsInt();
-            int    world           = killObj.get("world").getAsInt();
-            long   killTimeSeconds = killObj.get("kill_time").getAsLong();
-
-            LootStorageData.BossKillData bossData = result.computeIfAbsent(bossName, k -> {
-                LootStorageData.BossKillData bd = new LootStorageData.BossKillData();
-                bd.setNpcName(bossName);
-                bd.setNpcId(bossId);
-                bd.setKillCount(0);
-                bd.setPrestige(0);
-                bd.setTotalLootValue(0);
-                bd.setKills(new ArrayList<>());
-                bd.setAggregatedDrops(new HashMap<>());
-                return bd;
-            });
-
-            LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
-            killRecord.setTimestamp(killTimeSeconds * 1000);
-            killRecord.setWorld(world);
-            killRecord.setCombatLevel(combatLevel);
-            killRecord.setSyncedToServer(true);
-            killRecord.setDrops(new ArrayList<>());
-
-            if (killObj.has("drops") && killObj.get("drops").isJsonArray())
+            try
             {
-                JsonArray dropsArray = killObj.getAsJsonArray("drops");
-
-                for (int j = 0; j < dropsArray.size(); j++)
+                JsonElement el = killsArray.get(i);
+                if (!el.isJsonObject())
                 {
-                    JsonObject dropObj = dropsArray.get(j).getAsJsonObject();
-
-                    LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
-                    drop.setItemId(dropObj.get("item_id").getAsInt());
-                    drop.setItemName(dropObj.get("item_name").getAsString());
-                    drop.setQuantity(dropObj.get("quantity").getAsInt());
-                    drop.setGePrice(dropObj.get("ge_price").getAsInt());
-                    drop.setHighAlch(dropObj.get("high_alch").getAsInt());
-                    drop.setTotalValue((long) drop.getGePrice() * drop.getQuantity());
-                    drop.setHidden(false);
-
-                    killRecord.getDrops().add(drop);
+                    skipped++;
+                    continue;
                 }
-            }
+                JsonObject killObj = el.getAsJsonObject();
 
-            bossData.getKills().add(killRecord);
-            bossData.setKillCount(bossData.getKillCount() + 1);
+                String bossName = getString(killObj, "boss_name", null);
+                if (bossName == null || bossName.isEmpty())
+                {
+                    // No boss name = unusable row; skip rather than bucketing under null.
+                    skipped++;
+                    continue;
+                }
+
+                final int  bossId          = getInt(killObj, "boss_id", 0);
+                int        combatLevel      = getInt(killObj, "combat_level", 0);
+                int        world            = getInt(killObj, "world", 0);
+                long       killTimeSeconds  = getLong(killObj, "kill_time", 0L);
+
+                LootStorageData.BossKillData bossData = result.computeIfAbsent(bossName, k -> {
+                    LootStorageData.BossKillData bd = new LootStorageData.BossKillData();
+                    bd.setNpcName(bossName);
+                    bd.setNpcId(bossId);
+                    bd.setKillCount(0);
+                    bd.setPrestige(0);
+                    bd.setTotalLootValue(0);
+                    bd.setKills(new ArrayList<>());
+                    bd.setAggregatedDrops(new HashMap<>());
+                    return bd;
+                });
+
+                LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
+                killRecord.setTimestamp(killTimeSeconds * 1000);
+                killRecord.setWorld(world);
+                killRecord.setCombatLevel(combatLevel);
+                killRecord.setSyncedToServer(true);
+                killRecord.setDrops(new ArrayList<>());
+
+                if (killObj.has("drops") && killObj.get("drops").isJsonArray())
+                {
+                    JsonArray dropsArray = killObj.getAsJsonArray("drops");
+
+                    for (int j = 0; j < dropsArray.size(); j++)
+                    {
+                        JsonElement dropEl = dropsArray.get(j);
+                        if (!dropEl.isJsonObject()) continue;
+                        JsonObject dropObj = dropEl.getAsJsonObject();
+
+                        LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
+                        drop.setItemId(getInt(dropObj, "item_id", 0));
+                        drop.setItemName(getString(dropObj, "item_name", ""));
+                        drop.setQuantity(getInt(dropObj, "quantity", 0));
+                        drop.setGePrice(getInt(dropObj, "ge_price", 0));
+                        drop.setHighAlch(getInt(dropObj, "high_alch", 0));
+                        drop.setTotalValue((long) drop.getGePrice() * drop.getQuantity());
+                        drop.setHidden(false);
+
+                        killRecord.getDrops().add(drop);
+                    }
+                }
+
+                bossData.getKills().add(killRecord);
+                bossData.setKillCount(bossData.getKillCount() + 1);
+            }
+            catch (RuntimeException ex)
+            {
+                // One malformed row must not discard the whole download.
+                skipped++;
+            }
         }
+
+        if (skipped > 0)
+            log.warn("Skipped {} malformed kill record(s) in history response", skipped);
 
         log.info("Fetched {} bosses with total {} kills from server",
                 result.size(),
                 result.values().stream().mapToInt(b -> b.getKills().size()).sum());
 
         return result;
+    }
+
+    // ── JSON field helpers (null/type-safe) ───────────────────────────────────
+
+    private static String getString(JsonObject obj, String key, String def)
+    {
+        JsonElement el = obj.get(key);
+        return (el != null && el.isJsonPrimitive()) ? el.getAsString() : def;
+    }
+
+    private static int getInt(JsonObject obj, String key, int def)
+    {
+        JsonElement el = obj.get(key);
+        try
+        {
+            return (el != null && el.isJsonPrimitive()) ? el.getAsInt() : def;
+        }
+        catch (NumberFormatException e)
+        {
+            return def;
+        }
+    }
+
+    private static long getLong(JsonObject obj, String key, long def)
+    {
+        JsonElement el = obj.get(key);
+        try
+        {
+            return (el != null && el.isJsonPrimitive()) ? el.getAsLong() : def;
+        }
+        catch (NumberFormatException e)
+        {
+            return def;
+        }
+    }
+
+    private static String encodePathSegment(String value)
+    {
+        if (value == null) return "";
+        try
+        {
+            // URLEncoder targets query strings (space → '+'); convert to %20 for paths.
+            return URLEncoder.encode(value, "UTF-8").replace("+", "%20");
+        }
+        catch (UnsupportedEncodingException e)
+        {
+            return value;
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════

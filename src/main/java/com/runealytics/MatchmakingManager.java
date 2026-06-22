@@ -69,6 +69,13 @@ public class MatchmakingManager
     private volatile String     lastHintPlayerName;
 
     /**
+     * Minimap target (opponent or rally tile) recomputed once per game tick on
+     * the client thread and read by the overlay's render() each frame. Volatile
+     * for cross-thread visibility (client thread writes, render thread reads).
+     */
+    private volatile WorldPoint cachedMinimapTarget;
+
+    /**
      * Current enriched inventory snapshot — updated on every game tick and on
      * every {@link ItemContainerChanged} event so the server always receives
      * up-to-date item data for risk/gear validation.
@@ -159,9 +166,18 @@ public class MatchmakingManager
         return session;
     }
 
-    public void loadMatch(String matchCode)
+    /**
+     * Kicks off loading the given match code.
+     *
+     * @return {@code true} if a load was actually started; {@code false} if the
+     *         call was a no-op (a request is already in flight) or failed
+     *         pre-flight validation. When {@code false} is returned because of
+     *         missing credentials, the listener is notified with an error so the
+     *         UI can recover; callers should still clear any "loading" state.
+     */
+    public boolean loadMatch(String matchCode)
     {
-        if (requestInFlight) return;
+        if (requestInFlight) return false;
 
         reset();
 
@@ -173,7 +189,7 @@ public class MatchmakingManager
             notifyListener(new MatchmakingUpdate(null,
                     "Missing verification or RSN. Please re-verify your account.",
                     "", false, false));
-            return;
+            return false;
         }
 
         requestInFlight = true;
@@ -211,6 +227,8 @@ public class MatchmakingManager
 
             requestInFlight = false;
         });
+
+        return true;
     }
 
     /**
@@ -230,6 +248,11 @@ public class MatchmakingManager
         {
             updateHintArrow();
         }
+
+        // Recompute the minimap target once per tick (on the client thread) and
+        // cache it. The overlay's render() runs every frame and previously
+        // re-scanned client.getPlayers() each time; it now reads this cached value.
+        cachedMinimapTarget = computeMinimapTarget();
 
         if (session == null || requestInFlight)
         {
@@ -424,6 +447,7 @@ public class MatchmakingManager
         gearChangedDuringFight   = false;
         acceptCooldownUntilTick  = 0;
         beginCooldownUntilTick   = 0;
+        cachedMinimapTarget      = null;
         // Keep snapshots — they reflect the player's current state and are
         // valid across match resets (e.g. New Match).
         clearHintArrow();
@@ -1003,7 +1027,17 @@ public class MatchmakingManager
         }
     }
 
+    /**
+     * Returns the cached minimap target (opponent location while Fighting, else
+     * the rally tile). Cheap — the value is recomputed once per game tick in
+     * {@link #onGameTick()} rather than per render frame.
+     */
     public WorldPoint getMinimapTarget()
+    {
+        return cachedMinimapTarget;
+    }
+
+    private WorldPoint computeMinimapTarget()
     {
         if (session == null || isMatchCompletedOrCanceled()) return null;
 

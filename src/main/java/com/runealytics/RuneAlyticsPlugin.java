@@ -425,6 +425,14 @@ public class RuneAlyticsPlugin extends Plugin
         // Stop the live-map heartbeat so no pings fire after the plugin is gone.
         stopHeartbeat();
 
+        // Cancel any pending one-shot whisperer loot flush so it can't fire after
+        // the plugin has been disabled.
+        if (whispererFlushTask != null)
+        {
+            whispererFlushTask.cancel(false);
+            whispererFlushTask = null;
+        }
+
         // Flush any XP that accumulated in the current 30-second window before
         // the executor shuts down, so the player's last session gains are not lost.
         try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.warn("XP flush on shutdown failed: {}", e.getMessage()); }
@@ -1400,6 +1408,7 @@ public class RuneAlyticsPlugin extends Plugin
             final String username = state.getVerifiedUsername();
             final JsonObject snapshot = bankDataManager.buildBankSnapshot(
                     username,
+                    client.getWorld(),
                     bank,
                     client.getItemContainer(InventoryID.INVENTORY),
                     client.getItemContainer(InventoryID.EQUIPMENT));

@@ -862,11 +862,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
         });
     }
 
-    public void updateLastSyncTime()
-    {
-        // display removed
-    }
-
     public void refreshPrivacySettings()
     {
         if (state.isVerified())
