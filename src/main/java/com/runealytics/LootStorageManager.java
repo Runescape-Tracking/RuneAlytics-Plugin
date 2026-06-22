@@ -20,13 +20,17 @@ public class LootStorageManager
     private final RuneAlyticsState state;
     private LootStorageData currentData;
 
-    private final java.util.concurrent.ScheduledExecutorService saveExecutor =
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "RuneAlytics-Save");
-                t.setDaemon(true);
-                return t;
-            });
+    private java.util.concurrent.ScheduledExecutorService saveExecutor = newSaveExecutor();
     private java.util.concurrent.ScheduledFuture<?> pendingSave = null;
+
+    private static java.util.concurrent.ScheduledExecutorService newSaveExecutor()
+    {
+        return java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "RuneAlytics-Save");
+            t.setDaemon(true);
+            return t;
+        });
+    }
 
     @Inject
     public LootStorageManager(RuneAlyticsState state, Gson gson)
@@ -154,6 +158,12 @@ public class LootStorageManager
 
     private synchronized void scheduleSave()
     {
+        // The save executor is shut down on plugin shutDown(). Because this is a
+        // @Singleton that RuneLite reuses across a disable→enable cycle, recreate
+        // it on demand so a later kill doesn't hit a RejectedExecutionException.
+        if (saveExecutor.isShutdown())
+            saveExecutor = newSaveExecutor();
+
         if (pendingSave != null && !pendingSave.isDone())
             pendingSave.cancel(false);
         pendingSave = saveExecutor.schedule(this::saveData, 500, java.util.concurrent.TimeUnit.MILLISECONDS);

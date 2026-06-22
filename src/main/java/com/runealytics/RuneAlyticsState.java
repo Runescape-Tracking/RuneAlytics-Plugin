@@ -12,22 +12,25 @@ import java.util.List;
 @Setter
 public class RuneAlyticsState
 {
-    private boolean loggedIn;
-    private boolean verified;
-    private String verifiedUsername;
-    private String verificationCode;
+    // These flags/tokens are written on the client thread and read from the
+    // background executor and OkHttp callback threads, so they are volatile to
+    // guarantee cross-thread visibility.
+    private volatile boolean loggedIn;
+    private volatile boolean verified;
+    private volatile String verifiedUsername;
+    private volatile String verificationCode;
     private int prestige;
 
     // Additional state for loot tracking
-    private boolean syncInProgress;
-    private long lastSyncTime;
+    private volatile boolean syncInProgress;
+    private volatile long lastSyncTime;
 
     /**
      * Current game mode resolved at the time of the last loot/XP event.
      * Possible values: "regular", "ironman", "leagues", "deadman",
      * "fresh_start", "grid_master".
      */
-    private String currentGameMode = "regular";
+    private volatile String currentGameMode = "regular";
 
     /**
      * Current OSRS account subtype for server-side filtering.
@@ -35,7 +38,7 @@ public class RuneAlyticsState
      * "ultimate_ironman", "group_ironman", "hardcore_group_ironman",
      * "unranked_group_ironman".
      */
-    private String currentAccountSubtype = "normal";
+    private volatile String currentAccountSubtype = "normal";
 
     /**
      * Most recent local-player location, captured on the client thread at each
@@ -85,12 +88,6 @@ public class RuneAlyticsState
         syncInProgress = true;
         lastSyncTime = System.currentTimeMillis();
         return true;
-    }
-
-    public synchronized void startSync()
-    {
-        syncInProgress = true;
-        lastSyncTime = System.currentTimeMillis();
     }
 
     public synchronized void endSync()

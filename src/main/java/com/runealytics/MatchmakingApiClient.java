@@ -68,13 +68,6 @@ public class MatchmakingApiClient
         return executeRequest(GET_MATCH_PATH, payload, matchCode, osrsRsn);
     }
 
-    /** Overload kept for the initial load call before a snapshot is available. */
-    public MatchmakingApiResult getMatch(String verificationCode, String matchCode, String osrsRsn)
-            throws IOException
-    {
-        return getMatch(verificationCode, matchCode, osrsRsn, null, null, -1, false, false);
-    }
-
     /**
      * Accepts a match for the local player.  Inventory + gear are required by
      * the server to create the initial gear snapshot row.
@@ -121,17 +114,6 @@ public class MatchmakingApiClient
         payload.addProperty("authentication_token", authenticationToken);
         addPlayerStateToPayload(payload, playerInventory, playerGear, overheadIconOrdinal, isSkulled, protectItem);
         return executeRequest(BEGIN_MATCH_PATH, payload, matchCode, osrsRsn);
-    }
-
-    /** Overload for callers that do not yet have a snapshot. */
-    public MatchmakingApiResult beginMatch(
-            String verificationCode,
-            String matchCode,
-            String osrsRsn,
-            String authenticationToken
-    ) throws IOException
-    {
-        return beginMatch(verificationCode, matchCode, osrsRsn, authenticationToken, null, null, -1, false, false);
     }
 
     /**
@@ -324,14 +306,14 @@ public class MatchmakingApiClient
         String  gearRules     = stringify(json.get("gear_rules"));
 
         MatchmakingRally rally = null;
-        if (json.has("rally") && !json.get("rally").isJsonNull())
+        if (json.has("rally") && json.get("rally").isJsonObject())
         {
             JsonObject rallyObj = json.getAsJsonObject("rally");
             rally = new MatchmakingRally(getInt(rallyObj, "x"), getInt(rallyObj, "y"), getInt(rallyObj, "plane"));
         }
 
         MatchmakingWinner winner = null;
-        if (json.has("winner") && !json.get("winner").isJsonNull())
+        if (json.has("winner") && json.get("winner").isJsonObject())
         {
             JsonObject winnerObj  = json.getAsJsonObject("winner");
             winner = new MatchmakingWinner(

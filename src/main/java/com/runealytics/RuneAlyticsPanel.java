@@ -304,22 +304,6 @@ public class RuneAlyticsPanel extends PluginPanel
     // ── Convenience helpers — all route through applyFeatureFlags ─────────────
 
     /**
-     * Called when a <b>verified</b> player reaches the login screen or logs out.
-     *
-     * <p>Keeps the Loot Tracker visible so the player can still browse their
-     * drops while logged out.  Match Finder and Settings are hidden because
-     * both require an active session.
-     */
-    public void showLoggedOutVerified()
-    {
-        Map<String, Boolean> flags = new HashMap<>();
-        flags.put(FEATURE_VERIFICATION, true);   // always accessible
-        flags.put(FEATURE_LOOT,         true);
-        flags.put(FEATURE_MATCHES,      true);
-        applyFeatureFlags(flags);
-    }
-
-    /**
      * Called when an <b>unverified</b> player reaches the login screen or logs out.
      * Shows the Loot Tracker and Verification tabs so they can link their account
      * while still viewing local data.

@@ -11,7 +11,6 @@ import net.runelite.api.Player;
 import net.runelite.api.Prayer;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ItemContainerChanged;
-import net.runelite.client.game.ItemManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,29 +35,38 @@ public class MatchmakingManager
     private final RuneAlyticsState         runeAlyticsState;
     private final MatchmakingApiClient     apiClient;
     private final ScheduledExecutorService executorService;
-    private final ItemManager              itemManager;
 
-    private MatchmakingSession       session;
-    private MatchmakingUpdateListener listener;
+    // These fields are touched from the client thread (game events) and from the
+    // background executor (OkHttp callbacks), so they are volatile for visibility.
+    private volatile MatchmakingSession       session;
+    private volatile MatchmakingUpdateListener listener;
 
-    private int     tickCounter;
-    private boolean requestInFlight;
-    private boolean acceptInFlight;
-    private boolean beginInFlight;
+    /**
+     * Monotonic match epoch. Incremented on every {@link #reset()} and
+     * {@link #loadMatch(String)} so an in-flight executor task started for an old
+     * match can detect (via {@link #isStale(int)}) that the match has changed and
+     * drop its result instead of resurrecting a cancelled/replaced session.
+     */
+    private volatile int matchGeneration;
+
+    private volatile int     tickCounter;
+    private volatile boolean requestInFlight;
+    private volatile boolean acceptInFlight;
+    private volatile boolean beginInFlight;
 
     /** Tick number when the next accept/begin retry is allowed (back-off). */
-    private int     acceptCooldownUntilTick;
-    private int     beginCooldownUntilTick;
-    private boolean reportInFlight;
-    private boolean itemsReportInFlight;
-    private boolean resultReported;
-    private boolean itemsReported;
+    private volatile int     acceptCooldownUntilTick;
+    private volatile int     beginCooldownUntilTick;
+    private volatile boolean reportInFlight;
+    private volatile boolean itemsReportInFlight;
+    private volatile boolean resultReported;
+    private volatile boolean itemsReported;
 
     /** True once we have told the server combat started, so we only report once. */
-    private boolean combatReported;
-    private boolean combatInFlight;
-    private WorldPoint lastRallyPoint;
-    private String     lastHintPlayerName;
+    private volatile boolean combatReported;
+    private volatile boolean combatInFlight;
+    private volatile WorldPoint lastRallyPoint;
+    private volatile String     lastHintPlayerName;
 
     /**
      * Current enriched inventory snapshot — updated on every game tick and on
@@ -68,14 +76,14 @@ public class MatchmakingManager
      * <p>Uses {@code ge_per}/{@code total} values so the server can compute
      * the player's total risk without its own price lookup.</p>
      */
-    private JsonArray currentInventorySnapshot;
+    private volatile JsonArray currentInventorySnapshot;
 
     /**
      * Current enriched equipment snapshot — includes {@code slot}, {@code id},
      * {@code qty}, {@code ge_per}, {@code total}.  The {@code slot} field lets
      * the server identify the weapon slot (3) for gear-rule validation.
      */
-    private JsonArray currentGearSnapshot;
+    private volatile JsonArray currentGearSnapshot;
 
     /**
      * Ordinal of the local player's active overhead prayer (HeadIcon.ordinal())
@@ -83,43 +91,53 @@ public class MatchmakingManager
      * enforce "No Overheads" rules in real-time without any rule logic in the
      * plugin.
      */
-    private int currentOverheadIconOrdinal = -1;
+    private volatile int currentOverheadIconOrdinal = -1;
 
     /**
      * Whether the local player currently has a skull icon (is skulled).
      * Sent to the server so it can apply the correct OSRS keep-on-death rules
      * for the informational risk-value display.
      */
-    private boolean currentIsSkulled;
+    private volatile boolean currentIsSkulled;
 
     /**
      * Whether the local player currently has the Protect Item prayer active.
      * Combined with skull status server-side to determine how many items are
      * kept on death (0/1/3/4).
      */
-    private boolean currentProtectItem;
+    private volatile boolean currentProtectItem;
 
     /**
      * Set to {@code true} on {@link ItemContainerChanged} while in a Fighting
      * match, so {@link #reportItemsIfNeeded()} sends a fresh snapshot to
      * {@code /report-items} on the next tick.
      */
-    private boolean gearChangedDuringFight;
+    private volatile boolean gearChangedDuringFight;
 
     @Inject
     public MatchmakingManager(
             Client                   client,
             RuneAlyticsState         runeAlyticsState,
             MatchmakingApiClient     apiClient,
-            ScheduledExecutorService executorService,
-            ItemManager              itemManager
+            ScheduledExecutorService executorService
     )
     {
         this.client           = client;
         this.runeAlyticsState = runeAlyticsState;
         this.apiClient        = apiClient;
         this.executorService  = executorService;
-        this.itemManager      = itemManager;
+    }
+
+    /**
+     * Returns {@code true} if {@code generation} no longer matches the current
+     * {@link #matchGeneration}, i.e. the match was reset or replaced after the
+     * caller captured its epoch. In-flight executor callbacks check this before
+     * mutating {@link #session} or notifying the UI so a stale response can't
+     * resurrect a cancelled match.
+     */
+    private boolean isStale(int generation)
+    {
+        return generation != matchGeneration;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -162,6 +180,7 @@ public class MatchmakingManager
 
         // Snapshot captured before kicking off the load so the server gets
         // an immediate validation result even on the first response.
+        final int       gen      = matchGeneration;
         final JsonArray inv      = currentInventorySnapshot;
         final JsonArray gear     = currentGearSnapshot;
         final int       overhead = currentOverheadIconOrdinal;
@@ -178,6 +197,9 @@ public class MatchmakingManager
             {
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
+
+            // Match was reset/replaced while this load was in flight — drop it.
+            if (isStale(gen)) return;
 
             handleResult(result);
 
@@ -335,24 +357,28 @@ public class MatchmakingManager
 
         combatInFlight = true;
 
-        final JsonArray inv      = currentInventorySnapshot;
-        final JsonArray gear     = currentGearSnapshot;
-        final int       overhead = currentOverheadIconOrdinal;
-        final boolean   skulled  = currentIsSkulled;
-        final boolean   protect  = currentProtectItem;
+        final int       gen       = matchGeneration;
+        final String    matchCode = session.getMatchCode();
+        final JsonArray inv       = currentInventorySnapshot;
+        final JsonArray gear      = currentGearSnapshot;
+        final int       overhead  = currentOverheadIconOrdinal;
+        final boolean   skulled   = currentIsSkulled;
+        final boolean   protect   = currentProtectItem;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
                 result = apiClient.engageCombat(
-                        verificationCode, session.getMatchCode(), rsn, token, inv, gear, overhead, skulled, protect);
+                        verificationCode, matchCode, rsn, token, inv, gear, overhead, skulled, protect);
             }
             catch (IOException ex)
             {
                 log.warn("[engage] IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
+
+            if (isStale(gen)) return;
 
             handleResult(result);
 
@@ -371,7 +397,7 @@ public class MatchmakingManager
                 String body = result.getRawResponse();
                 log.warn("[engage] failed — msg='{}' body={}",
                         result.getMessage(),
-                        body != null && body.length() > 200 ? body.substring(0, 200) : body);
+                        body.length() > 200 ? body.substring(0, 200) : body);
             }
 
             combatInFlight = false;
@@ -380,6 +406,10 @@ public class MatchmakingManager
 
     public void reset()
     {
+        // Bump the epoch so any executor task started for the previous match
+        // detects it is stale (isStale) and drops its result instead of
+        // resurrecting this match after it has been cleared/replaced.
+        matchGeneration++;
         session                  = null;
         tickCounter              = 0;
         requestInFlight          = false;
@@ -464,17 +494,22 @@ public class MatchmakingManager
 
         reportInFlight = true;
 
+        final int    gen       = matchGeneration;
+        final String matchCode = session.getMatchCode();
+
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.reportMatch(verificationCode, session.getMatchCode(), rsn, token, reportedDeath);
+                result = apiClient.reportMatch(verificationCode, matchCode, rsn, token, reportedDeath);
             }
             catch (IOException ex)
             {
                 log.error("[death] reportMatch IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
+
+            if (isStale(gen)) return;
 
             handleResult(result);
 
@@ -484,12 +519,9 @@ public class MatchmakingManager
                 session = result.getSession();
                 updateResultStatus();
             }
-            else if (result.isTokenRefresh())
+            else if (!result.isTokenRefresh())
             {
-                refreshToken();
-            }
-            else
-            {
+                // Token-refresh is already handled centrally by handleResult().
                 log.warn("[death] reportMatch failed — success={} msg='{}' body={}",
                         result.isSuccess(), result.getMessage(),
                         result.getRawResponse().length() > 200
@@ -562,6 +594,7 @@ public class MatchmakingManager
 
         requestInFlight = true;
 
+        final int gen       = matchGeneration;
         String    matchCode = session.getMatchCode();
         JsonArray inv       = currentInventorySnapshot;
         JsonArray gear      = currentGearSnapshot;
@@ -579,6 +612,8 @@ public class MatchmakingManager
             {
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
+
+            if (isStale(gen)) return;
 
             handleResult(result);
 
@@ -621,6 +656,8 @@ public class MatchmakingManager
         final boolean   protect   = currentProtectItem;
 
         acceptInFlight = true;
+        final int    gen       = matchGeneration;
+        final String matchCode = session.getMatchCode();
         log.debug("[accept] sending — status={} rsn={}", session.getStatus(), rsn);
 
         executorService.submit(() -> {
@@ -628,13 +665,15 @@ public class MatchmakingManager
             try
             {
                 result = apiClient.acceptMatch(
-                        verificationCode, session.getMatchCode(), rsn, token, inventory, gear, overhead, skulled, protect);
+                        verificationCode, matchCode, rsn, token, inventory, gear, overhead, skulled, protect);
             }
             catch (IOException ex)
             {
                 log.warn("[accept] IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
+
+            if (isStale(gen)) return;
 
             handleResult(result);
 
@@ -724,24 +763,28 @@ public class MatchmakingManager
         log.debug("[begin-match] sending — rallyOrEngaged={} status={}",
                 rallyOrEngaged, session.getStatus());
 
-        final JsonArray inv      = currentInventorySnapshot;
-        final JsonArray gear     = currentGearSnapshot;
-        final int       overhead = currentOverheadIconOrdinal;
-        final boolean   skulled  = currentIsSkulled;
-        final boolean   protect  = currentProtectItem;
+        final int       gen       = matchGeneration;
+        final String    matchCode = session.getMatchCode();
+        final JsonArray inv       = currentInventorySnapshot;
+        final JsonArray gear      = currentGearSnapshot;
+        final int       overhead  = currentOverheadIconOrdinal;
+        final boolean   skulled   = currentIsSkulled;
+        final boolean   protect   = currentProtectItem;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
                 result = apiClient.beginMatch(
-                        verificationCode, session.getMatchCode(), rsn, token, inv, gear, overhead, skulled, protect);
+                        verificationCode, matchCode, rsn, token, inv, gear, overhead, skulled, protect);
             }
             catch (IOException ex)
             {
                 log.warn("[begin-match] IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
+
+            if (isStale(gen)) return;
 
             handleResult(result);
 
@@ -799,19 +842,23 @@ public class MatchmakingManager
 
         itemsReportInFlight    = true;
         gearChangedDuringFight = false;
+        final int    gen       = matchGeneration;
+        final String matchCode = session.getMatchCode();
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
                 result = apiClient.reportItems(
-                        verificationCode, session.getMatchCode(), rsn,
+                        verificationCode, matchCode, rsn,
                         token, inventoryItems, gearItems, overhead, skulled, protect);
             }
             catch (IOException ex)
             {
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
+
+            if (isStale(gen)) return;
 
             handleResult(result);  // handles token refresh internally
 
@@ -840,22 +887,26 @@ public class MatchmakingManager
             return;
         }
 
-        final JsonArray inv      = currentInventorySnapshot;
-        final JsonArray gear     = currentGearSnapshot;
-        final int       overhead = currentOverheadIconOrdinal;
-        final boolean   skulled  = currentIsSkulled;
-        final boolean   protect  = currentProtectItem;
+        final int       gen       = matchGeneration;
+        final String    matchCode = session.getMatchCode();
+        final JsonArray inv       = currentInventorySnapshot;
+        final JsonArray gear      = currentGearSnapshot;
+        final int       overhead  = currentOverheadIconOrdinal;
+        final boolean   skulled   = currentIsSkulled;
+        final boolean   protect   = currentProtectItem;
 
         executorService.submit(() -> {
             MatchmakingApiResult result;
             try
             {
-                result = apiClient.getMatch(verificationCode, session.getMatchCode(), rsn, inv, gear, overhead, skulled, protect);
+                result = apiClient.getMatch(verificationCode, matchCode, rsn, inv, gear, overhead, skulled, protect);
             }
             catch (IOException ex)
             {
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
+
+            if (isStale(gen)) return;
 
             handleResult(result);
 

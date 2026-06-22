@@ -29,7 +29,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
     private final RunealyticsConfig        config;
     private final ScheduledExecutorService executorService;
     private final ConfigManager            configManager;
-    private static final Logger log = LoggerFactory.getLogger(RunealyticsApiClient.class);
+    private static final Logger log = LoggerFactory.getLogger(RuneAlyticsVerificationPanel.class);
     private final JTextField codeField       = RuneAlyticsUi.inputField();
     private final JButton    verifyButton    = RuneAlyticsUi.primaryButton("Verify Account");
     private final JPanel     formRow         = RuneAlyticsUi.formRow(codeField, verifyButton);

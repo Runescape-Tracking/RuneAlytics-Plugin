@@ -1,5 +1,6 @@
 package com.runealytics;
 
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.util.ImageUtil;
 
@@ -11,6 +12,7 @@ import javax.swing.border.LineBorder;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 
+@Slf4j
 public final class RuneAlyticsUi
 {
     private RuneAlyticsUi() {}
@@ -317,9 +319,9 @@ public final class RuneAlyticsUi
         inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
         inner.setOpaque(false);
 
-        // Logo — prefer full logo, fall back to icon
+        // Logo — prefer the glow-free header logo, fall back to the app logo.
         BufferedImage img = tryLoadHeaderImage("/lightLogo_noglow.png");
-        if (img == null) img = tryLoadHeaderImage("/lightLogo_noglow.png");
+        if (img == null) img = tryLoadHeaderImage("/runealytics_logo.png");
 
         if (img != null)
         {
@@ -353,8 +355,9 @@ public final class RuneAlyticsUi
         {
             return ImageUtil.loadImageResource(RuneAlyticsUi.class, resource);
         }
-        catch (Exception ignored)
+        catch (Exception e)
         {
+            log.debug("Header image '{}' could not be loaded: {}", resource, e.getMessage());
             return null;
         }
     }

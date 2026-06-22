@@ -16,6 +16,7 @@ import java.awt.event.*;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
@@ -26,7 +27,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private static final int  ITEM_SIZE        = 36;
     private static final int  ITEM_GAP         = 2;
     private static final int  PAD              = 6;
-    private static final int  HIGHLIGHT_TIMEOUT_MS = 10_000;
     private static final long SYNC_COOLDOWN_MS = 5 * 60 * 1_000L;
 
     private static final Font CALIBRI_BOLD  = new Font("Calibri", Font.BOLD, 12);
@@ -57,7 +57,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private final LootTrackerManager lootManager;
     private final RuneAlyticsState   runeAlyticsState;
     private final ItemManager        itemManager;
-    private final RuneAlyticsPlugin  plugin;
+    private final ScheduledExecutorService executorService;
 
     private final JLabel totalKillsLabel = new JLabel("Kills: 0");
     private final JLabel totalValueLabel = new JLabel("Value: 0 gp");
@@ -91,14 +91,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private final Map<String, javax.swing.Timer> lootDebounceMap = new ConcurrentHashMap<>();
 
+    // Re-entrancy guard: serialises refreshes so overlapping events coalesce
+    // into a single rebuild instead of racing on the shared executor.
     private final AtomicBoolean refreshing = new AtomicBoolean(false);
-    private final java.util.concurrent.ExecutorService refreshPool =
-            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
-                Thread t = new Thread(r, "RuneAlytics-Refresh");
-                t.setDaemon(true);
-                return t;
-            });
-    private javax.swing.Timer highlightTimer;
     private javax.swing.Timer refreshDebounce;
 
     @Getter
@@ -121,13 +116,13 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             LootTrackerManager lootManager,
             RuneAlyticsState   runeAlyticsState,
             ItemManager        itemManager,
-            RuneAlyticsPlugin  plugin)
+            ScheduledExecutorService executorService)
     {
         super(false);
         this.lootManager      = lootManager;
         this.runeAlyticsState = runeAlyticsState;
         this.itemManager      = itemManager;
-        this.plugin           = plugin;
+        this.executorService  = executorService;
 
         refreshDebounce = new javax.swing.Timer(150, e -> executeRefresh());
         refreshDebounce.setRepeats(false);
@@ -483,7 +478,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 "Import from RuneLite", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
 
         if (ch != JOptionPane.YES_OPTION) return;
-        new Thread(() -> runImport(username, null), "runealytics-rl-import").start();
+        executorService.execute(() -> runImport(username, null));
     }
 
     private void runImport(String username, java.io.File manualFile)
@@ -514,12 +509,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION)
                 {
                     java.io.File chosen = chooser.getSelectedFile();
-                    new Thread(() -> {
+                    executorService.execute(() -> {
                         String r2 = lootManager.importFromRuneLiteLootTracker(username, chosen);
                         invalidateFingerprint();
                         SwingUtilities.invokeLater(() ->
                                 JOptionPane.showMessageDialog(this, r2, "Import Result", JOptionPane.INFORMATION_MESSAGE));
-                    }, "runealytics-rl-import-manual").start();
+                    });
                 }
             });
         }
@@ -662,38 +657,27 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
      */
     private void scheduleLootUpdate(String npcName, BossKillStats stats)
     {
-        javax.swing.Timer existing = lootDebounceMap.get(npcName);
-        if (existing != null) existing.stop();
+        // javax.swing.Timer must be created and started on the EDT. This is
+        // invoked from the client thread (loot events), so marshal the whole
+        // create-register-start sequence onto the EDT.
+        Runnable schedule = () ->
+        {
+            javax.swing.Timer existing = lootDebounceMap.get(npcName);
+            if (existing != null) existing.stop();
 
-        javax.swing.Timer t = new javax.swing.Timer(80, e -> {
-            lootDebounceMap.remove(npcName);
-            updateLoot(npcName, stats);
-        });
-        t.setRepeats(false);
-        lootDebounceMap.put(npcName, t);
+            javax.swing.Timer t = new javax.swing.Timer(80, e -> {
+                lootDebounceMap.remove(npcName);
+                updateLoot(npcName, stats);
+            });
+            t.setRepeats(false);
+            lootDebounceMap.put(npcName, t);
+            t.start();
+        };
 
         if (SwingUtilities.isEventDispatchThread())
-            t.start();
+            schedule.run();
         else
-            SwingUtilities.invokeLater(t::start);
-    }
-
-    public void highlightBoss(String npcName)
-    {
-        highlightedBoss = npcName;
-        if (highlightTimer != null) highlightTimer.stop();
-        highlightTimer = new javax.swing.Timer(HIGHLIGHT_TIMEOUT_MS, e -> {
-            highlightedBoss = null;
-            invalidateFingerprint();
-            refreshDisplay();
-        });
-        highlightTimer.setRepeats(false);
-        highlightTimer.start();
-    }
-
-    public void refresh()
-    {
-        refreshDisplay();
+            SwingUtilities.invokeLater(schedule);
     }
 
     public void updateLoot(String npcName, BossKillStats stats)
@@ -772,7 +756,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     {
         if (!refreshing.compareAndSet(false, true)) return;
 
-        refreshPool.submit(() ->
+        executorService.execute(() ->
         {
             try
             {

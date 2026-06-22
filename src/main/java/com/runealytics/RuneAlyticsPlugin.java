@@ -155,7 +155,8 @@ public class RuneAlyticsPlugin extends Plugin
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
     private NavigationButton         navButton;
-    private LootTrackerPanel         lootTrackerPanel;
+    // Assigned on the EDT during startUp, read from background executor threads.
+    private volatile LootTrackerPanel lootTrackerPanel;
 
     // ── Live-map heartbeat ─────────────────────────────────────────────────────
     /** Heartbeat period — how often the live map location is pushed to the site. */
@@ -349,15 +350,11 @@ public class RuneAlyticsPlugin extends Plugin
     {
         log.info("RuneAlytics starting");
 
-        // Build the navigation button SYNCHRONOUSLY so it is registered with the
-        // toolbar before startUp() returns.  Previously this happened inside an
-        // executor callback, which meant:
-        //   - A rapid disable→enable cycle could leave a stale navButton orphaned
-        //     in the toolbar (issue #1 — UI disappearing).
-        //   - If shutDown() ran before the executor task fired, the button would
-        //     be added AFTER shutDown nulled it, never to be removed.
-        // The button now exists by the time shutDown() can possibly be called.
-        mainPanel = injector.getInstance(RuneAlyticsPanel.class);
+        // Swing components must be created on the EDT. Build the root panel on the
+        // EDT (synchronously, so the nav button can be registered before startUp()
+        // returns — this avoids the disable→enable orphan-button race) and then
+        // register the nav button on the plugin thread.
+        buildOnEdt(() -> mainPanel = injector.getInstance(RuneAlyticsPanel.class));
 
         navButton = NavigationButton.builder()
                 .tooltip("RuneAlytics")
@@ -370,43 +367,54 @@ public class RuneAlyticsPlugin extends Plugin
         overlayManager.add(liveMapOverlay);
         log.info("RuneAlytics nav button registered");
 
-        // Heavy panel construction stays async — it can take a few ms and we
-        // don't want it on the startup-critical path.  Tabs are appended via
-        // SwingUtilities.invokeLater so they show up the moment they're ready.
-        executorService.execute(() ->
+        // The heavy sub-panels are also Swing trees, so they are constructed on
+        // the EDT. invokeLater keeps this off the startup-critical path; the tabs
+        // appear the moment they are built.
+        SwingUtilities.invokeLater(() ->
         {
             try
             {
                 LootTrackerPanel        lootPanel        = injector.getInstance(LootTrackerPanel.class);
                 MatchmakingPanel        matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
                 RuneAlyticsSettingsPanel settingsPanel   = injector.getInstance(RuneAlyticsSettingsPanel.class);
+                // Force the verification panel singleton to be created here on the
+                // EDT too, so the later (client-thread) getInstance in
+                // checkVerificationStatus never triggers off-EDT Swing construction.
+                injector.getInstance(RuneAlyticsVerificationPanel.class);
 
                 lootTrackerPanel = lootPanel;
                 // Sync starts disabled until feature flags confirm it is active
                 lootPanel.setSyncEnabled(false);
 
-                SwingUtilities.invokeLater(() ->
-                {
-                    try
-                    {
-                        // Loot Tracker has no feature gate — local tracking is always available.
-                        // Sync availability is controlled separately via setSyncEnabled().
-                        mainPanel.addTab("Loot Tracker", null,             lootPanel);
-                        mainPanel.addTab("Matches",      FEATURE_MATCHES,  matchmakingPanel);
-                        mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
-                        log.info("RuneAlytics tabs populated");
-                    }
-                    catch (Exception ex)
-                    {
-                        log.error("Failed to populate RuneAlytics tabs", ex);
-                    }
-                });
+                // Loot Tracker has no feature gate — local tracking is always available.
+                // Sync availability is controlled separately via setSyncEnabled().
+                mainPanel.addTab("Loot Tracker", null,             lootPanel);
+                mainPanel.addTab("Matches",      FEATURE_MATCHES,  matchmakingPanel);
+                mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
+                log.info("RuneAlytics tabs populated");
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                log.error("Failed to instantiate RuneAlytics panels", e);
+                log.error("Failed to populate RuneAlytics tabs", ex);
             }
         });
+    }
+
+    /**
+     * Runs {@code r} on the Swing EDT and waits for it to finish. Runs inline if
+     * already on the EDT, otherwise blocks via {@link SwingUtilities#invokeAndWait}.
+     * Used so panel (Swing) construction never happens off the EDT.
+     */
+    private static void buildOnEdt(Runnable r) throws Exception
+    {
+        if (SwingUtilities.isEventDispatchThread())
+        {
+            r.run();
+        }
+        else
+        {
+            SwingUtilities.invokeAndWait(r);
+        }
     }
 
     @Override
@@ -1876,7 +1884,7 @@ public class RuneAlyticsPlugin extends Plugin
     {
         try
         {
-            BufferedImage img = ImageUtil.loadImageResource(getClass(), "/runealytics_icon.png");
+            BufferedImage img = ImageUtil.loadImageResource(getClass(), "/runealytics_logo.png");
             if (img != null) return img;
         }
         catch (Exception e)

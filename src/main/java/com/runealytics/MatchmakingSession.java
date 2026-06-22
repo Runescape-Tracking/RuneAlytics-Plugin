@@ -389,11 +389,6 @@ public class MatchmakingSession
         return winner;
     }
 
-    public String getToken()
-    {
-        return token;
-    }
-
     public String getTokenExpiresAt()
     {
         return tokenExpiresAt;
