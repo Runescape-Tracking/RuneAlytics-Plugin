@@ -213,7 +213,7 @@ public class LootTrackerApiClient
                     drop.setQuantity(dropObj.get("quantity").getAsInt());
                     drop.setGePrice(dropObj.get("ge_price").getAsInt());
                     drop.setHighAlch(dropObj.get("high_alch").getAsInt());
-                    drop.setTotalValue(drop.getGePrice() * drop.getQuantity());
+                    drop.setTotalValue((long) drop.getGePrice() * drop.getQuantity());
                     drop.setHidden(false);
 
                     killRecord.getDrops().add(drop);

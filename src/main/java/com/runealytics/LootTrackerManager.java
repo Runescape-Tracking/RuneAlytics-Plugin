@@ -345,21 +345,11 @@ public class LootTrackerManager
     //  LIFECYCLE
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Called once during plugin startUp().
-     * Resets the "data loaded" flag so the next login fetches fresh data.
-     */
-    public void initialize()
-    {
-        log.info("LootTrackerManager: initialising");
-        hasLoadedData = false;
-    }
-
-    /** Called during plugin shutDown(). Persists in-memory data to disk. */
+    /** Called during plugin shutDown(). Persists in-memory data and stops the save executor. */
     public void shutdown()
     {
         log.info("LootTrackerManager: saving on shutdown");
-        storageManager.saveData();
+        storageManager.shutdown();
     }
 
     /** Attaches the UI panel that this manager drives. */
@@ -400,9 +390,11 @@ public class LootTrackerManager
             return;
         }
 
+        // Record the kill even if every drop was filtered out by
+        // minimumLootValue — otherwise the kill counter silently misses every
+        // kill whose loot happened to all be low-value. The bulk-sync path skips
+        // zero-drop kills from server upload, so they stay local-only for KC.
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
-        if (drops.isEmpty()) return;
-
         recordKill(name, npc.getId(), npc.getCombatLevel(), client.getWorld(), drops);
     }
 
@@ -1243,11 +1235,11 @@ public class LootTrackerManager
         if (!allowSync) { log.warn("downloadKillHistoryFromServer: blocked – use manual sync"); return; }
 
         String username = state.getVerifiedUsername();
-        if (username == null || !state.canSync()) return;
+        if (username == null) return;
+        if (!state.tryStartSync()) return;
 
         try
         {
-            state.startSync();
             Map<String, LootStorageData.BossKillData> serverData =
                     apiClient.fetchKillHistoryFromServer(username);
 
@@ -1265,13 +1257,16 @@ public class LootTrackerManager
     public void uploadUnsyncedKills()
     {
         String username = state.getVerifiedUsername();
-        if (username == null || !state.canSync()) return;
+        if (username == null) return;
 
-        // Start sync state immediately to prevent double-triggering
-        state.startSync();
+        // Atomically claim the sync slot — closes the check-then-act race where
+        // the scheduled task and a live-sync could both pass canSync() and then
+        // both upload, double-counting on the server.
+        if (!state.tryStartSync()) return;
 
-        // Move the entire process to a background thread to eliminate game lag
-        new Thread(() -> {
+        // Run off the client thread on the shared executor (not a hand-rolled
+        // raw thread) so rapid kills can't spawn unbounded threads.
+        executorService.execute(() -> {
             try
             {
                 Map<String, List<LootStorageData.KillRecord>> unsynced =
@@ -1329,7 +1324,7 @@ public class LootTrackerManager
                     SwingUtilities.invokeLater(() -> panel.refreshDisplay());
                 }
             }
-        }, "RuneAlytics-Sync").start();
+        });
     }
 
     /**
@@ -1397,13 +1392,6 @@ public class LootTrackerManager
         hasLoadedData = true;
     }
 
-    public void loadLocalDataForUser(String username)
-    {
-        log.info("Loading local data for '{}'", username);
-        storageManager.loadLootData(username);
-        clientThread.invokeLater(this::refreshLootDisplay);
-    }
-
     private void refreshLootDisplay()
     {
         LootStorageData data = storageManager.getCurrentData();
@@ -1451,19 +1439,6 @@ public class LootTrackerManager
 
         log.debug("refreshLootDisplay: {} bosses loaded", bossKillStats.size());
         if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
-    }
-
-    public void onAccountChanged(String newUsername)
-    {
-        bossKillStats.clear();
-        hasLoadedData = false;
-        loadFromStorage();
-        if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
-    }
-
-    public void onPlayerLoggedInAndVerified()
-    {
-        loadFromStorage();
     }
 
     public Map<String, BossKillStats> getBossKillStats()
@@ -2120,8 +2095,11 @@ public class LootTrackerManager
         for (ItemStack item : items)
         {
             ItemComposition comp = itemManager.getItemComposition(item.getId());
-            int gePrice    = itemManager.getItemPrice(item.getId());
-            int totalValue = gePrice * item.getQuantity();
+            int  gePrice    = itemManager.getItemPrice(item.getId());
+            // long math: gePrice * quantity overflows int for large stacks of
+            // high-value items (e.g. big coin / rune drops) and would record a
+            // negative or garbage value.
+            long totalValue = (long) gePrice * item.getQuantity();
 
             if (totalValue < config.minimumLootValue()) continue;
 

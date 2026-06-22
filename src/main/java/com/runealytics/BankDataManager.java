@@ -125,35 +125,4 @@ public class BankDataManager
         }
     }
 
-    /**
-     * Convenience wrapper kept for backward-compatible callers that have
-     * already captured containers on the client thread.
-     *
-     * <p><strong>IMPORTANT</strong> – this overload calls
-     * {@link #buildBankSnapshot} internally, which requires the client thread.
-     * Call it only from a handler that runs on the client thread, then pass
-     * the built snapshot to a background executor via
-     * {@link #syncBankData(String, String, JsonObject)}.</p>
-     */
-    public void syncBankData(
-            String token,
-            String username,
-            ItemContainer bankContainer,
-            ItemContainer inventoryContainer,
-            ItemContainer equipmentContainer)
-    {
-        if (bankContainer == null)
-        {
-            log.warn("Bank container is null, skipping bank sync");
-            return;
-        }
-
-        JsonObject snapshot = buildBankSnapshot(username, bankContainer, inventoryContainer, equipmentContainer);
-        syncBankData(token, username, snapshot);
-    }
-
-    /** Backward-compatible overload for callers that only have the bank container. */
-    public void syncBankData(String token, String username, ItemContainer bankContainer)
-    {
-        syncBankData(token, username, bankContainer, null, null);
-    }}
+}

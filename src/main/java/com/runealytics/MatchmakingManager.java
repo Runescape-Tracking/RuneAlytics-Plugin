@@ -263,8 +263,7 @@ public class MatchmakingManager
         refreshPlayerState();
 
         // Mark gear as changed during a fight so /report-items fires again
-        if (session != null && session.getStatus() != null
-                && session.getStatus().equalsIgnoreCase("Fighting"))
+        if (statusIs("Fighting"))
         {
             gearChangedDuringFight = true;
             // Reset itemsReported so the next reportItemsIfNeeded() call fires
@@ -668,9 +667,7 @@ public class MatchmakingManager
     {
         if (session == null || beginInFlight || session.isLocalReadyToFight()) return;
 
-        if (session.getStatus().equalsIgnoreCase("Fighting")
-                || session.getStatus().equalsIgnoreCase("Completed")
-                || session.getStatus().equalsIgnoreCase("Canceled"))
+        if (statusIs("Fighting") || statusIs("Completed") || statusIs("Canceled"))
         {
             return;
         }
@@ -679,7 +676,7 @@ public class MatchmakingManager
         // has unlocked the match (status=Ready, rally generated).  Bailing
         // earlier just spams 4xx responses.
         if (!session.isLocalJoined()) return;
-        if (!session.getStatus().equalsIgnoreCase("Ready"))
+        if (!statusIs("Ready"))
         {
             // Still Pending → opponent hasn't accepted yet; wait for the next
             // poll to flip status to Ready.
@@ -779,7 +776,7 @@ public class MatchmakingManager
     {
         if (session == null || itemsReportInFlight || itemsReported) return;
 
-        if (!session.getStatus().equalsIgnoreCase("Fighting")) return;
+        if (!statusIs("Fighting")) return;
 
         String token            = session.getLocalToken();
         String verificationCode = resolveVerificationCode();
@@ -874,11 +871,23 @@ public class MatchmakingManager
     //  Private: state + UI helpers
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Null-safe status check: a server response can carry a session with a null
+     * status, and calling {@code getStatus().equalsIgnoreCase(...)} on it would
+     * NPE on the client thread (onGameTick). Centralised here so every caller is
+     * protected.
+     */
+    private boolean statusIs(String expected)
+    {
+        return session != null
+                && session.getStatus() != null
+                && session.getStatus().equalsIgnoreCase(expected);
+    }
+
     private void updateResultStatus()
     {
         if (session == null) return;
-        if (session.getStatus().equalsIgnoreCase("Completed")
-                || session.getStatus().equalsIgnoreCase("Canceled"))
+        if (statusIs("Completed") || statusIs("Canceled"))
         {
             resultReported = true;
         }
@@ -960,14 +969,12 @@ public class MatchmakingManager
 
     private boolean isMatchFighting()
     {
-        return session != null && session.getStatus().equalsIgnoreCase("Fighting");
+        return statusIs("Fighting");
     }
 
     private boolean isMatchCompletedOrCanceled()
     {
-        return session != null
-                && (session.getStatus().equalsIgnoreCase("Completed")
-                || session.getStatus().equalsIgnoreCase("Canceled"));
+        return statusIs("Completed") || statusIs("Canceled");
     }
 
     private boolean isWithinRally(Player localPlayer, Player opponent, WorldPoint rallyPoint)

@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.*;
+import net.runelite.api.vars.AccountType;
 import java.util.EnumSet;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -43,7 +44,7 @@ import static com.runealytics.RuneAlyticsPanel.*;
         name = "RuneAlytics",
         description = "Advanced loot tracking and analytics",
         tags = {"loot", "tracking", "analytics"},
-        enabledByDefault = true
+        enabledByDefault = false
 )
 public class RuneAlyticsPlugin extends Plugin
 {
@@ -115,6 +116,16 @@ public class RuneAlyticsPlugin extends Plugin
             "rub", "read", "open", "use", "claim", "activate", "tear"
     );
 
+    /**
+     * Superset of every menu option {@link #onMenuOptionClicked} acts on. Used
+     * as a fast pre-filter so the overwhelming majority of clicks (walk, attack,
+     * talk, etc.) bail out before the comparatively expensive HTML-strip regex.
+     */
+    private static final Set<String> RELEVANT_MENU_OPTIONS = java.util.Set.of(
+            "rub", "read", "open", "use", "claim", "activate", "tear",
+            "loot-jar", "loot", "pickpocket", "pick-pocket"
+    );
+
     private final Map<String, List<ItemStack>> skillingSnapshot = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Long>            skillingExpiry   = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -157,6 +168,23 @@ public class RuneAlyticsPlugin extends Plugin
      * {@code LOGIN_SCREEN} so no heartbeats fire while idle at the login screen.
      */
     private ScheduledFuture<?> heartbeatTask;
+
+    // ── Bank sync debounce ─────────────────────────────────────────────────────
+    /**
+     * Quiet-period (ms) after the last bank container change before a wealth
+     * snapshot is built and uploaded. Opening a bank and shuffling items fires
+     * {@code ItemContainerChanged} dozens of times in a second; without this the
+     * plugin rebuilt a full valued snapshot and fired an HTTP POST every time.
+     */
+    private static final long BANK_SYNC_DEBOUNCE_MS = 1_500;
+    /** True while a debounced bank-sync task is already queued. */
+    private final AtomicBoolean bankSyncScheduled = new AtomicBoolean(false);
+
+    // ── Feature-flag change tracking ────────────────────────────────────────────
+    /** Last loot-sync / match-enabled flags pushed to the UI, so the 60s poll
+     *  only re-renders when a value actually changes. Null = not yet fetched. */
+    private Boolean lastLootSyncFlag    = null;
+    private Boolean lastMatchEnabledFlag = null;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT TRACKING STATE
@@ -600,7 +628,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (!config.enableLootTracking()) return;
 
         int gid = event.getGroupId();
-        log.info("WidgetLoaded: groupId={}", gid);
+        log.debug("WidgetLoaded: groupId={}", gid);
 
         // ── Special cases that can't use the generic registry ────────────────
         if (gid == WIDGET_WHISPERER)
@@ -675,24 +703,13 @@ public class RuneAlyticsPlugin extends Plugin
         // are safe.  The manager only acts if a match is active.
         matchmakingManager.onItemContainerChanged(event);
 
-        // ── Bank sync ─────────────────────────────────────────────────────────
+        // ── Bank sync (debounced) ───────────────────────────────────────────
         if (event.getContainerId() == InventoryID.BANK.getId()
                 && config.enableBankSync()
                 && state.isLoggedIn()
                 && state.isVerified())
         {
-            final String token          = state.getVerificationCode();
-            final String username       = state.getVerifiedUsername();
-            // Build the complete JSON snapshot HERE on the client thread because
-            // fromContainerWithValues calls ItemManager.getItemComposition which
-            // requires client.getItemDefinition — a client-thread-only API.
-            // Only the HTTP call is handed off to the background executor.
-            final JsonObject bankSnapshot = bankDataManager.buildBankSnapshot(
-                    username,
-                    event.getItemContainer(),
-                    client.getItemContainer(InventoryID.INVENTORY),
-                    client.getItemContainer(InventoryID.EQUIPMENT));
-            executorService.execute(() -> bankDataManager.syncBankData(token, username, bankSnapshot));
+            scheduleBankSync();
             return;
         }
 
@@ -836,6 +853,12 @@ public class RuneAlyticsPlugin extends Plugin
         String option = event.getMenuOption();
         if (option == null) return;
 
+        // Fast pre-filter: ignore the vast majority of clicks (walk/attack/talk)
+        // before doing any string work, so the HTML-strip regex below only runs
+        // for the handful of options we actually care about.
+        String lowerOption = option.toLowerCase();
+        if (!RELEVANT_MENU_OPTIONS.contains(lowerOption)) return;
+
         String rawTarget = event.getMenuTarget();
         if (rawTarget == null || rawTarget.isEmpty()) return;
 
@@ -847,7 +870,7 @@ public class RuneAlyticsPlugin extends Plugin
         // a skilling snapshot window. Pre-emptively close that window so the
         // next inventory change (e.g. unequip) isn't falsely attributed.
         String lowerTarget = targetName.toLowerCase();
-        if (LAMP_XP_MENU_OPTIONS.contains(option.toLowerCase())
+        if (LAMP_XP_MENU_OPTIONS.contains(lowerOption)
                 && (lowerTarget.contains("lamp")
                 || lowerTarget.contains("book")
                 || lowerTarget.contains("tome")
@@ -1210,6 +1233,16 @@ public class RuneAlyticsPlugin extends Plugin
             // Stop the live-map heartbeat: while idle at the login screen there is
             // no player to locate, so we must not keep pinging the server.
             stopHeartbeat();
+
+            // Reset per-account tracking state so nothing leaks across an account
+            // switch: stale loot-attribution windows would mis-credit the next
+            // account, and a stale XP baseline would record a huge bogus delta on
+            // the first StatChanged after a different account logs in.
+            clearTransientLootState();
+            previousXp.clear();
+            lastLootSyncFlag     = null;
+            lastMatchEnabledFlag = null;
+
             matchmakingManager.reset(); // clear any active match on logout
             if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(false);
             SwingUtilities.invokeLater(() -> {
@@ -1276,31 +1309,6 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
 
-    private void handlePostLogin()
-    {
-        String username = client.getLocalPlayer() != null
-                ? client.getLocalPlayer().getName()
-                : null;
-
-        if (username == null || username.isEmpty()) return;
-
-        if (!state.isVerified())
-        {
-            SwingUtilities.invokeLater(() -> mainPanel.showVerificationOnly());
-            return;
-        }
-
-        executorService.submit(() -> {
-            Map<String, Boolean> flags = apiClient.fetchFeatureFlags(username.toLowerCase());
-            boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
-            if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
-            // Loot Tracker tab is always visible; only Match Finder is flag-controlled
-            Map<String, Boolean> tabFlags = new java.util.HashMap<>(flags);
-            tabFlags.put(FEATURE_LOOT, true);
-            SwingUtilities.invokeLater(() -> mainPanel.applyFeatureFlags(tabFlags));
-        });
-    }
-
     // ═════════════════════════════════════════════════════════════════════════
     //  PLAYER SPAWNED
     // ═════════════════════════════════════════════════════════════════════════
@@ -1357,6 +1365,38 @@ public class RuneAlyticsPlugin extends Plugin
         final PrivacySetting bank   = config.bankPrivacy();
         final PrivacySetting player = config.playerVisibility();
         executorService.execute(() -> apiClient.syncPrivacySettings(bank, player));
+    }
+
+    /**
+     * Coalesces a burst of bank container changes into a single wealth snapshot
+     * + upload {@value #BANK_SYNC_DEBOUNCE_MS} ms after the last change. The
+     * snapshot is built on the client thread (ItemManager reads are
+     * client-thread-only) and only the HTTP call is handed to the executor.
+     */
+    private void scheduleBankSync()
+    {
+        if (!bankSyncScheduled.compareAndSet(false, true)) return;
+
+        executorService.schedule(() -> clientThread.invokeLater(() ->
+        {
+            // Cleared first so changes that arrive while we build the snapshot
+            // schedule a fresh follow-up sync.
+            bankSyncScheduled.set(false);
+
+            if (!config.enableBankSync() || !state.isLoggedIn() || !state.isVerified()) return;
+
+            ItemContainer bank = client.getItemContainer(InventoryID.BANK);
+            if (bank == null) return;
+
+            final String token    = state.getVerificationCode();
+            final String username = state.getVerifiedUsername();
+            final JsonObject snapshot = bankDataManager.buildBankSnapshot(
+                    username,
+                    bank,
+                    client.getItemContainer(InventoryID.INVENTORY),
+                    client.getItemContainer(InventoryID.EQUIPMENT));
+            executorService.execute(() -> bankDataManager.syncBankData(token, username, snapshot));
+        }), BANK_SYNC_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1543,8 +1583,19 @@ public class RuneAlyticsPlugin extends Plugin
         boolean lootSync    = flags.getOrDefault(FEATURE_LOOT,    false);
         boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
 
-        if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
-        SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, matchEnabled));
+        // Only touch the UI when something actually changed — this runs every
+        // 60s and previously re-pushed an EDT update each time regardless.
+        if (lastLootSyncFlag == null || lastLootSyncFlag != lootSync)
+        {
+            lastLootSyncFlag = lootSync;
+            if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
+        }
+        if (lastMatchEnabledFlag == null || lastMatchEnabledFlag != matchEnabled)
+        {
+            lastMatchEnabledFlag = matchEnabled;
+            final boolean me = matchEnabled;
+            SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, me));
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1752,19 +1803,6 @@ public class RuneAlyticsPlugin extends Plugin
         }
     }
 
-    private void logConfiguration()
-    {
-        log.info("=== RUNEALYTICS CONFIG ===");
-        log.info("Loot tracking     : {}", config.enableLootTracking());
-        log.info("Track all NPCs    : {}", config.trackAllNpcs());
-        log.info("Track pickpockets : {}", config.enablePickpocketTracking());
-        log.info("Min loot value    : {}", config.minimumLootValue());
-        log.info("Sync to server    : {}", config.syncLootToServer());
-        log.info("Auto-verify       : {}", config.enableAutoVerification());
-        log.info("API URL           : {}", config.apiUrl());
-        log.info("=========================");
-    }
-
     // ═════════════════════════════════════════════════════════════════════════
     //  GAME-MODE DETECTION
     // ═════════════════════════════════════════════════════════════════════════
@@ -1790,15 +1828,9 @@ public class RuneAlyticsPlugin extends Plugin
         EnumSet<WorldType> worldTypes = client.getWorldType();
         if (worldTypes != null)
         {
-            if (worldTypes.contains(WorldType.DEADMAN))  return "deadman";
-            if (worldTypes.contains(WorldType.SEASONAL)) return "leagues";
-            // FRESH_START_WORLD was added in a later RuneLite version; guard with valueOf.
-            try
-            {
-                WorldType fsr = WorldType.valueOf("FRESH_START_WORLD");
-                if (worldTypes.contains(fsr)) return "fresh_start";
-            }
-            catch (IllegalArgumentException ignored) {}
+            if (worldTypes.contains(WorldType.DEADMAN))           return "deadman";
+            if (worldTypes.contains(WorldType.SEASONAL))          return "leagues";
+            if (worldTypes.contains(WorldType.FRESH_START_WORLD)) return "fresh_start";
         }
 
         String subtype = determineAccountSubtype();
@@ -1809,36 +1841,21 @@ public class RuneAlyticsPlugin extends Plugin
      * Returns the specific OSRS account subtype for fine-grained server-side
      * filtering, independent of the current world mode.
      *
-     * <p>Uses reflection so the plugin compiles against any RuneLite version —
-     * {@code AccountType} was added to {@code net.runelite.api} in a later
-     * release and may not be present in all cached JARs.</p>
-     *
      * @return one of "normal", "ironman", "hardcore_ironman",
-     *         "ultimate_ironman", "group_ironman",
-     *         "hardcore_group_ironman", "unranked_group_ironman"
+     *         "ultimate_ironman", "group_ironman", "hardcore_group_ironman"
      */
     private String determineAccountSubtype()
     {
-        try
+        AccountType accountType = client.getAccountType();
+        if (accountType == null) return "normal";
+        switch (accountType)
         {
-            Object accountType = client.getClass()
-                    .getMethod("getAccountType")
-                    .invoke(client);
-            if (accountType == null) return "normal";
-            switch (accountType.toString())
-            {
-                case "IRONMAN":                return "ironman";
-                case "HARDCORE_IRONMAN":       return "hardcore_ironman";
-                case "ULTIMATE_IRONMAN":       return "ultimate_ironman";
-                case "GROUP_IRONMAN":          return "group_ironman";
-                case "HARDCORE_GROUP_IRONMAN": return "hardcore_group_ironman";
-                case "UNRANKED_GROUP_IRONMAN": return "unranked_group_ironman";
-                default:                       return "normal";
-            }
-        }
-        catch (Exception e)
-        {
-            return "normal";
+            case IRONMAN:                return "ironman";
+            case HARDCORE_IRONMAN:       return "hardcore_ironman";
+            case ULTIMATE_IRONMAN:       return "ultimate_ironman";
+            case GROUP_IRONMAN:          return "group_ironman";
+            case HARDCORE_GROUP_IRONMAN: return "hardcore_group_ironman";
+            default:                     return "normal";
         }
     }
 

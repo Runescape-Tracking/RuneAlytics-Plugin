@@ -118,8 +118,10 @@ public class LootStorageData
         @SerializedName("high_alch")
         private int highAlch;
 
+        // long: a per-drop value can exceed Integer.MAX_VALUE for large stacks of
+        // high-value items. Gson reads older int-typed values into this fine.
         @SerializedName("total_value")
-        private int totalValue;
+        private long totalValue;
 
         @SerializedName("hidden")
         private boolean hidden;
