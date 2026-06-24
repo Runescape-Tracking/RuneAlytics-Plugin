@@ -1469,6 +1469,21 @@ public class RuneAlyticsPlugin extends Plugin
      * One heartbeat iteration: captures the live location, friends list and
      * ignore list on the client thread (those reads are client-thread-only) and
      * then hands the payload off to the API client on the executor.
+     *
+     * <p><b>PRIVACY — do not remove this check.</b> When the player's location
+     * visibility is {@code private}, their real coordinates are replaced with
+     * {@link PlayerLocationSnapshot#privacyDecoy()} <i>here, on the client,
+     * before the executor/HTTP call ever sees them</i>. The real
+     * {@link PlayerLocationSnapshot#capture} result for a private player is
+     * deliberately never constructed in that branch, let alone serialized or
+     * sent — there is no real-location payload sitting in memory waiting to be
+     * sent by mistake. This is intentional: the live map exists so a player can
+     * share their location with friends, not so the server (or anything that
+     * later reads the server's database/logs) can track someone who explicitly
+     * opted out. Enforcing this only on the server would mean every future
+     * server bug or schema change is a potential privacy leak; enforcing it
+     * here means a private player's real position simply never leaves their
+     * machine.</p>
      */
     private void sendHeartbeatTick()
     {
@@ -1478,11 +1493,18 @@ public class RuneAlyticsPlugin extends Plugin
         {
             if (client.getGameState() != GameState.LOGGED_IN) return;
 
-            final PlayerLocationSnapshot location = PlayerLocationSnapshot.capture(client);
-            final List<String> friends = readNames(client.getFriendContainer());
-            final List<String> ignores = readNames(client.getIgnoreContainer());
             final PrivacySetting visibility    = config.playerVisibility();
             final PrivacySetting gearVisibility = config.bankPrivacy();
+
+            // Decoy substitution MUST happen before this point in the call
+            // chain — never compute the real location for a private player and
+            // rely on a later step to discard/redact it.
+            final PlayerLocationSnapshot location = (visibility == PrivacySetting.PRIVATE)
+                    ? PlayerLocationSnapshot.privacyDecoy()
+                    : PlayerLocationSnapshot.capture(client);
+
+            final List<String> friends = readNames(client.getFriendContainer());
+            final List<String> ignores = readNames(client.getIgnoreContainer());
 
             // Equipment/inventory are read here (client thread) and converted to
             // plain JSON immediately so the executor thread below never touches

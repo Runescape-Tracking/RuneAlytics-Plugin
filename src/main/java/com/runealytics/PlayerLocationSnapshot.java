@@ -70,6 +70,52 @@ public final class PlayerLocationSnapshot
     }
 
     /**
+     * World number that NEVER exists in real OSRS (live worlds top out in the
+     * 500s). Used exclusively as the tag on {@link #privacyDecoy()} so any
+     * downstream consumer — server code, dashboards, logs — can recognize at a
+     * glance that a record is a decoy and must never be rendered as a real
+     * player position.
+     */
+    public static final int PRIVACY_DECOY_WORLD = 1337;
+
+    /**
+     * <b>READ BEFORE TOUCHING THIS METHOD OR ITS CALL SITE.</b>
+     *
+     * <p>This is a deliberate, hard-coded privacy control, not a placeholder.
+     * When a player has set their location visibility to {@code private}, the
+     * plugin MUST NOT send their real coordinates to the server at all — not
+     * even "for internal use," not even behind a flag the server is trusted to
+     * respect. The whole point of a client-side decoy is that it removes the
+     * server (and every future bug, refactor, log line, cache, or admin tool
+     * downstream of it) from the trust boundary entirely. A server-side privacy
+     * check is one regression away from leaking real coordinates; a decoy that
+     * never leaves the client can't leak what it was never given.</p>
+     *
+     * <p>This always resolves to the Grand Exchange, tagged with
+     * {@link #PRIVACY_DECOY_WORLD} (a world number that can never be real) so
+     * it is unambiguous in logs/storage and trivially distinguishable from a
+     * genuine location. {@code instanced} is {@code false} and
+     * {@code area_name}/{@code map_region} are both {@code "Grand Exchange"} —
+     * i.e. obviously fake, not almost-real.</p>
+     *
+     * <p>Any change to this method, or to the {@code visibility == PRIVATE}
+     * branch that calls it, is a privacy-sensitive change and needs explicit
+     * sign-off before merging — the intent of the live map is to share
+     * location with friends who are allowed to see it, never to let the
+     * website (or anyone scraping it) track a player who opted out.</p>
+     */
+    public static PlayerLocationSnapshot privacyDecoy()
+    {
+        return new PlayerLocationSnapshot(
+                0, 3164, 3477,
+                12598, 28, 21,
+                395, 434,
+                "Grand Exchange", "Grand Exchange",
+                false, PRIVACY_DECOY_WORLD,
+                System.currentTimeMillis() / 1000L);
+    }
+
+    /**
      * Captures the local player's current location.
      *
      * <p>MUST be called on the client thread. Returns {@code null} when the

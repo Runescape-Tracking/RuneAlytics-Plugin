@@ -244,12 +244,26 @@ public class RunealyticsApiClient
      *   <li>{@code public}  — anyone can see the location.</li>
      *   <li>{@code friends} — only players on {@code friends} and/or players who
      *       are mutually tracking each other may see the location.</li>
-     *   <li>{@code private} — nobody but the player themself can see it.</li>
+     *   <li>{@code private} — nobody, including the server's own database/logs,
+     *       ever sees the real location. See note below.</li>
      * </ul>
      *
      * <p>The {@code ignores} list lets the server hide the player from anyone the
-     * player has ignored regardless of the chosen visibility. Visibility is
-     * enforced server-side; the plugin only reports the raw inputs.</p>
+     * player has ignored regardless of the chosen visibility. {@code public}/
+     * {@code friends} access control is enforced server-side — this client only
+     * reports the raw inputs for those two cases.</p>
+     *
+     * <p><b>{@code private} is the one case NOT left to the server.</b> The
+     * caller ({@code RuneAlyticsPlugin.sendHeartbeatTick}) substitutes
+     * {@link PlayerLocationSnapshot#privacyDecoy()} for the real location
+     * <i>before</i> this method is ever invoked, so by the time {@code location}
+     * reaches here it is already a harmless, obviously-fake Grand Exchange
+     * position on world {@link PlayerLocationSnapshot#PRIVACY_DECOY_WORLD}. Do
+     * not "optimize" this method to special-case {@code visibility == PRIVATE}
+     * and skip sending {@code location} — that would require trusting that no
+     * future change to this method ever re-introduces a real-location path. The
+     * decoy already prevents the real coordinates from existing in this call's
+     * scope at all, which is the stronger guarantee.</p>
      *
      * <p>Also carries the player's current worn equipment and inventory so the
      * website can show "what they're wearing / holding" alongside the map dot.
