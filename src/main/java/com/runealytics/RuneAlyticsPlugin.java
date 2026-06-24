@@ -1,6 +1,7 @@
 package com.runealytics;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.inject.Provides;
 import lombok.Getter;
@@ -159,8 +160,18 @@ public class RuneAlyticsPlugin extends Plugin
     private volatile LootTrackerPanel lootTrackerPanel;
 
     // ── Live-map heartbeat ─────────────────────────────────────────────────────
-    /** Heartbeat period — how often the live map location is pushed to the site. */
-    private static final long HEARTBEAT_PERIOD_MS        = 60_000;
+    /**
+     * Heartbeat period — how often the live map location, gear and inventory
+     * are pushed to the site.
+     *
+     * <p>15s was requested for "as live as possible" data, but at ~5,000
+     * concurrent users that is ~333 requests/sec sustained against the
+     * heartbeat endpoint, each now carrying an inventory + equipment payload
+     * (heavier than the old location-only ping). 20s keeps the feed feeling
+     * live (worst case is one stale reading) while cutting sustained load to
+     * ~250 req/s. Raise this if the server shows heartbeat-driven load.</p>
+     */
+    private static final long HEARTBEAT_PERIOD_MS        = 20_000;
     /** Delay before the first heartbeat after login so player/RSN state settles. */
     private static final long HEARTBEAT_INITIAL_DELAY_MS = 5_000;
     /**
@@ -1470,10 +1481,18 @@ public class RuneAlyticsPlugin extends Plugin
             final PlayerLocationSnapshot location = PlayerLocationSnapshot.capture(client);
             final List<String> friends = readNames(client.getFriendContainer());
             final List<String> ignores = readNames(client.getIgnoreContainer());
-            final PrivacySetting visibility = config.playerVisibility();
+            final PrivacySetting visibility    = config.playerVisibility();
+            final PrivacySetting gearVisibility = config.bankPrivacy();
+
+            // Equipment/inventory are read here (client thread) and converted to
+            // plain JSON immediately so the executor thread below never touches
+            // live ItemContainer objects off-thread.
+            final JsonArray equipment = RuneAlyticsItemJson.fromEquipment(client.getItemContainer(InventoryID.EQUIPMENT));
+            final JsonArray inventory = RuneAlyticsItemJson.fromContainer(client.getItemContainer(InventoryID.INVENTORY));
 
             executorService.execute(() ->
-                    apiClient.sendHeartbeat(location, friends, ignores, visibility));
+                    apiClient.sendHeartbeat(location, friends, ignores, visibility,
+                            equipment, inventory, gearVisibility));
         });
     }
 

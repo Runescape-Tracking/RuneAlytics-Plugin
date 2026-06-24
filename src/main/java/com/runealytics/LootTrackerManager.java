@@ -306,6 +306,14 @@ public class LootTrackerManager
     private final Map<String, Set<Integer>> hiddenDrops = new ConcurrentHashMap<>();
 
     /**
+     * Boss containers hidden from the panel entirely. Mirrors {@link #hiddenDrops}
+     * but at the boss-card level (issue: toggle whole containers, not just items).
+     * Display-only — kills/drops for a hidden boss are still recorded and synced,
+     * only client rendering is suppressed.
+     */
+    private final Set<String> hiddenBosses = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
      * Dedup map for player / chest loot sources only.
      * Key = normalised source name; value = last time (ms) we processed loot from it.
      * NOT used for NpcLootReceived or pickpocket paths.
@@ -1409,6 +1417,7 @@ public class LootTrackerManager
         // Always restore the persisted RuneAlytics-specific ignore list
         // (issue #6 — must survive a restart).
         rehydrateHiddenDrops();
+        rehydrateHiddenBosses();
 
         if (data == null || data.getBossKills().isEmpty())
         {
@@ -1897,6 +1906,44 @@ public class LootTrackerManager
             concurrentSet.addAll(e.getValue());
             hiddenDrops.put(e.getKey(), concurrentSet);
         }
+    }
+
+    public boolean isBossHidden(String npcName)
+    {
+        return hiddenBosses.contains(npcName);
+    }
+
+    public void hideBoss(String npcName)
+    {
+        hiddenBosses.add(npcName);
+        persistHiddenBosses();
+    }
+
+    public void unhideBoss(String npcName)
+    {
+        hiddenBosses.remove(npcName);
+        persistHiddenBosses();
+    }
+
+    /** Pushes the in-memory hidden-bosses set down to {@link LootStorageData} so it survives a restart. */
+    private void persistHiddenBosses()
+    {
+        LootStorageData data = storageManager.getCurrentData();
+        if (data == null) data = storageManager.loadData();
+        if (data == null) return;
+        data.setHiddenBosses(new HashSet<>(hiddenBosses));
+        storageManager.saveData();
+    }
+
+    /** Restores hidden-bosses from persisted storage. Called by {@link #loadFromStorage}. */
+    private void rehydrateHiddenBosses()
+    {
+        LootStorageData data = storageManager.getCurrentData();
+        if (data == null) return;
+        Set<String> saved = data.getHiddenBosses();
+        if (saved == null) return;
+        hiddenBosses.clear();
+        hiddenBosses.addAll(saved);
     }
 
     // ═════════════════════════════════════════════════════════════════════════

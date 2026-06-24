@@ -251,13 +251,26 @@ public class RunealyticsApiClient
      * player has ignored regardless of the chosen visibility. Visibility is
      * enforced server-side; the plugin only reports the raw inputs.</p>
      *
-     * @param location   current world location (omitted when {@code null})
-     * @param friends    in-game friends list names
-     * @param ignores    in-game ignore list names
-     * @param visibility the player's map/online {@link PrivacySetting}
+     * <p>Also carries the player's current worn equipment and inventory so the
+     * website can show "what they're wearing / holding" alongside the map dot.
+     * {@code gear_visibility} mirrors {@code bank_privacy} from
+     * {@link #syncPrivacySettings} — the same setting that gates bank/wealth
+     * visibility also gates who may see equipment/inventory, since both are
+     * "what gear/items does this account have" data. The plugin always
+     * uploads; the server is responsible for honoring the privacy flag when
+     * deciding who else may see the fields.</p>
+     *
+     * @param location      current world location (omitted when {@code null})
+     * @param friends       in-game friends list names
+     * @param ignores       in-game ignore list names
+     * @param visibility    the player's map/online {@link PrivacySetting}
+     * @param equipment     worn equipment as {@code [{slot, id, qty}, ...]}
+     * @param inventory     inventory contents as {@code [{id, qty}, ...]}
+     * @param gearVisibility the player's bank/gear {@link PrivacySetting}, reused to gate equipment/inventory
      */
     public void sendHeartbeat(PlayerLocationSnapshot location, List<String> friends,
-                              List<String> ignores, PrivacySetting visibility)
+                              List<String> ignores, PrivacySetting visibility,
+                              JsonArray equipment, JsonArray inventory, PrivacySetting gearVisibility)
     {
         String token    = state.getVerificationCode();
         String username = state.getVerifiedUsername();
@@ -274,11 +287,14 @@ public class RunealyticsApiClient
         }
 
         JsonObject payload = new JsonObject();
-        payload.addProperty("username",   username);
-        payload.addProperty("visibility", wireValue(visibility));
-        payload.add("friends",            toJsonArray(friends));
-        payload.add("ignores",            toJsonArray(ignores));
-        payload.addProperty("timestamp",  System.currentTimeMillis() / 1000);
+        payload.addProperty("username",        username);
+        payload.addProperty("visibility",      wireValue(visibility));
+        payload.addProperty("gear_visibility", wireValue(gearVisibility));
+        payload.add("friends",                 toJsonArray(friends));
+        payload.add("ignores",                 toJsonArray(ignores));
+        payload.add("equipment",               equipment != null ? equipment : new JsonArray());
+        payload.add("inventory",               inventory != null ? inventory : new JsonArray());
+        payload.addProperty("timestamp",       System.currentTimeMillis() / 1000);
 
         // Location is optional — omit entirely when unavailable so the server's
         // nullable handling keeps working.
@@ -290,10 +306,13 @@ public class RunealyticsApiClient
         String payloadJson = gson.toJson(payload);
         String url         = config.apiUrl() + "/plugin/heartbeat";
 
-        log.debug("[Heartbeat] POST {} | visibility={} friends={} ignores={} location={}",
-                url, wireValue(visibility),
+        log.debug("[Heartbeat] POST {} | visibility={} gear_visibility={} friends={} ignores={} "
+                        + "equipment={} inventory={} location={}",
+                url, wireValue(visibility), wireValue(gearVisibility),
                 friends != null ? friends.size() : 0,
                 ignores != null ? ignores.size() : 0,
+                equipment != null ? equipment.size() : 0,
+                inventory != null ? inventory.size() : 0,
                 location != null);
 
         RequestBody body    = RequestBody.create(JSON, payloadJson);

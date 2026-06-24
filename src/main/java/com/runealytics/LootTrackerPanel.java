@@ -683,6 +683,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     public void updateLoot(String npcName, BossKillStats stats)
     {
         if (!passesFilter(npcName)) return;
+        if (!showIgnoredItems && lootManager.isBossHidden(npcName)) return;
 
         List<BossKillStats.AggregatedDrop> drops = lootManager.getStorageDropsForBoss(npcName);
         long totalValue = drops.stream().mapToLong(BossKillStats.AggregatedDrop::getTotalValue).sum();
@@ -775,7 +776,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
                 List<BossKillStats> sorted = new ArrayList<>();
                 for (BossKillStats s : unique.values())
-                    if (passesFilter(s.getNpcName())) sorted.add(s);
+                    if (passesFilter(s.getNpcName())
+                            && (showIgnoredItems || !lootManager.isBossHidden(s.getNpcName())))
+                        sorted.add(s);
 
                 sortStats(sorted);
 
@@ -923,8 +926,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         Color nameCol = hl ? (ip ? new Color(200, 160, 255) : is ? new Color(140, 230, 140) : new Color(100, 255, 100))
                 : new Color(210, 210, 210);
 
-        JLabel nameLabel = new JLabel(buildNameLabel(npcName, stats.getKillCount()));
-        nameLabel.setForeground(nameCol);
+        boolean bossHiddenForLabel = lootManager.isBossHidden(npcName);
+        String  nameText = buildNameLabel(npcName, stats.getKillCount()) + (bossHiddenForLabel ? "  (hidden)" : "");
+        JLabel nameLabel = new JLabel(nameText);
+        nameLabel.setForeground(bossHiddenForLabel ? new Color(140, 90, 90) : nameCol);
         nameLabel.setFont(CALIBRI_BOLD);
         nameLabel.setBorder(new EmptyBorder(0, 8, 0, 4));
 
@@ -945,6 +950,17 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         gridWrapper.add(grid, BorderLayout.NORTH);
         gridWrapper.setVisible(bossExpandedState.getOrDefault(npcName, true));
 
+        boolean bossHidden = lootManager.isBossHidden(npcName);
+        JPopupMenu headerMenu = new JPopupMenu();
+        JMenuItem toggleBossHide = new JMenuItem(bossHidden ? "Unhide container" : "Hide container");
+        toggleBossHide.addActionListener(e -> {
+            if (lootManager.isBossHidden(npcName)) lootManager.unhideBoss(npcName);
+            else                                    lootManager.hideBoss(npcName);
+            invalidateFingerprint();
+            refreshDisplay();
+        });
+        headerMenu.add(toggleBossHide);
+
         headerRow.addMouseListener(new MouseAdapter()
         {
             @Override
@@ -961,6 +977,11 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     bossListPanel.repaint();
                 });
             }
+
+            @Override
+            public void mousePressed(MouseEvent e)  { if (e.isPopupTrigger()) headerMenu.show(e.getComponent(), e.getX(), e.getY()); }
+            @Override
+            public void mouseReleased(MouseEvent e) { if (e.isPopupTrigger()) headerMenu.show(e.getComponent(), e.getX(), e.getY()); }
         });
 
         container.add(headerRow,   BorderLayout.NORTH);

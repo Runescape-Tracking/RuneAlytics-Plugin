@@ -27,6 +27,15 @@ public class LootStorageData
     @SerializedName("hidden_drops_by_boss")
     private Map<String, Set<Integer>> hiddenDropsByBoss = new HashMap<>();
 
+    /**
+     * Boss containers the user has hidden from the panel entirely (the whole
+     * card, not just individual drops). Same independence rationale as
+     * {@link #hiddenDropsByBoss} — display-only, never affects what gets
+     * synced to the server.
+     */
+    @SerializedName("hidden_bosses")
+    private Set<String> hiddenBosses = new HashSet<>();
+
     @Data
     public static class BossKillData
     {
