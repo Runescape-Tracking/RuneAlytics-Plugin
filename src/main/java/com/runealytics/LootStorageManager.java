@@ -156,7 +156,13 @@ public class LootStorageManager
         }
     }
 
-    private synchronized void scheduleSave()
+    /**
+     * Debounced save — coalesces rapid-fire mutations (e.g. repeated hide/unhide
+     * clicks) into a single disk write 500ms later, off the calling thread.
+     * Use this instead of {@link #saveData()} from UI-thread call sites so a
+     * synchronous file write never blocks the EDT.
+     */
+    public synchronized void scheduleSave()
     {
         // The save executor is shut down on plugin shutDown(). Because this is a
         // @Singleton that RuneLite reuses across a disable→enable cycle, recreate

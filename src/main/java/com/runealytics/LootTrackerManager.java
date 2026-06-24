@@ -1886,7 +1886,7 @@ public class LootTrackerManager
         for (Map.Entry<String, Set<Integer>> e : hiddenDrops.entrySet())
             snapshot.put(e.getKey(), new HashSet<>(e.getValue()));
         data.setHiddenDropsByBoss(snapshot);
-        storageManager.saveData();
+        storageManager.scheduleSave();
     }
 
     /**
@@ -1932,7 +1932,7 @@ public class LootTrackerManager
         if (data == null) data = storageManager.loadData();
         if (data == null) return;
         data.setHiddenBosses(new HashSet<>(hiddenBosses));
-        storageManager.saveData();
+        storageManager.scheduleSave();
     }
 
     /** Restores hidden-bosses from persisted storage. Called by {@link #loadFromStorage}. */

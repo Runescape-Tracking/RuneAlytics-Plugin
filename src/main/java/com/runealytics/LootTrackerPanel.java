@@ -885,12 +885,18 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private String buildNameLabel(String npcName, int killCount)
     {
+        String dn = displayNameFor(npcName);
+        return truncate(dn, 18) + " × " + String.format("%,d", killCount);
+    }
+
+    /** Strips the internal pickpocket/skilling prefix so menus/labels show the plain NPC name. */
+    private String displayNameFor(String npcName)
+    {
         boolean ip = lootManager.isPickpocketSource(npcName);
         boolean is = lootManager.isSkillingSource(npcName);
-        String  dn = ip ? lootManager.stripPickpocketPrefix(npcName)
+        return ip ? lootManager.stripPickpocketPrefix(npcName)
                 : is ? lootManager.stripSkillingPrefix(npcName)
                 : npcName;
-        return truncate(dn, 18) + " × " + String.format("%,d", killCount);
     }
 
     private JPanel buildBossCard(BossKillStats stats)
@@ -951,8 +957,11 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         gridWrapper.setVisible(bossExpandedState.getOrDefault(npcName, true));
 
         boolean bossHidden = lootManager.isBossHidden(npcName);
+        String  bossDisplayName = displayNameFor(npcName);
         JPopupMenu headerMenu = new JPopupMenu();
-        JMenuItem toggleBossHide = new JMenuItem(bossHidden ? "Unhide container" : "Hide container");
+        JMenuItem toggleBossHide = new JMenuItem(bossHidden
+                ? "Unhide \"" + bossDisplayName + "\"'s loot"
+                : "Hide \"" + bossDisplayName + "\"'s loot");
         toggleBossHide.addActionListener(e -> {
             if (lootManager.isBossHidden(npcName)) lootManager.unhideBoss(npcName);
             else                                    lootManager.hideBoss(npcName);
@@ -1073,7 +1082,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             itemSlotMap.put(slotKey, iconLabel);
 
             JPopupMenu menu = new JPopupMenu();
-            JMenuItem toggleHide = new JMenuItem(hidden ? "Un-ignore" : "Ignore");
+            JMenuItem toggleHide = new JMenuItem(hidden
+                    ? "Unhide \"" + drop.getItemName() + "\""
+                    : "Hide \"" + drop.getItemName() + "\"");
             toggleHide.addActionListener(e -> {
                 if (hidden) lootManager.unhideDropForNpc(npcName, drop.getItemId());
                 else        lootManager.hideDropForNpc  (npcName, drop.getItemId());
