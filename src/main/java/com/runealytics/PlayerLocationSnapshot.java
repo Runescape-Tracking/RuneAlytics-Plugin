@@ -116,11 +116,36 @@ public final class PlayerLocationSnapshot
     }
 
     /**
+     * <b>The sanctioned entry point for every location-sending event</b> (live
+     * map heartbeat, XP-batch location, loot kill-record location, and any
+     * future one). Callers MUST go through this method — never call
+     * {@link #capture(Client)} directly from a code path that ends up in an
+     * outbound payload — so that {@code visibility == PRIVATE} is honored
+     * uniformly everywhere, instead of relying on each call site to remember
+     * to check it.
+     *
+     * @param client     the RuneLite client (read on the client thread)
+     * @param visibility the player's current location-visibility {@link PrivacySetting}
+     * @return {@link #privacyDecoy()} when {@code visibility} is {@code PRIVATE};
+     *         otherwise the real {@link #capture(Client)} result (which may be
+     *         {@code null} if the player isn't renderable right now)
+     */
+    public static PlayerLocationSnapshot captureRespectingPrivacy(Client client, PrivacySetting visibility)
+    {
+        return (visibility == PrivacySetting.PRIVATE) ? privacyDecoy() : capture(client);
+    }
+
+    /**
      * Captures the local player's current location.
      *
      * <p>MUST be called on the client thread. Returns {@code null} when the
      * client or local player / world location is unavailable so callers can
      * simply omit the {@code location} field.</p>
+     *
+     * <p><b>Do not call this directly for anything that gets uploaded.</b> Use
+     * {@link #captureRespectingPrivacy} instead so the {@code private}
+     * visibility decoy substitution in {@link #privacyDecoy()} can never be
+     * accidentally bypassed by a new call site.</p>
      */
     public static PlayerLocationSnapshot capture(Client client)
     {

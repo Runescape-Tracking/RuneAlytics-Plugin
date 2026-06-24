@@ -1499,9 +1499,8 @@ public class RuneAlyticsPlugin extends Plugin
             // Decoy substitution MUST happen before this point in the call
             // chain — never compute the real location for a private player and
             // rely on a later step to discard/redact it.
-            final PlayerLocationSnapshot location = (visibility == PrivacySetting.PRIVATE)
-                    ? PlayerLocationSnapshot.privacyDecoy()
-                    : PlayerLocationSnapshot.capture(client);
+            final PlayerLocationSnapshot location =
+                    PlayerLocationSnapshot.captureRespectingPrivacy(client, visibility);
 
             final List<String> friends = readNames(client.getFriendContainer());
             final List<String> ignores = readNames(client.getIgnoreContainer());
@@ -1512,9 +1511,15 @@ public class RuneAlyticsPlugin extends Plugin
             final JsonArray equipment = RuneAlyticsItemJson.fromEquipment(client.getItemContainer(InventoryID.EQUIPMENT));
             final JsonArray inventory = RuneAlyticsItemJson.fromContainer(client.getItemContainer(InventoryID.INVENTORY));
 
+            // Non-authoritative preview of the in-progress 30s XP batch window —
+            // see XpTrackerManager.peekPendingGains() for why this never affects
+            // the authoritative /xp/batch flush. Safe to call from any thread,
+            // but reading it here keeps all heartbeat fields gathered together.
+            final Map<String, Integer> xpPreview = xpTrackerManager.peekPendingGains();
+
             executorService.execute(() ->
                     apiClient.sendHeartbeat(location, friends, ignores, visibility,
-                            equipment, inventory, gearVisibility));
+                            equipment, inventory, gearVisibility, xpPreview));
         });
     }
 
@@ -1584,7 +1589,12 @@ public class RuneAlyticsPlugin extends Plugin
         // Snapshot the player's location at XP-gain time (client thread) so the
         // batched /xp/batch POST can report where the XP was earned. Captured
         // here because the batch flushes off-thread where client reads are unsafe.
-        state.setCurrentLocation(PlayerLocationSnapshot.capture(client));
+        // Goes through captureRespectingPrivacy so a private player's real
+        // coordinates never enter state.currentLocation in the first place —
+        // see PlayerLocationSnapshot.privacyDecoy() for why this must not be
+        // a plain capture() call.
+        state.setCurrentLocation(
+                PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility()));
 
         // ── Delegate XP batching to XpTrackerManager ──────────────────────────
         // The manager opens a 30-second window on the first call and accumulates

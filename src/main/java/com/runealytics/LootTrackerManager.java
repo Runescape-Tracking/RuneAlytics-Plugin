@@ -1185,7 +1185,11 @@ public class LootTrackerManager
 
         // 3. Snapshot the player's location at kill time. Loot events fire on
         //    the client thread, so reading the live client state here is safe.
-        PlayerLocationSnapshot location = PlayerLocationSnapshot.capture(client);
+        //    captureRespectingPrivacy substitutes the Grand Exchange decoy when
+        //    visibility is private — a private player's real coordinates must
+        //    never be written into a kill record that later gets synced.
+        PlayerLocationSnapshot location =
+                PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
 
         // 4. Create the storage-compatible record
         LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();

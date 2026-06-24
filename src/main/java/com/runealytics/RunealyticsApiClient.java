@@ -281,10 +281,21 @@ public class RunealyticsApiClient
      * @param equipment     worn equipment as {@code [{slot, id, qty}, ...]}
      * @param inventory     inventory contents as {@code [{id, qty}, ...]}
      * @param gearVisibility the player's bank/gear {@link PrivacySetting}, reused to gate equipment/inventory
+     * @param xpPreview     <b>non-authoritative</b> snapshot of XP gained so far in the
+     *                      in-progress 30s batch window (skill name → XP), from
+     *                      {@link XpTrackerManager#peekPendingGains()}. May be empty/null
+     *                      when no window is open. This is a live preview only — the
+     *                      authoritative XP totals come exclusively from
+     *                      {@link #syncXpBatch}'s {@code /xp/batch} POST, which is
+     *                      unaffected by this field. The server MUST NOT add
+     *                      {@code xp_preview} values to a player's XP totals, or XP will
+     *                      be double-counted once the same gains are flushed via
+     *                      {@code /xp/batch} moments later.
      */
     public void sendHeartbeat(PlayerLocationSnapshot location, List<String> friends,
                               List<String> ignores, PrivacySetting visibility,
-                              JsonArray equipment, JsonArray inventory, PrivacySetting gearVisibility)
+                              JsonArray equipment, JsonArray inventory, PrivacySetting gearVisibility,
+                              Map<String, Integer> xpPreview)
     {
         String token    = state.getVerificationCode();
         String username = state.getVerifiedUsername();
@@ -308,6 +319,19 @@ public class RunealyticsApiClient
         payload.add("ignores",                 toJsonArray(ignores));
         payload.add("equipment",               equipment != null ? equipment : new JsonArray());
         payload.add("inventory",               inventory != null ? inventory : new JsonArray());
+
+        // Non-authoritative — see javadoc above. Omitted entirely when empty so
+        // older server versions that don't expect this field see nothing new.
+        if (xpPreview != null && !xpPreview.isEmpty())
+        {
+            JsonObject xpPreviewJson = new JsonObject();
+            for (Map.Entry<String, Integer> e : xpPreview.entrySet())
+            {
+                xpPreviewJson.addProperty(e.getKey(), e.getValue());
+            }
+            payload.add("xp_preview", xpPreviewJson);
+        }
+
         payload.addProperty("timestamp",       System.currentTimeMillis() / 1000);
 
         // Location is optional — omit entirely when unavailable so the server's

@@ -121,6 +121,30 @@ public class XpTrackerManager
     }
 
     /**
+     * Non-destructive snapshot of XP accumulated in the <em>current</em>
+     * 30-second window, for embedding in the live-map heartbeat as a preview.
+     *
+     * <p>Unlike {@link #flushBatch()}, this does NOT drain {@link #xpBuffer} or
+     * touch {@link #windowOpen} — the authoritative 30-second flush to
+     * {@code /xp/batch} (via {@link RunealyticsApiClient#syncXpBatch}) is
+     * completely unaffected by this method existing or being called. The
+     * heartbeat is a read-only passenger on this data, not a second writer.</p>
+     *
+     * @return skill-name (lowercase) → XP gained so far in the open window;
+     *         empty map if no window is currently open
+     */
+    public Map<String, Integer> peekPendingGains()
+    {
+        Map<String, Integer> snapshot = new HashMap<>();
+        for (Map.Entry<Skill, Integer> e : xpBuffer.entrySet())
+        {
+            if (e.getValue() != null && e.getValue() > 0)
+                snapshot.put(e.getKey().getName().toLowerCase(), e.getValue());
+        }
+        return snapshot;
+    }
+
+    /**
      * Flush any pending XP immediately (e.g. on plugin shutdown or logout).
      *
      * <p>Cancels the scheduled flush task (if any) and calls {@link #flushBatch()}
