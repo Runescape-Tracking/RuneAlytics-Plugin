@@ -1430,9 +1430,15 @@ public class LootTrackerManager
             return;
         }
 
+        // One single client-thread hop for the whole dataset — calling
+        // clientThread.invoke() per kill record was catastrophically slow
+        // against a large history (e.g. 340 bosses / 164k+ kills) and meant
+        // refreshLootDisplay() never reached the point of populating
+        // bossKillStats or refreshing the panel.
+        boolean backfilled = backfillAllMissingDropValues(data);
+
         bossKillStats.clear();
 
-        boolean backfilled = false;
         for (Map.Entry<String, LootStorageData.BossKillData> entry : data.getBossKills().entrySet())
         {
             LootStorageData.BossKillData bd = entry.getValue();
@@ -1443,16 +1449,6 @@ public class LootTrackerManager
             {
                 for (LootStorageData.KillRecord kr : bd.getKills())
                 {
-                    // A backfill failure (e.g. an unresolvable legacy item id)
-                    // must never block the kill from being displayed.
-                    try
-                    {
-                        if (backfillMissingDropValues(kr)) backfilled = true;
-                    }
-                    catch (Exception ex)
-                    {
-                        log.warn("[Loot] Backfill failed for a drop in '{}': {}", entry.getKey(), ex.getMessage());
-                    }
                     stats.addKill(kr);
                 }
 
@@ -1468,9 +1464,9 @@ public class LootTrackerManager
                 stats.setKillCount(bd.getKillCount());
             }
 
-            // Drop objects are shared with bd.getKills(), so backfillMissingDropValues
-            // above already mutated the persisted records in place — just bring the
-            // persisted total in line with what was actually recomputed.
+            // Drop objects are shared with bd.getKills(), so the backfill pass
+            // above already mutated the persisted records in place — just
+            // bring the persisted total in line with what was recomputed.
             bd.setTotalLootValue(stats.getTotalLootValue());
 
             bossKillStats.put(stats.getNpcName(), stats);
@@ -1490,45 +1486,66 @@ public class LootTrackerManager
     }
 
     /**
-     * Re-resolves GE price / high alch / total value for a single kill record's
-     * drops when they were stored as 0 by an older code path (e.g. the RuneLite
-     * loot-tracker import, or a server sync of data uploaded before the
-     * price-resolution fix). Mutates the drop records in place.
+     * Re-resolves GE price / high alch / total value for every drop across
+     * every boss/kill that was stored as 0 by an older code path (e.g. the
+     * RuneLite loot-tracker import, or a server sync of data uploaded before
+     * the price-resolution fix). Mutates the drop records in place.
+     *
+     * <p>Runs the entire scan inside a single {@link ClientThread#invoke}
+     * call rather than one hop per kill — ItemManager's composition/price
+     * lookups read through to the client's item definition cache and must
+     * run on the client thread, but the cross-thread round trip itself is
+     * the expensive part, not the lookup. One hop for the whole history
+     * keeps this from blocking the panel for an extended period against a
+     * large kill log.</p>
      *
      * @return true if any drop's value was recomputed
      */
-    private boolean backfillMissingDropValues(LootStorageData.KillRecord kr)
+    private boolean backfillAllMissingDropValues(LootStorageData data)
     {
-        if (kr.getDrops() == null) return false;
-
-        // ItemManager's composition/price lookups read through to the client's
-        // item definition cache and must run on the client thread. This method
-        // is called from the post-login background load (off the client
-        // thread), so invoke() synchronously hands off and waits for the
-        // result instead of touching the cache from this thread directly.
         boolean[] changed = { false };
         clientThread.invoke(() ->
         {
-            for (LootStorageData.DropRecord drop : kr.getDrops())
+            for (Map.Entry<String, LootStorageData.BossKillData> entry : data.getBossKills().entrySet())
             {
-                if (drop.getItemId() <= 0 || drop.getGePrice() > 0) continue;
+                LootStorageData.BossKillData bd = entry.getValue();
+                if (bd.getKills() == null) continue;
 
-                int gePrice = ItemValueResolver.perItemGeValue(itemManager, drop.getItemId());
-                if (gePrice <= 0) continue;
+                for (LootStorageData.KillRecord kr : bd.getKills())
+                {
+                    if (kr.getDrops() == null) continue;
 
-                drop.setGePrice(gePrice);
-                if (drop.getHighAlch() <= 0)
-                {
-                    ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
-                    if (comp != null) drop.setHighAlch(comp.getHaPrice());
+                    // A backfill failure (e.g. an unresolvable legacy item id)
+                    // must never block the rest of the scan.
+                    try
+                    {
+                        for (LootStorageData.DropRecord drop : kr.getDrops())
+                        {
+                            if (drop.getItemId() <= 0 || drop.getGePrice() > 0) continue;
+
+                            int gePrice = ItemValueResolver.perItemGeValue(itemManager, drop.getItemId());
+                            if (gePrice <= 0) continue;
+
+                            drop.setGePrice(gePrice);
+                            if (drop.getHighAlch() <= 0)
+                            {
+                                ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
+                                if (comp != null) drop.setHighAlch(comp.getHaPrice());
+                            }
+                            if (drop.getItemName() == null || drop.getItemName().isEmpty())
+                            {
+                                ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
+                                if (comp != null) drop.setItemName(comp.getName());
+                            }
+                            drop.setTotalValue((long) gePrice * drop.getQuantity());
+                            changed[0] = true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        log.warn("[Loot] Backfill failed for a drop in '{}': {}", entry.getKey(), ex.getMessage());
+                    }
                 }
-                if (drop.getItemName() == null || drop.getItemName().isEmpty())
-                {
-                    ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
-                    if (comp != null) drop.setItemName(comp.getName());
-                }
-                drop.setTotalValue((long) gePrice * drop.getQuantity());
-                changed[0] = true;
             }
         });
         return changed[0];
