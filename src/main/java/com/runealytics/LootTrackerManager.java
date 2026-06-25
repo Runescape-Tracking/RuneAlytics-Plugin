@@ -1443,7 +1443,16 @@ public class LootTrackerManager
             {
                 for (LootStorageData.KillRecord kr : bd.getKills())
                 {
-                    if (backfillMissingDropValues(kr)) backfilled = true;
+                    // A backfill failure (e.g. an unresolvable legacy item id)
+                    // must never block the kill from being displayed.
+                    try
+                    {
+                        if (backfillMissingDropValues(kr)) backfilled = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        log.warn("[Loot] Backfill failed for a drop in '{}': {}", entry.getKey(), ex.getMessage());
+                    }
                     stats.addKill(kr);
                 }
 
@@ -1492,29 +1501,37 @@ public class LootTrackerManager
     {
         if (kr.getDrops() == null) return false;
 
-        boolean changed = false;
-        for (LootStorageData.DropRecord drop : kr.getDrops())
+        // ItemManager's composition/price lookups read through to the client's
+        // item definition cache and must run on the client thread. This method
+        // is called from the post-login background load (off the client
+        // thread), so invoke() synchronously hands off and waits for the
+        // result instead of touching the cache from this thread directly.
+        boolean[] changed = { false };
+        clientThread.invoke(() ->
         {
-            if (drop.getItemId() <= 0 || drop.getGePrice() > 0) continue;
-
-            int gePrice = ItemValueResolver.perItemGeValue(itemManager, drop.getItemId());
-            if (gePrice <= 0) continue;
-
-            drop.setGePrice(gePrice);
-            if (drop.getHighAlch() <= 0)
+            for (LootStorageData.DropRecord drop : kr.getDrops())
             {
-                ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
-                if (comp != null) drop.setHighAlch(comp.getHaPrice());
+                if (drop.getItemId() <= 0 || drop.getGePrice() > 0) continue;
+
+                int gePrice = ItemValueResolver.perItemGeValue(itemManager, drop.getItemId());
+                if (gePrice <= 0) continue;
+
+                drop.setGePrice(gePrice);
+                if (drop.getHighAlch() <= 0)
+                {
+                    ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
+                    if (comp != null) drop.setHighAlch(comp.getHaPrice());
+                }
+                if (drop.getItemName() == null || drop.getItemName().isEmpty())
+                {
+                    ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
+                    if (comp != null) drop.setItemName(comp.getName());
+                }
+                drop.setTotalValue((long) gePrice * drop.getQuantity());
+                changed[0] = true;
             }
-            if (drop.getItemName() == null || drop.getItemName().isEmpty())
-            {
-                ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
-                if (comp != null) drop.setItemName(comp.getName());
-            }
-            drop.setTotalValue((long) gePrice * drop.getQuantity());
-            changed = true;
-        }
-        return changed;
+        });
+        return changed[0];
     }
 
     public Map<String, BossKillStats> getBossKillStats()
