@@ -134,6 +134,15 @@ public class RuneAlyticsPlugin extends Plugin
     private final Map<String, List<ItemStack>> skillingSnapshot = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Long>            skillingExpiry   = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * Last-known equipment loadout, refreshed on every {@code ItemContainerChanged}.
+     * Used to recognise equip/unequip swaps so they're never mistaken for loot —
+     * unequipping a item makes it "appear" in the inventory the same way a drop
+     * would, which is exactly what caused the Purging staff to be misattributed
+     * as an Agility drop.
+     */
+    private List<ItemStack> equipmentSnapshot = Collections.emptyList();
+
     // ═════════════════════════════════════════════════════════════════════════
     //  INJECTED FIELDS
     // ═════════════════════════════════════════════════════════════════════════
@@ -765,6 +774,16 @@ public class RuneAlyticsPlugin extends Plugin
 
         clientThread.invokeLater(() ->
         {
+            // ── Equip/unequip detection (must run first) ──────────────────────
+            // Compares the current equipment loadout against the last snapshot
+            // to find items that just left equipment (i.e. were unequipped).
+            // Those item ids are subtracted from every inventory "gain" below
+            // so an unequip is never mistaken for a drop (issue: Purging staff
+            // misattributed as an Agility drop).
+            List<ItemStack> currentEquipment = getCurrentEquipment();
+            List<ItemStack> justUnequipped   = diffInventory(currentEquipment, equipmentSnapshot);
+            equipmentSnapshot = currentEquipment;
+
             // ── Impling jar loot (no XP, so the skilling diff misses it) ──────
             if (pendingImpJarName != null && impJarInventorySnapshot != null)
             {
@@ -776,7 +795,8 @@ public class RuneAlyticsPlugin extends Plugin
                 else
                 {
                     List<ItemStack> currentInv = getCurrentInventory();
-                    List<ItemStack> gained     = diffInventory(impJarInventorySnapshot, currentInv);
+                    List<ItemStack> gained     = excludeEquipmentMovement(
+                            diffInventory(impJarInventorySnapshot, currentInv), justUnequipped);
                     if (!gained.isEmpty())
                     {
                         String jarName = pendingImpJarName;
@@ -791,7 +811,8 @@ public class RuneAlyticsPlugin extends Plugin
             if ((waitingForTemporossLoot || waitingForWintertodtLoot) && inventorySnapshot != null)
             {
                 List<ItemStack> current = getCurrentInventory();
-                List<ItemStack> gained  = diffInventory(inventorySnapshot, current);
+                List<ItemStack> gained  = excludeEquipmentMovement(
+                        diffInventory(inventorySnapshot, current), justUnequipped);
 
                 if (!gained.isEmpty())
                 {
@@ -826,7 +847,7 @@ public class RuneAlyticsPlugin extends Plugin
                     }
                     List<ItemStack> snap = skillingSnapshot.get(skill);
                     if (snap == null) continue;
-                    List<ItemStack> items = diffInventory(snap, inv);
+                    List<ItemStack> items = excludeEquipmentMovement(diffInventory(snap, inv), justUnequipped);
                     if (!items.isEmpty())
                     {
                         lootManager.processSkillLoot(skill, new ArrayList<>(items));
@@ -847,7 +868,8 @@ public class RuneAlyticsPlugin extends Plugin
             }
 
             List<ItemStack> current = getCurrentInventory();
-            List<ItemStack> gained  = diffInventory(pickpocketInventorySnapshot, current);
+            List<ItemStack> gained  = excludeEquipmentMovement(
+                    diffInventory(pickpocketInventorySnapshot, current), justUnequipped);
 
             if (!gained.isEmpty())
             {
@@ -1727,6 +1749,47 @@ public class RuneAlyticsPlugin extends Plugin
             if (item != null && item.getId() > 0 && item.getQuantity() > 0)
                 items.add(new ItemStack(item.getId(), item.getQuantity()));
         return items;
+    }
+
+    private List<ItemStack> getCurrentEquipment()
+    {
+        ItemContainer eq = client.getItemContainer(InventoryID.EQUIPMENT);
+        if (eq == null) return Collections.emptyList();
+
+        List<ItemStack> items = new ArrayList<>();
+        for (Item item : eq.getItems())
+            if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+                items.add(new ItemStack(item.getId(), item.getQuantity()));
+        return items;
+    }
+
+    /**
+     * Strips equip/unequip noise out of an inventory-gain list.
+     *
+     * <p>Unequipping an item makes it appear in the inventory exactly like a
+     * drop would, so any "gained" item that just disappeared from the
+     * equipment container in the same tick is removed here before the
+     * remainder is handed to the loot manager.</p>
+     *
+     * @param gained        items the caller believes were gained
+     * @param justUnequipped items that disappeared from equipment this tick
+     *                       (see {@link #onItemContainerChanged})
+     */
+    private List<ItemStack> excludeEquipmentMovement(List<ItemStack> gained, List<ItemStack> justUnequipped)
+    {
+        if (gained.isEmpty() || justUnequipped.isEmpty()) return gained;
+
+        Map<Integer, Integer> unequippedMap = new HashMap<>();
+        for (ItemStack i : justUnequipped) unequippedMap.merge(i.getId(), i.getQuantity(), Integer::sum);
+
+        List<ItemStack> filtered = new ArrayList<>();
+        for (ItemStack i : gained)
+        {
+            int unequippedQty = unequippedMap.getOrDefault(i.getId(), 0);
+            int remaining     = i.getQuantity() - unequippedQty;
+            if (remaining > 0) filtered.add(new ItemStack(i.getId(), remaining));
+        }
+        return filtered;
     }
 
     /**
