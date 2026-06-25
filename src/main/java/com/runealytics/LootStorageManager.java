@@ -249,6 +249,14 @@ public class LootStorageManager
             aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
             aggDrop.setDropCount(aggDrop.getDropCount() + 1);
             aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
+
+            // gePrice/highAlch are only seeded above when the entry is first
+            // created — if that first drop had a 0 value (e.g. a legacy
+            // import before the price-resolution fix), every later drop of
+            // the same item kept bumping totalValue while the displayed
+            // per-unit price stayed stuck at 0. Refresh it here too.
+            if (aggDrop.getGePrice() <= 0 && drop.getGePrice() > 0)  aggDrop.setGePrice(drop.getGePrice());
+            if (aggDrop.getHighAlch() <= 0 && drop.getHighAlch() > 0) aggDrop.setHighAlch(drop.getHighAlch());
         }
 
         bossData.setTotalLootValue(bossData.getTotalLootValue() + killValue);
@@ -301,6 +309,9 @@ public class LootStorageManager
             agg.setDropCount(agg.getDropCount() + 1);
             agg.setTotalValue(agg.getTotalValue() + drop.getTotalValue());
             bossData.setTotalLootValue(bossData.getTotalLootValue() + drop.getTotalValue());
+
+            if (agg.getGePrice() <= 0 && drop.getGePrice() > 0)   agg.setGePrice(drop.getGePrice());
+            if (agg.getHighAlch() <= 0 && drop.getHighAlch() > 0) agg.setHighAlch(drop.getHighAlch());
         }
 
         scheduleSave();
@@ -501,6 +512,9 @@ public class LootStorageManager
                     aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
                     aggDrop.setDropCount(aggDrop.getDropCount() + 1);
                     aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
+
+                    if (aggDrop.getGePrice() <= 0 && drop.getGePrice() > 0)   aggDrop.setGePrice(drop.getGePrice());
+                    if (aggDrop.getHighAlch() <= 0 && drop.getHighAlch() > 0) aggDrop.setHighAlch(drop.getHighAlch());
                     dropsAdded++;
                 }
             }
