@@ -5,6 +5,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ItemComposition;
+import net.runelite.client.game.ItemManager;
 import okhttp3.*;
 
 import javax.inject.Inject;
@@ -40,14 +42,17 @@ public class LootTrackerApiClient
     private final RunealyticsConfig  config;
     private final RuneAlyticsState   state;
     private final Gson               gson;
+    private final ItemManager        itemManager;
 
     @Inject
     public LootTrackerApiClient(
             OkHttpClient httpClient,
             RunealyticsConfig config,
             RuneAlyticsState state,
-            Gson gson)
+            Gson gson,
+            ItemManager itemManager)
     {
+        this.itemManager = itemManager;
         // Apply the configured timeout so loot uploads/downloads don't hang on
         // RuneLite's shared-client defaults (mirrors RunealyticsApiClient).
         this.httpClient = httpClient.newBuilder()
@@ -235,13 +240,31 @@ public class LootTrackerApiClient
                         if (!dropEl.isJsonObject()) continue;
                         JsonObject dropObj = dropEl.getAsJsonObject();
 
+                        int itemId  = getInt(dropObj, "item_id", 0);
+                        int gePrice = getInt(dropObj, "ge_price", 0);
+                        int highAlch = getInt(dropObj, "high_alch", 0);
+
+                        // Older uploads (before the price-resolution fix) stored 0
+                        // for noted/charged/untradeable items. Re-resolve locally
+                        // on download so historical server data displays correctly
+                        // without needing a server-side backfill.
+                        if (gePrice <= 0 && itemId > 0)
+                        {
+                            gePrice = ItemValueResolver.perItemGeValue(itemManager, itemId);
+                        }
+                        if (highAlch <= 0 && itemId > 0)
+                        {
+                            ItemComposition comp = itemManager.getItemComposition(itemId);
+                            if (comp != null) highAlch = comp.getHaPrice();
+                        }
+
                         LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
-                        drop.setItemId(getInt(dropObj, "item_id", 0));
+                        drop.setItemId(itemId);
                         drop.setItemName(getString(dropObj, "item_name", ""));
                         drop.setQuantity(getInt(dropObj, "quantity", 0));
-                        drop.setGePrice(getInt(dropObj, "ge_price", 0));
-                        drop.setHighAlch(getInt(dropObj, "high_alch", 0));
-                        drop.setTotalValue((long) drop.getGePrice() * drop.getQuantity());
+                        drop.setGePrice(gePrice);
+                        drop.setHighAlch(highAlch);
+                        drop.setTotalValue((long) gePrice * drop.getQuantity());
                         drop.setHidden(false);
 
                         killRecord.getDrops().add(drop);

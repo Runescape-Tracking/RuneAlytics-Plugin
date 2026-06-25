@@ -1750,14 +1750,20 @@ public class LootTrackerManager
                     int qty    = dropObj.has("qty") ? dropObj.get("qty").getAsInt() : 1;
                     if (itemId <= 0) continue;
 
-                    // Create the new DropRecord format
+                    // Imported records only carry id/qty — resolve name and value
+                    // the same way a live drop does, otherwise every imported
+                    // item shows up with a blank name and 0 GE/alch/total.
+                    ItemComposition comp = itemManager.getItemComposition(itemId);
+                    int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, itemId);
+                    long totalValue = (long) gePrice * qty;
+
                     LootStorageData.DropRecord dr = new LootStorageData.DropRecord();
                     dr.setItemId(itemId);
-                    dr.setItemName(""); // Names are filled during aggregation/display usually
+                    dr.setItemName(comp.getName());
                     dr.setQuantity(qty);
-                    dr.setGePrice(0);
-                    dr.setHighAlch(0);
-                    dr.setTotalValue(0);
+                    dr.setGePrice(gePrice);
+                    dr.setHighAlch(comp.getHaPrice());
+                    dr.setTotalValue(totalValue);
                     dr.setHidden(false);
                     drops.add(dr);
                 }
