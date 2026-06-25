@@ -1539,6 +1539,26 @@ public class LootTrackerManager
                             }
                             drop.setTotalValue((long) gePrice * drop.getQuantity());
                             changed[0] = true;
+
+                            // bd.getAggregatedDrops() is a separate persisted
+                            // snapshot (per-item rows the panel reads via
+                            // getStorageDropsForBoss) that was set once from
+                            // whichever drop first created the entry — it
+                            // never picks up later corrections to the
+                            // underlying KillRecord drops, which is why the
+                            // boss-level total could be right while the
+                            // per-item GE/alch values stayed stuck at 0.
+                            // Patch the matching aggregate entry too so it
+                            // matches the now-corrected drop.
+                            LootStorageData.AggregatedDrop agg =
+                                    bd.getAggregatedDrops() != null
+                                            ? bd.getAggregatedDrops().get(drop.getItemId())
+                                            : null;
+                            if (agg != null)
+                            {
+                                if (agg.getGePrice() <= 0)  agg.setGePrice(drop.getGePrice());
+                                if (agg.getHighAlch() <= 0) agg.setHighAlch(drop.getHighAlch());
+                            }
                         }
                     }
                     catch (Exception ex)
