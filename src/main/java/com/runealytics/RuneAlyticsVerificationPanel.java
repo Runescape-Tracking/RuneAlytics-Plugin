@@ -144,16 +144,19 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
             return;
         }
 
-        // Auto-populate the code field with the stored token for this account
-        // so the user never has to re-enter it after their first verification.
+        // Sync the code field to whatever this account has stored — pulling in
+        // the saved token for a verified account, or clearing the field for an
+        // unverified one so a previous account's code can't linger after
+        // switching characters.
         String rsn = runeAlyticsState.getVerifiedUsername();
         if (rsn == null && client.getLocalPlayer() != null)
             rsn = client.getLocalPlayer().getName().trim().toLowerCase();
         if (rsn != null)
         {
             String stored = loadAccountToken(rsn);
-            if (stored != null && !stored.equals(codeField.getText().trim()))
-                codeField.setText(stored);
+            String wanted  = stored != null ? stored : "";
+            if (!wanted.equals(codeField.getText().trim()))
+                codeField.setText(wanted);
         }
 
         // Button is ALWAYS enabled when logged in — users can re-link at any time
