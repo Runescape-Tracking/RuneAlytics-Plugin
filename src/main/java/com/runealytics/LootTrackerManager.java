@@ -2160,7 +2160,11 @@ public class LootTrackerManager
         for (ItemStack item : items)
         {
             ItemComposition comp = itemManager.getItemComposition(item.getId());
-            int  gePrice    = itemManager.getItemPrice(item.getId());
+            // Plain itemManager.getItemPrice() returns 0 for noted/charged/
+            // untradeable variants (e.g. Scythe of Vitur, noted items) — go
+            // through ItemValueResolver so those still report a real value by
+            // canonicalising or decomposing into their tradeable components.
+            int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, item.getId());
             // long math: gePrice * quantity overflows int for large stacks of
             // high-value items (e.g. big coin / rune drops) and would record a
             // negative or garbage value.
@@ -2168,12 +2172,14 @@ public class LootTrackerManager
 
             if (totalValue < config.minimumLootValue()) continue;
 
+            ItemComposition canonicalComp = itemManager.getItemComposition(itemManager.canonicalize(item.getId()));
+
             LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
             drop.setItemId   (item.getId());
             drop.setItemName (comp.getName());
             drop.setQuantity (item.getQuantity());
             drop.setGePrice  (gePrice);
-            drop.setHighAlch (comp.getHaPrice());
+            drop.setHighAlch (Math.max(comp.getHaPrice(), canonicalComp.getHaPrice()));
             drop.setTotalValue(totalValue);
             drop.setHidden   (false);
 

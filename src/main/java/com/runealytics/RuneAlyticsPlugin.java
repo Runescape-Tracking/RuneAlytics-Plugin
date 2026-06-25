@@ -100,10 +100,14 @@ public class RuneAlyticsPlugin extends Plugin
     /** Plugin tick at which the lamp-XP suppression window expires (0 = none). */
     private long lampXpSuppressUntilTick = 0L;
 
+    // AGILITY is deliberately excluded: unlike woodcutting/fishing/mining/etc,
+    // agility XP (obstacles) never directly produces an item drop, so tracking
+    // it here would misattribute any incidental inventory change during the
+    // session window (e.g. picking up an unrelated item) as an "Agility" drop.
     private static final Set<Skill> SKILLING_TRACKED = java.util.EnumSet.of(
             Skill.WOODCUTTING, Skill.FISHING,  Skill.MINING,    Skill.FARMING,
             Skill.HUNTER,      Skill.HERBLORE, Skill.RUNECRAFT, Skill.FLETCHING,
-            Skill.COOKING,     Skill.SMITHING, Skill.CRAFTING,  Skill.AGILITY
+            Skill.COOKING,     Skill.SMITHING, Skill.CRAFTING
     );
 
     /**
