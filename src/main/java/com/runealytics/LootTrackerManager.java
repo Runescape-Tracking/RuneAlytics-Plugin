@@ -1432,6 +1432,7 @@ public class LootTrackerManager
 
         bossKillStats.clear();
 
+        boolean backfilled = false;
         for (Map.Entry<String, LootStorageData.BossKillData> entry : data.getBossKills().entrySet())
         {
             LootStorageData.BossKillData bd = entry.getValue();
@@ -1442,6 +1443,7 @@ public class LootTrackerManager
             {
                 for (LootStorageData.KillRecord kr : bd.getKills())
                 {
+                    if (backfillMissingDropValues(kr)) backfilled = true;
                     stats.addKill(kr);
                 }
 
@@ -1457,11 +1459,62 @@ public class LootTrackerManager
                 stats.setKillCount(bd.getKillCount());
             }
 
+            // Drop objects are shared with bd.getKills(), so backfillMissingDropValues
+            // above already mutated the persisted records in place — just bring the
+            // persisted total in line with what was actually recomputed.
+            bd.setTotalLootValue(stats.getTotalLootValue());
+
             bossKillStats.put(stats.getNpcName(), stats);
+        }
+
+        // Persist once, outside the loop, if any drop's value was backfilled —
+        // otherwise items imported before the price-resolution fix (e.g. via
+        // importFromRuneLiteLootTracker) would show 0 value every session.
+        if (backfilled)
+        {
+            log.info("[Loot] Backfilled missing GE/alch values on legacy drop record(s) — saving");
+            storageManager.scheduleSave();
         }
 
         log.debug("refreshLootDisplay: {} bosses loaded", bossKillStats.size());
         if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
+    }
+
+    /**
+     * Re-resolves GE price / high alch / total value for a single kill record's
+     * drops when they were stored as 0 by an older code path (e.g. the RuneLite
+     * loot-tracker import, or a server sync of data uploaded before the
+     * price-resolution fix). Mutates the drop records in place.
+     *
+     * @return true if any drop's value was recomputed
+     */
+    private boolean backfillMissingDropValues(LootStorageData.KillRecord kr)
+    {
+        if (kr.getDrops() == null) return false;
+
+        boolean changed = false;
+        for (LootStorageData.DropRecord drop : kr.getDrops())
+        {
+            if (drop.getItemId() <= 0 || drop.getGePrice() > 0) continue;
+
+            int gePrice = ItemValueResolver.perItemGeValue(itemManager, drop.getItemId());
+            if (gePrice <= 0) continue;
+
+            drop.setGePrice(gePrice);
+            if (drop.getHighAlch() <= 0)
+            {
+                ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
+                if (comp != null) drop.setHighAlch(comp.getHaPrice());
+            }
+            if (drop.getItemName() == null || drop.getItemName().isEmpty())
+            {
+                ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
+                if (comp != null) drop.setItemName(comp.getName());
+            }
+            drop.setTotalValue((long) gePrice * drop.getQuantity());
+            changed = true;
+        }
+        return changed;
     }
 
     public Map<String, BossKillStats> getBossKillStats()
