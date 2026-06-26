@@ -315,7 +315,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         syncButton.setBorder(BorderFactory.createLineBorder(new Color(60, 90, 130), 1));
         syncButton.setFont(FILTER_FONT);
         syncButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        syncButton.setToolTipText("Sync with RuneAlytics server");
+        syncButton.setToolTipText("Sync with RuneLite Loot Tracker & RuneAlytics server");
         syncButton.addActionListener(e -> onSyncClicked());
 
         btnRow.add(leftBtns,   BorderLayout.WEST);
@@ -595,7 +595,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             if (syncButton == null) return;
             syncButton.setEnabled(enabled);
             syncButton.setToolTipText(enabled
-                    ? "Sync with RuneAlytics server"
+                    ? "Sync with RuneLite Loot Tracker & RuneAlytics server"
                     : "Loot syncing is disabled — enable Loot Tracker on RuneAlytics.com");
             syncButton.setBackground(enabled ? new Color(40, 60, 90) : new Color(35, 35, 35));
             syncButton.setForeground(enabled ? Color.WHITE : new Color(100, 100, 100));

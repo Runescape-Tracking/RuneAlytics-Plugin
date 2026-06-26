@@ -1372,6 +1372,7 @@ public class LootTrackerManager
             try
             {
                 allowSync = true;
+                importFromRuneLiteLootTrackerSilently(username);
                 downloadKillHistoryFromServer();
                 cleanupZeroValueDrops();
                 uploadUnsyncedKills();
@@ -1387,6 +1388,34 @@ public class LootTrackerManager
             }
             finally { allowSync = false; }
         });
+    }
+
+    /**
+     * Best-effort pull from RuneLite's own Loot Tracker plugin as part of
+     * Sync, so the player doesn't have to separately remember to hit the
+     * "Import from RuneLite Loot Tracker" button. Silent and non-fatal: if no
+     * file is found (or it can't be resolved automatically) this just skips —
+     * the user can still use the manual import button, which prompts to pick
+     * a file.
+     */
+    private void importFromRuneLiteLootTrackerSilently(String username)
+    {
+        try
+        {
+            java.io.File dataFile = findRuneLiteLootFile(username);
+            if (dataFile == null)
+            {
+                log.debug("Sync: no RuneLite Loot Tracker file found for {} — skipping", username);
+                return;
+            }
+
+            String result = importFromRuneLiteLootTracker(username, dataFile);
+            log.debug("Sync: RuneLite Loot Tracker import result — {}", result);
+        }
+        catch (Exception e)
+        {
+            log.warn("Sync: RuneLite Loot Tracker import failed", e);
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
