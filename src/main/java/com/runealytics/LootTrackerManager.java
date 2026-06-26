@@ -1681,6 +1681,28 @@ public class LootTrackerManager
     //  RUNELITE LOOT TRACKER IMPORT
     // ═════════════════════════════════════════════════════════════════════════
 
+    /**
+     * Sums recorded quantity per item id across every kill already stored for
+     * a boss, regardless of how it got there (live tracking, server merge, or
+     * a prior RuneLite import). Used to diff against RuneLite's cumulative
+     * loot-tracker totals so re-running the import never re-adds loot we
+     * already have.
+     */
+    private Map<Integer, Integer> sumItemQuantities(LootStorageData data, String bossName)
+    {
+        Map<Integer, Integer> totals = new HashMap<>();
+        LootStorageData.BossKillData bd = data.getBossKills().get(bossName);
+        if (bd == null || bd.getKills() == null) return totals;
+
+        for (LootStorageData.KillRecord kr : bd.getKills())
+        {
+            if (kr.getDrops() == null) continue;
+            for (LootStorageData.DropRecord drop : kr.getDrops())
+                totals.merge(drop.getItemId(), drop.getQuantity(), Integer::sum);
+        }
+        return totals;
+    }
+
     public java.io.File findRuneLiteLootFile(String username)
     {
         java.io.File base   = net.runelite.client.RuneLite.RUNELITE_DIR;
@@ -1887,31 +1909,49 @@ public class LootTrackerManager
                 if (rec.has("killCount")) recKC = rec.get("killCount").getAsInt();
                 else if (rec.has("kills")) recKC = rec.get("kills").getAsInt();
 
-                Set<Integer> existingKCs = existingKCsByBoss.getOrDefault(bossName, Collections.emptySet());
-                if (recKC > 0 && existingKCs.contains(recKC)) { skippedDupes++; continue; }
-
                 if (!rec.has("drops") || !rec.get("drops").isJsonArray()) { skippedNoDrops++; continue; }
 
+                // RuneLite's loot-tracker file stores *cumulative* totals per
+                // item since it started tracking that boss — not a per-kill
+                // breakdown. Sum the reported quantities per item first.
+                Map<Integer, Integer> reportedQty = new HashMap<>();
                 com.google.gson.JsonArray dropsArr = rec.getAsJsonArray("drops");
-                List<LootStorageData.DropRecord> drops = new ArrayList<>();
-
                 for (int d = 0; d < dropsArr.size(); d++)
                 {
                     com.google.gson.JsonObject dropObj = dropsArr.get(d).getAsJsonObject();
                     int itemId = dropObj.has("id") ? dropObj.get("id").getAsInt() : 0;
                     int qty    = dropObj.has("qty") ? dropObj.get("qty").getAsInt() : 1;
-                    if (itemId <= 0) continue;
+                    if (itemId <= 0 || qty <= 0) continue;
+                    reportedQty.merge(itemId, qty, Integer::sum);
+                }
+
+                if (reportedQty.isEmpty()) { skippedNoDrops++; continue; }
+
+                // Comparing against a single killCount/KC number is unreliable
+                // (live tracking and prior imports may already hold some of
+                // this loot under different kill numbers). Instead diff against
+                // what we already have on a per-item basis and only bring in
+                // the shortfall — this is what makes repeat imports safe to
+                // run (e.g. every Sync) without re-adding loot we already have.
+                Map<Integer, Integer> currentQty = sumItemQuantities(current, bossName);
+
+                List<LootStorageData.DropRecord> drops = new ArrayList<>();
+                for (Map.Entry<Integer, Integer> e : reportedQty.entrySet())
+                {
+                    int itemId   = e.getKey();
+                    int delta    = e.getValue() - currentQty.getOrDefault(itemId, 0);
+                    if (delta <= 0) continue;
 
                     // Imported records only carry id/qty — resolve name and
                     // value the same way a live drop does.
                     ItemComposition comp = itemManager.getItemComposition(itemId);
                     int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, itemId);
-                    long totalValue = (long) gePrice * qty;
+                    long totalValue = (long) gePrice * delta;
 
                     LootStorageData.DropRecord dr = new LootStorageData.DropRecord();
                     dr.setItemId(itemId);
                     dr.setItemName(comp.getName());
-                    dr.setQuantity(qty);
+                    dr.setQuantity(delta);
                     dr.setGePrice(gePrice);
                     dr.setHighAlch(comp.getHaPrice());
                     dr.setTotalValue(totalValue);
@@ -1919,7 +1959,7 @@ public class LootTrackerManager
                     drops.add(dr);
                 }
 
-                if (drops.isEmpty()) { skippedNoDrops++; continue; }
+                if (drops.isEmpty()) { skippedDupes++; continue; }
 
                 int npcId = BOSS_NAME_TO_ID.getOrDefault(bossName, 0);
                 boolean isNewBoss = !existingKCsByBoss.containsKey(bossName);
@@ -1927,10 +1967,10 @@ public class LootTrackerManager
                 BossKillStats stats = bossKillStats.computeIfAbsent(
                         bossName, k -> new BossKillStats(bossName, npcId));
 
-                if (recKC > 0 && recKC > stats.getKillCount())
-                    stats.setKillCount(recKC - 1);
-
-                int killNumber = stats.getKillCount() + 1;
+                // Bump KC up to RuneLite's reported count when it's ahead (first
+                // import of a boss); otherwise just append one synthetic
+                // "backfill" kill so the kill number stays unique/monotonic.
+                int killNumber = Math.max(stats.getKillCount() + 1, recKC);
 
                 LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
                 killRecord.setKillNumber(killNumber);
