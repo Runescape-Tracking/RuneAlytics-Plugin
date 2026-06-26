@@ -250,7 +250,7 @@ public class RuneAlyticsPanel extends PluginPanel
             return;
         }
 
-        log.info("Applying feature flags: {}", flags);
+        log.debug("Applying feature flags: {}", flags);
         lastAppliedFlags = new HashMap<>(flags); // snapshot for late-registering tabs
 
         for (TabEntry entry : tabRegistry)
@@ -267,7 +267,7 @@ public class RuneAlyticsPanel extends PluginPanel
             {
                 insertTabAtLogicalPosition(entry);
                 entry.visible = true;
-                log.info("Tab '{}' enabled (flag '{}')", entry.title, entry.featureKey);
+                log.debug("Tab '{}' enabled (flag '{}')", entry.title, entry.featureKey);
 
                 // Fire reload callback so the panel gets fresh data
                 Runnable cb = onTabShownCallbacks.get(entry.featureKey);
@@ -283,7 +283,7 @@ public class RuneAlyticsPanel extends PluginPanel
                 {
                     tabbedPane.removeTabAt(idx);
                     entry.visible = false;
-                    log.info("Tab '{}' disabled (flag '{}')", entry.title, entry.featureKey);
+                    log.debug("Tab '{}' disabled (flag '{}')", entry.title, entry.featureKey);
                 }
             }
         }

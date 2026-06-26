@@ -75,7 +75,7 @@ public class BankDataManager
         data.addProperty("equipment_value", equipValue);
         data.addProperty("total_wealth",    total);
 
-        log.info("Wealth snapshot built: bank={} ({}gp) inv={} ({}gp) equip={} ({}gp) total={}gp",
+        log.debug("Wealth snapshot built: bank={} ({}gp) inv={} ({}gp) equip={} ({}gp) total={}gp",
                 bankItems.size(),      bankValue,
                 inventoryItems.size(), invValue,
                 equipmentItems.size(), equipValue,
@@ -99,13 +99,13 @@ public class BankDataManager
 
         if (username == null || username.isEmpty())
         {
-            log.warn("Username is null/empty, skipping bank sync");
+            log.debug("Username is null/empty, skipping bank sync");
             return;
         }
 
         if (snapshot == null)
         {
-            log.warn("Bank snapshot is null, skipping bank sync");
+            log.debug("Bank snapshot is null, skipping bank sync");
             return;
         }
 
@@ -114,7 +114,7 @@ public class BankDataManager
             boolean success = apiClient.syncBankData(token, snapshot);
             if (success)
             {
-                log.info("Wealth snapshot synced successfully for {}", username);
+                log.debug("Wealth snapshot synced successfully for {}", username);
             }
             else
             {

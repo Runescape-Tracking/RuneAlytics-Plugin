@@ -366,7 +366,7 @@ public class LootTrackerManager
     /** Called during plugin shutDown(). Persists in-memory data and stops the save executor. */
     public void shutdown()
     {
-        log.info("LootTrackerManager: saving on shutdown");
+        log.debug("LootTrackerManager: saving on shutdown");
         storageManager.shutdown();
     }
 
@@ -394,7 +394,7 @@ public class LootTrackerManager
         if (!config.enableLootTracking() || npc == null || npc.getName() == null)
             return;
 
-        log.info("NPC loot: '{}' id={} cb={} items={}",
+        log.debug("NPC loot: '{}' id={} cb={} items={}",
                 npc.getName(), npc.getId(), npc.getCombatLevel(), items.size());
 
         String name = normalizeBossName(npc.getName());
@@ -402,7 +402,7 @@ public class LootTrackerManager
 
         if (!isBoss && !config.trackAllNpcs())
         {
-            log.warn("Filtered NPC (not a tracked boss): '{}' id={} "
+            log.debug("Filtered NPC (not a tracked boss): '{}' id={} "
                             + "→ enable 'Track All NPCs' or add id to TRACKED_BOSS_IDS",
                     name, npc.getId());
             return;
@@ -505,7 +505,7 @@ public class LootTrackerManager
             return;
         }
 
-        log.info("Zero-loot kill: '{}' id={} cb={}", name, npcId, npc.getCombatLevel());
+        log.debug("Zero-loot kill: '{}' id={} cb={}", name, npcId, npc.getCombatLevel());
         recordKill(name, npcId, npc.getCombatLevel(),
                 client.getWorld(), Collections.emptyList());
     }
@@ -546,7 +546,7 @@ public class LootTrackerManager
         lastPlayerLootTime.put(name, now);
 
         int npcId = BOSS_NAME_TO_ID.getOrDefault(name, 0);
-        log.info("Player loot: '{}' (id={}) items={}", name, npcId, items.size());
+        log.debug("Player loot: '{}' (id={}) items={}", name, npcId, items.size());
 
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
         if (drops.isEmpty()) return;
@@ -587,7 +587,7 @@ public class LootTrackerManager
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
         if (drops.isEmpty()) return;
 
-        log.info("Pickpocket: '{}' → '{}' ({} items)", rawNpcName, storedKey, drops.size());
+        log.debug("Pickpocket: '{}' → '{}' ({} items)", rawNpcName, storedKey, drops.size());
 
         // npcId = 0 (stalls/pickpocket targets don't have a meaningful combat NPC ID)
         recordKill(storedKey, 0, 0, client.getWorld(), drops);
@@ -635,7 +635,7 @@ public class LootTrackerManager
         if (drops.isEmpty()) return;
 
         String storedKey = SKILLING_PREFIX + skill;
-        log.info("Skilling: '{}' — {} items", skill, drops.size());
+        log.debug("Skilling: '{}' — {} items", skill, drops.size());
         recordKill(storedKey, 0, 0, client.getWorld(), drops);
     }
 
@@ -704,7 +704,7 @@ public class LootTrackerManager
 
         String tier = canonicaliseImplingJar(jarItemName);
         String storedKey = IMPLING_PREFIX + tier;
-        log.info("Impling jar loot: '{}' tier='{}' ({} items)", jarItemName, tier, drops.size());
+        log.debug("Impling jar loot: '{}' tier='{}' ({} items)", jarItemName, tier, drops.size());
         recordKill(storedKey, 0, 0, client.getWorld(), drops);
     }
 
@@ -777,7 +777,7 @@ public class LootTrackerManager
 
         notifyListeners(stats, lastKill);
 
-        log.info("appendDropsToLastKill: {} drop(s) added to '{}' last kill (+{} gp)",
+        log.debug("appendDropsToLastKill: {} drop(s) added to '{}' last kill (+{} gp)",
                 newDrops.size(), npcName, addedValue);
     }
 
@@ -830,7 +830,7 @@ public class LootTrackerManager
         storageManager.appendDropsToLastKill(npcName, Collections.singletonList(drop));
         notifyListeners(stats, lastKill);
 
-        log.info("[Pet] Recorded '{}' pet drop for '{}'", drop.getItemName(), npcName);
+        log.debug("[Pet] Recorded '{}' pet drop for '{}'", drop.getItemName(), npcName);
     }
 
     /** Sentinel item-ID used when the pet item cannot be determined from inventory diff. */
@@ -912,7 +912,7 @@ public class LootTrackerManager
                 return;
             }
 
-            log.info("Container read '{}': {} items from container {}",
+            log.debug("Container read '{}': {} items from container {}",
                     sourceName, items.size(), containerId);
             processPlayerLoot(sourceName, items);
 
@@ -948,7 +948,7 @@ public class LootTrackerManager
                 return;
             }
 
-            log.info("Widget loot '{}' (group {}): {} items", sourceName, groupId, items.size());
+            log.debug("Widget loot '{}' (group {}): {} items", sourceName, groupId, items.size());
             processPlayerLoot(sourceName, items);
 
         }), delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -979,7 +979,7 @@ public class LootTrackerManager
                 return;
             }
 
-            log.info("Clue reward '{}': {} items", sourceName, items.size());
+            log.debug("Clue reward '{}': {} items", sourceName, items.size());
             processPlayerLoot(sourceName, items);
 
         }), 300, java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -1032,7 +1032,7 @@ public class LootTrackerManager
     public void processInventoryDiff(String sourceName, List<ItemStack> newItems)
     {
         if (newItems == null || newItems.isEmpty()) return;
-        log.info("Inventory diff '{}': {} new items", sourceName, newItems.size());
+        log.debug("Inventory diff '{}': {} new items", sourceName, newItems.size());
         processPlayerLoot(sourceName, newItems);
     }
 
@@ -1063,7 +1063,7 @@ public class LootTrackerManager
         // No prior kill for this NPC → genuine FALLBACK path
         if (stats == null || stats.getKillHistory().isEmpty())
         {
-            log.info("Ground items from '{}' (id={}): {} items — no prior kill, treating as fresh",
+            log.debug("Ground items from '{}' (id={}): {} items — no prior kill, treating as fresh",
                     npc.getName(), npc.getId(), items.size());
             processNpcLoot(npc, items);
             return;
@@ -1081,7 +1081,7 @@ public class LootTrackerManager
         long ageMs = System.currentTimeMillis() - lastKill.getTimestamp();
         if (ageMs > 10_000L)
         {
-            log.info("Ground items from '{}': last kill {}ms ago — treating as fresh",
+            log.debug("Ground items from '{}': last kill {}ms ago — treating as fresh",
                     npc.getName(), ageMs);
             processNpcLoot(npc, items);
             return;
@@ -1106,7 +1106,7 @@ public class LootTrackerManager
             return;
         }
 
-        log.info("Ground items for '{}': appending {} extra item type(s) to last kill",
+        log.debug("Ground items for '{}': appending {} extra item type(s) to last kill",
                 npc.getName(), extras.size());
         appendDropsToLastKill(name, extras);
     }
@@ -1141,7 +1141,7 @@ public class LootTrackerManager
         lastPlayerLootTime.put(name, now);
 
         int npcId = BOSS_NAME_TO_ID.getOrDefault(name, 0);
-        log.info("Player loot (gameKC={}): '{}' (id={}) items={}", gameKC, name, npcId, items.size());
+        log.debug("Player loot (gameKC={}): '{}' (id={}) items={}", gameKC, name, npcId, items.size());
 
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
         recordKill(name, npcId, 0, client.getWorld(), drops, gameKC);
@@ -1227,7 +1227,7 @@ public class LootTrackerManager
         // HTTP call (see LIVE_SYNC_DEBOUNCE_MS).
         scheduleLiveSync();
 
-        log.info("Kill recorded: '{}' #{} (gameKC={}) – {} drops, {} gp",
+        log.debug("Kill recorded: '{}' #{} (gameKC={}) – {} drops, {} gp",
                 npcName, killNumber, gameKC > 0 ? gameKC : "n/a",
                 drops.size(),
                 drops.stream().mapToLong(LootStorageData.DropRecord::getTotalValue).sum());
@@ -1280,7 +1280,7 @@ public class LootTrackerManager
             {
                 storageManager.mergeServerData(serverData);
                 refreshLootDisplay();
-                log.info("Merged {} bosses from server", serverData.size());
+                log.debug("Merged {} bosses from server", serverData.size());
             }
         }
         catch (Exception e) { log.error("Failed to download kill history", e); }
@@ -1308,7 +1308,7 @@ public class LootTrackerManager
                 if (unsynced.isEmpty()) return;
 
                 int total = unsynced.values().stream().mapToInt(List::size).sum();
-                log.info("Uploading {} unsynced kills across {} bosses", total, unsynced.size());
+                log.debug("Uploading {} unsynced kills across {} bosses", total, unsynced.size());
 
                 final int BATCH_SIZE = 50;
                 List<LootStorageData.KillRecord> batchBuffer = new ArrayList<>();
@@ -1420,7 +1420,7 @@ public class LootTrackerManager
     public void loadFromStorage()
     {
         if (hasLoadedData) { log.debug("Data already loaded this session"); return; }
-        log.info("Loading local loot data");
+        log.debug("Loading local loot data");
         refreshLootDisplay();
         hasLoadedData = true;
     }
@@ -1488,7 +1488,7 @@ public class LootTrackerManager
         // importFromRuneLiteLootTracker) would show 0 value every session.
         if (backfilled)
         {
-            log.info("[Loot] Backfilled missing GE/alch values on legacy drop record(s) — saving");
+            log.debug("[Loot] Backfilled missing GE/alch values on legacy drop record(s) — saving");
             storageManager.scheduleSave();
         }
 
@@ -1774,7 +1774,7 @@ public class LootTrackerManager
                     }
                 }
 
-                log.info("profiles2: {} → {} loot entries", propFile.getName(),
+                log.debug("profiles2: {} → {} loot entries", propFile.getName(),
                         allRecords.size() - before);
             }
             catch (Exception e)
@@ -1785,7 +1785,7 @@ public class LootTrackerManager
 
         if (allRecords.size() == 0)
         {
-            log.info("profiles2: no loot tracker entries found in any .properties file");
+            log.debug("profiles2: no loot tracker entries found in any .properties file");
             return null;
         }
 
@@ -1820,7 +1820,7 @@ public class LootTrackerManager
         if (dataFile == null)
             return "__CHOOSE_FILE__:" + net.runelite.client.RuneLite.RUNELITE_DIR.getAbsolutePath();
 
-        log.info("Importing RuneLite loot data from: {}", dataFile.getAbsolutePath());
+        log.debug("Importing RuneLite loot data from: {}", dataFile.getAbsolutePath());
 
         try
         {

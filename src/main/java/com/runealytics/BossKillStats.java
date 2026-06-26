@@ -42,7 +42,7 @@ public class BossKillStats
         this.highestDrop    = 0;
         this.killHistory.clear();
         this.preloadedDrops.clear();
-        log.info("Boss {} prestiged to level {}", npcName, prestige);
+        log.debug("Boss {} prestiged to level {}", npcName, prestige);
     }
 
     public long getLastKillTimestamp()

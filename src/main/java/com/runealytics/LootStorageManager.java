@@ -49,7 +49,7 @@ public class LootStorageManager
         String username = state.getVerifiedUsername();
         if (username == null || username.isEmpty())
         {
-            log.warn("No verified username, cannot load loot data");
+            log.debug("No verified username, cannot load loot data");
             currentData = new LootStorageData();
             return currentData;
         }
@@ -103,14 +103,14 @@ public class LootStorageManager
     {
         if (currentData == null)
         {
-            log.warn("No data to save");
+            log.debug("No data to save");
             return;
         }
 
         String username = state.getVerifiedUsername();
         if (username == null || username.isEmpty())
         {
-            log.warn("No verified username, cannot save loot data");
+            log.debug("No verified username, cannot save loot data");
             return;
         }
 

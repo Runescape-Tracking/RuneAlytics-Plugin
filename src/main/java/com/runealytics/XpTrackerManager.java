@@ -162,7 +162,7 @@ public class XpTrackerManager
 
         if (!xpBuffer.isEmpty())
         {
-            log.info("[XP] Immediate flush on shutdown ({} skill(s))", xpBuffer.size());
+            log.debug("[XP] Immediate flush on shutdown ({} skill(s))", xpBuffer.size());
             flushBatch();
         }
     }
@@ -204,7 +204,7 @@ public class XpTrackerManager
 
         if (toSend.isEmpty()) return;
 
-        log.info("[XP] Sending batch: {} skill(s) — {}",
+        log.debug("[XP] Sending batch: {} skill(s) — {}",
                 toSend.size(),
                 toSend.entrySet().stream()
                         .map(e -> e.getKey() + "+" + e.getValue())

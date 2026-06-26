@@ -382,7 +382,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Override
     protected void startUp() throws Exception
     {
-        log.info("RuneAlytics starting");
+        log.debug("RuneAlytics starting");
 
         // Swing components must be created on the EDT. Build the root panel on the
         // EDT (synchronously, so the nav button can be registered before startUp()
@@ -399,7 +399,7 @@ public class RuneAlyticsPlugin extends Plugin
         clientToolbar.addNavigation(navButton);
         overlayManager.add(matchmakingOverlay);
         overlayManager.add(liveMapOverlay);
-        log.info("RuneAlytics nav button registered");
+        log.debug("RuneAlytics nav button registered");
 
         // The heavy sub-panels are also Swing trees, so they are constructed on
         // the EDT. invokeLater keeps this off the startup-critical path; the tabs
@@ -425,7 +425,7 @@ public class RuneAlyticsPlugin extends Plugin
                 mainPanel.addTab("Loot Tracker", null,             lootPanel);
                 mainPanel.addTab("Matches",      FEATURE_MATCHES,  matchmakingPanel);
                 mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
-                log.info("RuneAlytics tabs populated");
+                log.debug("RuneAlytics tabs populated");
             }
             catch (Exception ex)
             {
@@ -454,7 +454,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Override
     protected void shutDown()
     {
-        log.info("RuneAlytics shutting down");
+        log.debug("RuneAlytics shutting down");
 
         // Stop the live-map heartbeat so no pings fire after the plugin is gone.
         stopHeartbeat();
@@ -692,7 +692,7 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Special cases that can't use the generic registry ────────────────
         if (gid == WIDGET_WHISPERER)
         {
-            log.info("Whisperer widget 834 detected — waiting for drops (KC={})", whispererParsedKC);
+            log.debug("Whisperer widget 834 detected — waiting for drops (KC={})", whispererParsedKC);
             whispererGroundItemWindow = true;
             if (whispererFlushTask != null) whispererFlushTask.cancel(false);
             whispererFlushTask = executorService.schedule(
@@ -1078,7 +1078,7 @@ public class RuneAlyticsPlugin extends Plugin
                 inventorySnapshot       = getCurrentInventory();
                 waitingForTemporossLoot = true;
                 crateLootWaitExpiry     = System.currentTimeMillis() + CRATE_LOOT_WINDOW_MS;
-                log.info("Tempoross: inventory snapshot taken ({} items)", inventorySnapshot.size());
+                log.debug("Tempoross: inventory snapshot taken ({} items)", inventorySnapshot.size());
             });
             lastChestSource = "Tempoross";
             return;
@@ -1111,7 +1111,7 @@ public class RuneAlyticsPlugin extends Plugin
             whispererKillTime         = Instant.now();
             whispererGroundItems.clear();
 
-            log.info("The Whisperer: KC detected (game KC={}) – ground-item collection window opened",
+            log.debug("The Whisperer: KC detected (game KC={}) – ground-item collection window opened",
                     whispererParsedKC);
             return;
         }
@@ -1150,7 +1150,7 @@ public class RuneAlyticsPlugin extends Plugin
                         }
                         String bossName = lootManager.normalizeBossName(boss.getName());
                         lootManager.appendPetDrop(bossName, petItem);
-                        log.info("[Pet] drop detected for '{}' (wentToBank={})", bossName, wentToBank);
+                        log.debug("[Pet] drop detected for '{}' (wentToBank={})", bossName, wentToBank);
                     });
                 }
             }
@@ -1183,7 +1183,7 @@ public class RuneAlyticsPlugin extends Plugin
                     {
                         String bossName = lootManager.normalizeBossName(boss.getName());
                         lootManager.appendDropsToLastKill(bossName, gained);
-                        log.info("Ring of Wealth: {} item type(s) appended to '{}'",
+                        log.debug("Ring of Wealth: {} item type(s) appended to '{}'",
                                 gained.size(), bossName);
                     }
                 });
@@ -1200,7 +1200,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (detected != null && lastChestSource == null)
         {
             lastChestSource = detected;
-            log.info("Chat: chest source set to '{}'", detected);
+            log.debug("Chat: chest source set to '{}'", detected);
         }
     }
 
@@ -1311,7 +1311,7 @@ public class RuneAlyticsPlugin extends Plugin
     public void onGameStateChanged(GameStateChanged event)
     {
         GameState gs = event.getGameState();
-        log.info("GameState: {}", gs);
+        log.debug("GameState: {}", gs);
 
         if (gs == GameState.LOGIN_SCREEN)
         {
@@ -1404,14 +1404,14 @@ public class RuneAlyticsPlugin extends Plugin
     {
         if (event.getPlayer() != client.getLocalPlayer()) return;
 
-        log.info("Local player spawned");
+        log.debug("Local player spawned");
 
         // Always check per-account token and refresh the verification UI on login
         checkVerificationStatus();
 
         executorService.schedule(() -> {
             // Load local loot data regardless of verification — tracking always works locally.
-            log.info("Post-login: loading local loot data (verified={})", state.isVerified());
+            log.debug("Post-login: loading local loot data (verified={})", state.isVerified());
             lootManager.loadFromStorage();
         }, 2, TimeUnit.SECONDS);
 
@@ -1747,7 +1747,7 @@ public class RuneAlyticsPlugin extends Plugin
             final List<ItemStack> loot = mergeItemStacks(whispererGroundItems);
             whispererGroundItems.clear();
 
-            log.info("The Whisperer: merged into {} item types, KC={}", loot.size(), kc);
+            log.debug("The Whisperer: merged into {} item types, KC={}", loot.size(), kc);
             lootManager.processPlayerLootWithGameKC("The Whisperer", loot, kc);
         });
     }
@@ -1844,7 +1844,7 @@ public class RuneAlyticsPlugin extends Plugin
         }
         if (items.isEmpty()) return;
 
-        log.info("Reward container '{}': {} items", source, items.size());
+        log.debug("Reward container '{}': {} items", source, items.size());
         lootManager.processPlayerLoot(source, items);
     }
 
@@ -1909,7 +1909,7 @@ public class RuneAlyticsPlugin extends Plugin
             final boolean verified = serverConfirmed;
             if (!verified)
             {
-                log.info("Stored token for '{}' rejected by server — clearing", rsn);
+                log.debug("Stored token for '{}' rejected by server — clearing", rsn);
                 vp.clearAccountToken(rsn);
             }
 
@@ -1927,7 +1927,7 @@ public class RuneAlyticsPlugin extends Plugin
             state.setVerificationCode(token);
             // Mirror into the config field so it always reflects the active account
             config.authToken(token);
-            log.info("Account '{}' is linked (server confirmed)", rsn);
+            log.debug("Account '{}' is linked (server confirmed)", rsn);
         }
         else
         {
@@ -1935,7 +1935,7 @@ public class RuneAlyticsPlugin extends Plugin
             state.setVerifiedUsername(null);
             state.setVerificationCode(null);
             config.authToken("");
-            log.info("Account '{}' is not linked", rsn);
+            log.debug("Account '{}' is not linked", rsn);
         }
 
         SwingUtilities.invokeLater(() -> {

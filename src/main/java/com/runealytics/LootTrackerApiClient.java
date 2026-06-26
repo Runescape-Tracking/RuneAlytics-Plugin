@@ -312,7 +312,7 @@ public class LootTrackerApiClient
             }
         });
 
-        log.info("Fetched {} bosses with total {} kills from server",
+        log.debug("Fetched {} bosses with total {} kills from server",
                 result.size(),
                 result.values().stream().mapToInt(b -> b.getKills().size()).sum());
 
@@ -401,7 +401,7 @@ public class LootTrackerApiClient
                 log.error("[{}] failed: HTTP {} — {}", contextForLog, response.code(), responseBody);
                 return false;
             }
-            log.info("[{}] ok", contextForLog);
+            log.debug("[{}] ok", contextForLog);
             return true;
         }
         catch (IOException e)

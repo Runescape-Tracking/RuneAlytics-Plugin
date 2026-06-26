@@ -353,7 +353,7 @@ public class MatchmakingManager
 
         if (!weHitOpponent && !opponentHitUs) return;
 
-        log.info("[engage] combat detected ({}) — reporting Ready → Fighting (match={})",
+        log.debug("[engage] combat detected ({}) — reporting Ready → Fighting (match={})",
                 weHitOpponent ? "we hit opponent" : "opponent hit us", session.getMatchCode());
 
         reportCombatEngaged();
@@ -410,7 +410,7 @@ public class MatchmakingManager
                 combatReported = true;
                 if (result.getSession() != null)
                 {
-                    log.info("[engage] success — status now {}", result.getSession().getStatus());
+                    log.debug("[engage] success — status now {}", result.getSession().getStatus());
                     session = result.getSession();
                     updateResultStatus();
                 }
@@ -513,7 +513,7 @@ public class MatchmakingManager
 
         final String reportedDeath = deathName; // already normalized above
 
-        log.info("[death] reporting death of '{}' (match={} status={})",
+        log.debug("[death] reporting death of '{}' (match={} status={})",
                 reportedDeath, session.getMatchCode(), session.getStatus());
 
         reportInFlight = true;
@@ -539,7 +539,7 @@ public class MatchmakingManager
 
             if (result.isSuccess() && result.getSession() != null)
             {
-                log.info("[death] match reported — new status: {}", result.getSession().getStatus());
+                log.debug("[death] match reported — new status: {}", result.getSession().getStatus());
                 session = result.getSession();
                 updateResultStatus();
             }
@@ -714,7 +714,7 @@ public class MatchmakingManager
 
             if (result.isSuccess() && result.getSession() != null)
             {
-                log.info("[accept] success — status now {}", result.getSession().getStatus());
+                log.debug("[accept] success — status now {}", result.getSession().getStatus());
                 session = result.getSession();
                 updateResultStatus();
             }
@@ -825,7 +825,7 @@ public class MatchmakingManager
 
             if (result.isSuccess() && result.getSession() != null)
             {
-                log.info("[begin-match] success — status now {}", result.getSession().getStatus());
+                log.debug("[begin-match] success — status now {}", result.getSession().getStatus());
                 session = result.getSession();
                 updateResultStatus();
             }

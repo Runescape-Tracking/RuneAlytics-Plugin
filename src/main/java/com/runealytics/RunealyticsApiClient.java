@@ -61,12 +61,12 @@ public class RunealyticsApiClient
 
         if (token == null || token.isEmpty())
         {
-            log.warn("[XP Batch] Skipping — no verification token in state");
+            log.debug("[XP Batch] Skipping — no verification token in state");
             return;
         }
         if (username == null || username.isEmpty())
         {
-            log.warn("[XP Batch] Skipping — no username in state");
+            log.debug("[XP Batch] Skipping — no username in state");
             return;
         }
         if (xpGains.isEmpty())
@@ -103,7 +103,7 @@ public class RunealyticsApiClient
         String payloadJson = gson.toJson(payload);
         String url         = config.apiUrl() + "/xp/batch";
 
-        log.info("[XP Batch] POST {} | skills={} payload={}", url, xpGains.size(), payloadJson);
+        log.debug("[XP Batch] POST {} | skills={} payload={}", url, xpGains.size(), payloadJson);
 
         RequestBody body    = RequestBody.create(JSON, payloadJson);
         Request     request = new Request.Builder()
@@ -131,7 +131,7 @@ public class RunealyticsApiClient
                 {
                     String body = response.body() != null ? response.body().string() : "";
                     if (response.isSuccessful())
-                        log.info("[XP Batch] OK HTTP {} — {}", response.code(), body);
+                        log.debug("[XP Batch] OK HTTP {} — {}", response.code(), body);
                     else
                         log.warn("[XP Batch] FAILED HTTP {} — {}", response.code(), body);
                 }
@@ -185,7 +185,7 @@ public class RunealyticsApiClient
         String payloadJson = gson.toJson(payload);
         String url         = config.apiUrl() + "/plugin/privacy";
 
-        log.info("[Privacy] POST {} | bank={} player={}", url,
+        log.debug("[Privacy] POST {} | bank={} player={}", url,
                 wireValue(bankPrivacy), wireValue(playerVisibility));
 
         RequestBody body    = RequestBody.create(JSON, payloadJson);
@@ -487,7 +487,7 @@ public class RunealyticsApiClient
             Type                 mapType = new TypeToken<Map<String, Boolean>>() {}.getType();
             Map<String, Boolean> flags   = gson.fromJson(json.get("flags"), mapType);
 
-            log.info("Feature flags received for {}: {}", username, flags);
+            log.debug("Feature flags received for {}: {}", username, flags);
             return flags != null ? flags : new HashMap<>();
         }
         catch (IOException e)
@@ -541,7 +541,7 @@ public class RunealyticsApiClient
         if (!normRsn.isEmpty())
             payload.addProperty("osrs_rsn", normRsn);
 
-        log.info("[VerifyCheck] POST /verify-runelite rsn={}", normRsn);
+        log.debug("[VerifyCheck] POST /verify-runelite rsn={}", normRsn);
 
         RequestBody body    = RequestBody.create(JSON, gson.toJson(payload));
         Request     request = new Request.Builder()
@@ -554,7 +554,7 @@ public class RunealyticsApiClient
         try (Response response = httpClient.newCall(request).execute())
         {
             String responseBody = response.body() != null ? response.body().string() : "";
-            log.info("[VerifyCheck] HTTP {} body={}", response.code(), responseBody);
+            log.debug("[VerifyCheck] HTTP {} body={}", response.code(), responseBody);
             if (response.isSuccessful()) return null;
 
             // Surface the server's own message so the user sees the real reason.
