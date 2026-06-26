@@ -1372,8 +1372,13 @@ public class LootTrackerManager
             try
             {
                 allowSync = true;
-                importFromRuneLiteLootTrackerSilently(username);
+                // Pull the website's data down first so it's the baseline
+                // the RuneLite-import delta diff compares against — otherwise
+                // the diff sees an incomplete local state and either misses
+                // the website's contribution or double-counts once the
+                // website data is merged in afterwards.
                 downloadKillHistoryFromServer();
+                importFromRuneLiteLootTrackerSilently(username);
                 cleanupZeroValueDrops();
                 uploadUnsyncedKills();
                 SwingUtilities.invokeLater(() -> {
