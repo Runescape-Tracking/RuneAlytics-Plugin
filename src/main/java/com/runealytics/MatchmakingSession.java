@@ -9,8 +9,6 @@ public class MatchmakingSession
 
     /**
      * A single compliance issue returned by the server for one player.
-     * The plugin never hard-codes rule logic — it just shows whatever the
-     * server sends back here.
      */
     public static class ValidationIssue
     {
@@ -264,9 +262,9 @@ public class MatchmakingSession
     )
     {
         this.matchCode = matchCode;
-        // Normalise RSNs once here so all the equalsIgnoreCase comparisons below
-        // (local vs player1/player2) are robust against RuneLite's NBSP (U+00A0)
-        // name form vs server forms that use a regular space or underscore.
+        // Normalise RSNs once so the equalsIgnoreCase comparisons below are
+        // robust against RuneLite's NBSP (U+00A0) form versus server forms that
+        // use a regular space or underscore.
         this.localRsn = normalizeRsn(localRsn);
         this.player1Username = normalizeRsn(player1Username);
         this.player2Username = normalizeRsn(player2Username);

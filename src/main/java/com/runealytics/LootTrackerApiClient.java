@@ -24,13 +24,10 @@ import java.util.concurrent.TimeUnit;
 import static com.runealytics.RuneAlyticsHttp.JSON;
 
 /**
- * Thin HTTP client for the loot-related RuneAlytics endpoints.
- *
- * <p>This used to contain a half-dozen overlapping sync methods, each with
- * their own hand-rolled JSON layout. They have been consolidated into one
- * batch upload path ({@link #bulkSyncKills}) plus history download
+ * HTTP client for the loot-related RuneAlytics endpoints: batch upload
+ * ({@link #bulkSyncKills}) and history download
  * ({@link #fetchKillHistoryFromServer}). Payload construction is delegated to
- * {@link LootKillJsonBuilder} so there's a single schema in the codebase.</p>
+ * {@link LootKillJsonBuilder}.
  */
 @Slf4j
 @Singleton
@@ -58,7 +55,7 @@ public class LootTrackerApiClient
         this.itemManager  = itemManager;
         this.clientThread = clientThread;
         // Apply the configured timeout so loot uploads/downloads don't hang on
-        // RuneLite's shared-client defaults (mirrors RunealyticsApiClient).
+        // RuneLite's shared-client defaults.
         this.httpClient = httpClient.newBuilder()
                 .connectTimeout(config.syncTimeout(), TimeUnit.SECONDS)
                 .readTimeout(config.syncTimeout(),    TimeUnit.SECONDS)
@@ -76,9 +73,8 @@ public class LootTrackerApiClient
     /**
      * Uploads a batch of unsynced kills to {@code /loot/bulk-sync}.
      *
-     * <p>NPC id and prestige come from the per-boss {@link LootStorageData.BossKillData}
-     * (kills don't store these themselves), so callers should pass that map
-     * directly from storage rather than rebuilding it.</p>
+     * <p>NPC id and prestige come from the per-boss {@link LootStorageData.BossKillData},
+     * since kills don't store these themselves.</p>
      *
      * @param username    verified RSN
      * @param killsByBoss map of {npcName → kills to sync}
@@ -274,14 +270,10 @@ public class LootTrackerApiClient
         if (skipped > 0)
             log.warn("Skipped {} malformed kill record(s) in history response", skipped);
 
-        // Older uploads (before the price-resolution fix) stored 0 for
-        // noted/charged/untradeable items. Re-resolve locally here, in a
-        // single client-thread hop for the whole history, so historical
-        // server data displays correctly without a server-side backfill.
-        // ItemManager reads through to the client's item cache and must run
-        // on the client thread — this method runs on a background sync
-        // thread, so calling it directly would throw "must be called on
-        // client thread".
+        // Re-resolve GE price / high alch for drops stored as 0 (noted, charged,
+        // or untradeable items). ItemManager reads the client's item cache and
+        // must run on the client thread; this method runs on a background sync
+        // thread, so the whole history is resolved in a single client-thread hop.
         clientThread.invoke(() ->
         {
             for (LootStorageData.BossKillData bossData : result.values())

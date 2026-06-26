@@ -16,9 +16,9 @@ import net.runelite.client.game.ItemManager;
  * do not each carry their own near-identical copy of the conversion code.</p>
  *
  * <p>The "valued" variants additionally embed per-item GE value resolved via
- * {@link ItemValueResolver} so the server doesn't have to lookup prices
+ * {@link ItemValueResolver} so the server doesn't have to look up prices
  * itself, and so untradeable / charged variants (Scythe, Sanguinesti, etc.)
- * count toward the player's reported wealth (issue #5).</p>
+ * count toward the player's reported wealth.</p>
  */
 public final class RuneAlyticsItemJson
 {
@@ -84,7 +84,7 @@ public final class RuneAlyticsItemJson
     /**
      * Same as {@link #fromContainer} but also writes {@code ge_per},
      * {@code total} for every item — including untradeable / charged variants
-     * resolved via {@link ItemValueResolver} (issue #5).
+     * resolved via {@link ItemValueResolver}.
      */
     public static JsonArray fromContainerWithValues(ItemContainer container, ItemManager itemManager)
     {

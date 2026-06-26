@@ -90,14 +90,12 @@ public class LootStorageManager
 
 
     /**
-     * Save current loot data.
+     * Saves current loot data to disk.
      *
-     * <p>Synchronized so it never serialises {@code currentData} while a mutator
-     * ({@link #addKill}, {@link #appendDropsToLastKill}, {@link #mergeServerData}…)
-     * is modifying the same maps on another thread — that race previously caused
-     * {@link java.util.ConcurrentModificationException} / corrupt JSON. The write
-     * is also atomic (temp file + rename) so a crash mid-write can't truncate the
-     * user's loot history.</p>
+     * <p>Synchronized so serialisation never races a mutator
+     * ({@link #addKill}, {@link #appendDropsToLastKill}, {@link #mergeServerData})
+     * on another thread. The write is atomic (temp file + rename) so a crash
+     * mid-write leaves the previous file intact.</p>
      */
     public synchronized void saveData()
     {
@@ -125,9 +123,8 @@ public class LootStorageManager
                 parentDir.mkdirs();
             }
 
-            // Write to a temp file first, then atomically swap it into place so a
-            // crash / disk-full mid-write leaves the previous good file intact
-            // rather than a truncated, unparseable one.
+            // Write to a temp file, then atomically swap it into place so a
+            // crash mid-write leaves the previous good file intact.
             File tmp = new File(file.getParentFile(), file.getName() + ".tmp");
             try (Writer writer = Files.newBufferedWriter(tmp.toPath()))
             {
@@ -143,7 +140,7 @@ public class LootStorageManager
             catch (java.nio.file.AtomicMoveNotSupportedException atomicEx)
             {
                 // Some filesystems don't support atomic moves — fall back to a
-                // plain replace, which is still far safer than writing in place.
+                // plain replace.
                 Files.move(tmp.toPath(), file.toPath(),
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
@@ -157,16 +154,13 @@ public class LootStorageManager
     }
 
     /**
-     * Debounced save — coalesces rapid-fire mutations (e.g. repeated hide/unhide
-     * clicks) into a single disk write 500ms later, off the calling thread.
-     * Use this instead of {@link #saveData()} from UI-thread call sites so a
-     * synchronous file write never blocks the EDT.
+     * Debounced save: coalesces rapid mutations into a single disk write 500ms
+     * later, off the calling thread.
      */
     public synchronized void scheduleSave()
     {
-        // The save executor is shut down on plugin shutDown(). Because this is a
-        // @Singleton that RuneLite reuses across a disable→enable cycle, recreate
-        // it on demand so a later kill doesn't hit a RejectedExecutionException.
+        // Recreate the executor if it was shut down, since this @Singleton is
+        // reused across a disable→enable cycle.
         if (saveExecutor.isShutdown())
             saveExecutor = newSaveExecutor();
 
@@ -250,11 +244,8 @@ public class LootStorageManager
             aggDrop.setDropCount(aggDrop.getDropCount() + 1);
             aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
 
-            // gePrice/highAlch are only seeded above when the entry is first
-            // created — if that first drop had a 0 value (e.g. a legacy
-            // import before the price-resolution fix), every later drop of
-            // the same item kept bumping totalValue while the displayed
-            // per-unit price stayed stuck at 0. Refresh it here too.
+            // gePrice/highAlch are only seeded when the aggregate entry is
+            // created; refresh them here in case the first drop had a 0 value.
             if (aggDrop.getGePrice() <= 0 && drop.getGePrice() > 0)  aggDrop.setGePrice(drop.getGePrice());
             if (aggDrop.getHighAlch() <= 0 && drop.getHighAlch() > 0) aggDrop.setHighAlch(drop.getHighAlch());
         }
@@ -270,8 +261,8 @@ public class LootStorageManager
     /**
      * Appends extra drops to the most recent kill record for {@code npcName}.
      *
-     * <p>Used exclusively for Ring of Wealth auto-collected coins that bypass
-     * {@code ItemSpawned} and would otherwise be silently lost.</p>
+     * <p>Used for Ring of Wealth auto-collected coins that bypass
+     * {@code ItemSpawned}.</p>
      *
      * @param npcName normalised boss name matching the existing storage key
      * @param drops   additional drops to merge into the last kill
@@ -389,20 +380,16 @@ public class LootStorageManager
     }
 
     /**
-     * Merge server data with local data - NEVER overwrite client when client has equal or more kills
-     * CRITICAL: Should ONLY be called during manual sync operations
+     * Merges server data into the in-memory copy. Server kills for a boss are
+     * only added when the server has more kills than the client. Call only
+     * during manual sync operations.
      */
     public synchronized void mergeServerData(Map<String, LootStorageData.BossKillData> serverData)
     {
         log.debug("mergeServerData() called during manual sync");
 
-        // Merge into the LIVE in-memory data. This previously reloaded from disk
-        // unconditionally, which silently discarded any kill recorded in the
-        // last ~500ms that the debounced save thread hadn't flushed yet — manual
-        // sync runs on a different thread, so a kill made just before pressing
-        // sync would be dropped from both the UI and storage and never uploaded.
-        // The in-memory copy is always at least as fresh as disk, so only fall
-        // back to a disk load when nothing has been loaded yet this session.
+        // Merge into the in-memory copy; load from disk only if nothing is
+        // loaded yet this session.
         if (currentData == null)
         {
             currentData = loadData();
@@ -429,7 +416,7 @@ public class LootStorageManager
             // If boss exists locally
             if (localBoss != null)
             {
-                // CRITICAL: Client has equal or MORE kills - DO NOT TOUCH CLIENT DATA
+                // Client has equal or more kills; keep client data.
                 if (localBoss.getKillCount() >= serverBoss.getKillCount())
                 {
                     log.debug("❌ SKIPPING SERVER DATA: {} - Client KC {} >= Server KC {}",
@@ -455,10 +442,7 @@ public class LootStorageManager
                 currentData.getBossKills().put(npcName, localBoss);
             }
 
-            // Per-boss counter — NOT the running cross-boss `killsAdded` total.
-            // Using the global total here previously caused every boss merged
-            // after the first to have its KC overwritten with the server value
-            // even when nothing new was actually merged for it.
+            // Per-boss counter, separate from the running cross-boss killsAdded total.
             int bossKillsAdded = 0;
 
             // Build set of existing kill timestamps and kill numbers (client data)
@@ -471,18 +455,10 @@ public class LootStorageManager
                 existingKillNumbers.add(kill.getKillNumber());
             }
 
-            // Add ONLY new kills from server that we don't have.
-            //
-            // Dedup is by kill timestamp (±1s), which is the canonical key the
-            // server itself uses (it derives kill_time from the upload timestamp
-            // and dedups on kill_time ±1s). The /loot/history endpoint does NOT
-            // return a per-kill number, so every server kill arrives with
-            // killNumber == 0. Using 0 as a dedup key is actively harmful: merged
-            // server kills are stored locally with killNumber 0, so after the
-            // first merge `existingKillNumbers` contains 0 and EVERY subsequent
-            // server kill (also 0) would be wrongly skipped — including genuinely
-            // new ones. Only treat the kill number as a dedup key when it is a
-            // real positive value.
+            // Add only server kills not already present. Dedup is by kill
+            // timestamp (±1s), the key the server uses. The kill number is only
+            // used as a dedup key when it is a real positive value, since
+            // history kills arrive with killNumber 0.
             for (LootStorageData.KillRecord serverKill : serverBoss.getKills())
             {
                 boolean existsByTimestamp = false;
@@ -539,8 +515,8 @@ public class LootStorageManager
                 }
             }
 
-            // Update kill count and prestige from server (only if we merged data
-            // FOR THIS BOSS — see bossKillsAdded note above).
+            // Update kill count and prestige from server only if kills were
+            // merged for this boss.
             if (bossKillsAdded > 0)
             {
                 int originalKillCount = localBoss.getKillCount();
@@ -597,8 +573,6 @@ public class LootStorageManager
 
     /**
      * Flushes any pending save and stops the background save executor.
-     * Called from {@link LootTrackerManager#shutdown()} on plugin shutDown so the
-     * daemon thread doesn't linger and a queued save can't fire post-shutdown.
      */
     public synchronized void shutdown()
     {

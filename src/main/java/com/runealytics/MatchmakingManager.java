@@ -36,16 +36,15 @@ public class MatchmakingManager
     private final MatchmakingApiClient     apiClient;
     private final ScheduledExecutorService executorService;
 
-    // These fields are touched from the client thread (game events) and from the
-    // background executor (OkHttp callbacks), so they are volatile for visibility.
+    // Written from the client thread (game events) and the background executor
+    // (OkHttp callbacks); volatile for cross-thread visibility.
     private volatile MatchmakingSession       session;
     private volatile MatchmakingUpdateListener listener;
 
     /**
-     * Monotonic match epoch. Incremented on every {@link #reset()} and
-     * {@link #loadMatch(String)} so an in-flight executor task started for an old
-     * match can detect (via {@link #isStale(int)}) that the match has changed and
-     * drop its result instead of resurrecting a cancelled/replaced session.
+     * Monotonic match generation, incremented on every {@link #reset()} and
+     * {@link #loadMatch(String)}. In-flight executor tasks check it via
+     * {@link #isStale(int)} and drop results belonging to an old match.
      */
     private volatile int matchGeneration;
 
@@ -62,48 +61,41 @@ public class MatchmakingManager
     private volatile boolean resultReported;
     private volatile boolean itemsReported;
 
-    /** True once we have told the server combat started, so we only report once. */
+    /** True once combat has been reported to the server. */
     private volatile boolean combatReported;
     private volatile boolean combatInFlight;
     private volatile WorldPoint lastRallyPoint;
     private volatile String     lastHintPlayerName;
 
     /**
-     * Minimap target (opponent or rally tile) recomputed once per game tick on
-     * the client thread and read by the overlay's render() each frame. Volatile
-     * for cross-thread visibility (client thread writes, render thread reads).
+     * Minimap target (opponent or rally tile), recomputed once per game tick on
+     * the client thread and read by the overlay each frame. Volatile because the
+     * client thread writes it and the render thread reads it.
      */
     private volatile WorldPoint cachedMinimapTarget;
 
     /**
-     * Current enriched inventory snapshot — updated on every game tick and on
-     * every {@link ItemContainerChanged} event so the server always receives
-     * up-to-date item data for risk/gear validation.
-     *
-     * <p>Uses {@code ge_per}/{@code total} values so the server can compute
-     * the player's total risk without its own price lookup.</p>
+     * Current inventory snapshot, updated on every game tick and on every
+     * {@link ItemContainerChanged} event so outbound calls carry up-to-date
+     * item data for risk/gear validation.
      */
     private volatile JsonArray currentInventorySnapshot;
 
     /**
-     * Current enriched equipment snapshot — includes {@code slot}, {@code id},
-     * {@code qty}, {@code ge_per}, {@code total}.  The {@code slot} field lets
-     * the server identify the weapon slot (3) for gear-rule validation.
+     * Current equipment snapshot. The {@code slot} field lets the server
+     * identify the weapon slot (3) for gear-rule validation.
      */
     private volatile JsonArray currentGearSnapshot;
 
     /**
-     * Ordinal of the local player's active overhead prayer (HeadIcon.ordinal())
-     * or {@code -1} if no overhead is active.  Sent to the server so it can
-     * enforce "No Overheads" rules in real-time without any rule logic in the
-     * plugin.
+     * Ordinal of the local player's active overhead prayer (HeadIcon.ordinal()),
+     * or {@code -1} if none. Sent to the server for "No Overheads" rule checks.
      */
     private volatile int currentOverheadIconOrdinal = -1;
 
     /**
-     * Whether the local player currently has a skull icon (is skulled).
-     * Sent to the server so it can apply the correct OSRS keep-on-death rules
-     * for the informational risk-value display.
+     * Whether the local player currently has a skull icon. Sent to the server
+     * for the keep-on-death risk-value calculation.
      */
     private volatile boolean currentIsSkulled;
 
@@ -137,10 +129,9 @@ public class MatchmakingManager
 
     /**
      * Returns {@code true} if {@code generation} no longer matches the current
-     * {@link #matchGeneration}, i.e. the match was reset or replaced after the
-     * caller captured its epoch. In-flight executor callbacks check this before
-     * mutating {@link #session} or notifying the UI so a stale response can't
-     * resurrect a cancelled match.
+     * {@link #matchGeneration}, i.e. the match was reset or replaced. In-flight
+     * executor callbacks check this before mutating {@link #session} or notifying
+     * the UI.
      */
     private boolean isStale(int generation)
     {
@@ -194,8 +185,8 @@ public class MatchmakingManager
 
         requestInFlight = true;
 
-        // Snapshot captured before kicking off the load so the server gets
-        // an immediate validation result even on the first response.
+        // Snapshot captured before the load so the server can validate on the
+        // first response.
         final int       gen      = matchGeneration;
         final JsonArray inv      = currentInventorySnapshot;
         final JsonArray gear     = currentGearSnapshot;
@@ -237,21 +228,20 @@ public class MatchmakingManager
      */
     public void onGameTick()
     {
-        // Refresh entire player state (inventory, gear, overhead, skull) on the
-        // client thread so every outbound call carries current data.
-        // Safe even when there is no active match.
+        // Refresh player state (inventory, gear, overhead, skull) on the client
+        // thread so every outbound call carries current data. Safe with no
+        // active match.
         refreshPlayerState();
 
-        // Always update the hint arrow regardless of in-flight state so the
-        // arrow is never stale while waiting for a network response to return.
+        // Update the hint arrow every tick so it never goes stale during a
+        // network call.
         if (session != null)
         {
             updateHintArrow();
         }
 
-        // Recompute the minimap target once per tick (on the client thread) and
-        // cache it. The overlay's render() runs every frame and previously
-        // re-scanned client.getPlayers() each time; it now reads this cached value.
+        // Recompute and cache the minimap target once per tick; the overlay
+        // reads the cached value each frame.
         cachedMinimapTarget = computeMinimapTarget();
 
         if (session == null || requestInFlight)
@@ -259,12 +249,7 @@ public class MatchmakingManager
             return;
         }
 
-        // Once the match is over (Completed/Canceled) there is nothing left to
-        // coordinate, so stop ALL server traffic — no polling, accepting,
-        // ready-up, combat or item reports.  The final result already lives in
-        // `session` and is rendered; continuing to talk to the server would be
-        // pointless noise.  (The poll that *discovered* completion set the
-        // terminal status, so we naturally stop on the very next tick.)
+        // Once the match is Completed/Canceled, stop all server traffic.
         if (isMatchCompletedOrCanceled())
         {
             return;
@@ -303,8 +288,8 @@ public class MatchmakingManager
             return;
         }
 
-        // Player state is rebuilt on each tick anyway; calling it here ensures
-        // the next poll fired off-thread has the latest inventory/gear/status.
+        // Rebuild player state so the next off-thread poll has the latest
+        // inventory/gear/status.
         refreshPlayerState();
 
         // Mark gear as changed during a fight so /report-items fires again
@@ -320,21 +305,19 @@ public class MatchmakingManager
      * Called from the plugin's {@code onHitsplatApplied} handler for every
      * hitsplat in the world.  Detects the first real exchange of blows between
      * the two match participants and reports it so the server transitions the
-     * match Ready → Fighting.  Both players merely accepting/readying no longer
-     * starts the fight — only an actual hit does.
+     * match from Ready to Fighting.
      *
-     * <p>Two directions are accepted, each strictly scoped to the opponent so
-     * an NPC or an unrelated player can never trigger the fight:</p>
+     * <p>Two directions are accepted, each scoped to the opponent so an NPC or
+     * an unrelated player cannot trigger the fight:</p>
      * <ul>
-     *   <li><b>We hit the opponent</b> — {@code target == opponent} and the
-     *       hitsplat is ours ({@link Hitsplat#isMine()}).</li>
-     *   <li><b>The opponent hits us</b> — {@code target == localPlayer} and the
-     *       opponent is currently interacting with us, so a third party's
-     *       splat landing on us is ignored.</li>
+     *   <li><b>Local player hits the opponent</b> — {@code target == opponent}
+     *       and the hitsplat is ours ({@link Hitsplat#isMine()}).</li>
+     *   <li><b>Opponent hits the local player</b> — {@code target == localPlayer}
+     *       and the opponent is interacting with the local player.</li>
      * </ul>
      *
-     * <p>Only fires while the match is "Ready" and reports at most once
-     * (retried by a later hit if the report fails).</p>
+     * <p>Only fires while the match is "Ready" and reports at most once;
+     * a later hit retries if the report fails.</p>
      */
     public void onCombatHitsplat(Actor target, Hitsplat hitsplat)
     {
@@ -429,9 +412,8 @@ public class MatchmakingManager
 
     public void reset()
     {
-        // Bump the epoch so any executor task started for the previous match
-        // detects it is stale (isStale) and drops its result instead of
-        // resurrecting this match after it has been cleared/replaced.
+        // Bump the generation so in-flight executor tasks for the old match
+        // drop their results.
         matchGeneration++;
         session                  = null;
         tickCounter              = 0;
@@ -448,8 +430,7 @@ public class MatchmakingManager
         acceptCooldownUntilTick  = 0;
         beginCooldownUntilTick   = 0;
         cachedMinimapTarget      = null;
-        // Keep snapshots — they reflect the player's current state and are
-        // valid across match resets (e.g. New Match).
+        // Keep snapshots — they remain valid across match resets.
         clearHintArrow();
     }
 
@@ -476,10 +457,9 @@ public class MatchmakingManager
             return;
         }
 
-        // RuneLite's Actor.getName() returns names with a non-breaking space
-        // (U+00A0); OSRS profiles often store regular space or underscore.
-        // Normalize ALL three to plain spaces before comparison so the death
-        // is correctly attributed to the right participant.
+        // RuneLite's Actor.getName() uses a non-breaking space (U+00A0) while
+        // OSRS profiles store a regular space or underscore. Normalize before
+        // comparison so the death is attributed to the right participant.
         String deathName = normalizeRsn(player.getName());
         String p1Name    = normalizeRsn(session.getPlayer1Username());
         String p2Name    = normalizeRsn(session.getPlayer2Username());
@@ -563,25 +543,20 @@ public class MatchmakingManager
 
     /**
      * Rebuilds {@link #currentInventorySnapshot} and {@link #currentGearSnapshot}
-     * from the live {@link ItemContainer}s.  Must be called on the client thread.
-     *
-     * <p>The inventory includes {@code ge_per}/{@code total} for risk validation.
-     * The equipment includes {@code slot} (weapon = 3) and {@code ge_per}/{@code total}
-     * for gear-rule validation, both computed via {@link ItemValueResolver}.</p>
+     * from the live {@link ItemContainer}s. Must be called on the client thread.
      */
     private void refreshPlayerState()
     {
         ItemContainer inv   = client.getItemContainer(InventoryID.INVENTORY);
         ItemContainer equip = client.getItemContainer(InventoryID.EQUIPMENT);
 
-        // Lean snapshots — {id, qty} / {slot, id, qty}.  The website prices
-        // every item itself, so the plugin no longer computes GE values here.
+        // Lean snapshots — {id, qty} / {slot, id, qty}; the website prices each
+        // item.
         currentInventorySnapshot = RuneAlyticsItemJson.fromContainer(inv);
         currentGearSnapshot      = RuneAlyticsItemJson.fromEquipment(equip);
 
-        // Overhead prayer, skull, and Protect Item status — captured here
-        // (client thread) so every outbound API call can include them for
-        // server-side gear-rule validation and the risk-value display.
+        // Overhead prayer, skull, and Protect Item status, captured on the
+        // client thread for inclusion in outbound API calls.
         Player local = client.getLocalPlayer();
         if (local != null)
         {
@@ -639,11 +614,8 @@ public class MatchmakingManager
 
             if (isStale(gen)) return;
 
-            // A poll started before the match reached a terminal state can land
-            // after a death report has already completed it. Applying that older
-            // snapshot would overwrite Completed/Canceled with a stale
-            // Ready/Fighting and "un-complete" the match. Once the result is
-            // reported, ignore any straggling poll.
+            // Ignore a straggling poll that lands after the result is reported;
+            // its older snapshot would overwrite the terminal status.
             if (resultReported)
             {
                 requestInFlight = false;
@@ -666,10 +638,8 @@ public class MatchmakingManager
     {
         if (session == null || session.isLocalJoined() || acceptInFlight) return;
 
-        // Honour back-off after a previous failure so we don't slam the server
-        // with one request per tick.  The flag is cleared after the response,
-        // and the natural short-circuit (isLocalJoined()) prevents spam after
-        // success — but we still need this for repeated 4xx/5xx scenarios.
+        // Honour the back-off after a previous failure to avoid one request per
+        // tick.
         if (tickCounter < acceptCooldownUntilTick) return;
 
         String token            = session.getLocalToken();
@@ -720,10 +690,8 @@ public class MatchmakingManager
             }
             else
             {
-                // ALWAYS schedule a retry on failure so a transient error
-                // (422, 5xx, network drop) doesn't permanently latch the
-                // match in "Pending".  Without this back-off + clear, the
-                // first 422 would freeze the state machine forever.
+                // Schedule a retry on failure so a transient error doesn't latch
+                // the match in "Pending".
                 String body = result.getRawResponse();
                 log.warn("[accept] failed — success={} tokenRefresh={} msg='{}' body={}",
                         result.isSuccess(), result.isTokenRefresh(), result.getMessage(),
@@ -731,8 +699,8 @@ public class MatchmakingManager
                 acceptCooldownUntilTick = tickCounter + RETRY_BACKOFF_TICKS;
             }
 
-            // ALWAYS clear the flag — the natural !isLocalJoined() guard
-            // (updated by the next poll) handles the success-no-retry case.
+            // Clear the flag; the !isLocalJoined() guard handles the success
+            // case.
             acceptInFlight = false;
         });
     }
@@ -746,26 +714,21 @@ public class MatchmakingManager
             return;
         }
 
-        // We can only ready-up after BOTH players have joined and the server
-        // has unlocked the match (status=Ready, rally generated).  Bailing
-        // earlier just spams 4xx responses.
+        // Ready-up is only valid after both players have joined and status is
+        // Ready (rally generated).
         if (!session.isLocalJoined()) return;
         if (!statusIs("Ready"))
         {
-            // Still Pending → opponent hasn't accepted yet; wait for the next
-            // poll to flip status to Ready.
+            // Still Pending — opponent hasn't accepted yet; wait for the next
+            // poll.
             return;
         }
 
         if (tickCounter < beginCooldownUntilTick) return;
 
-        // Original behaviour required the player to be physically at the rally
-        // point OR already engaged with the opponent.  That gating was too
-        // restrictive — if neither check ever returned true (rally tolerance
-        // off, opponent not rendered yet, etc.) the status would stay Ready
-        // forever.  Now: once status=Ready and the local player has joined,
-        // we always send /begin-match.  The proximity check is still used as
-        // a hint but never blocks the call.
+        // Once status=Ready and the local player has joined, always send
+        // /begin-match. The proximity check is only a hint and never blocks the
+        // call.
         Player localPlayer = client.getLocalPlayer();
         Player opponent    = (localPlayer != null)
                 ? findPlayerByName(session.getOpponentRsn()) : null;
@@ -958,10 +921,8 @@ public class MatchmakingManager
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Null-safe status check: a server response can carry a session with a null
-     * status, and calling {@code getStatus().equalsIgnoreCase(...)} on it would
-     * NPE on the client thread (onGameTick). Centralised here so every caller is
-     * protected.
+     * Null-safe status check; a server response can carry a session with a null
+     * status.
      */
     private boolean statusIs(String expected)
     {
@@ -1093,10 +1054,8 @@ public class MatchmakingManager
     {
         String target = normalizeRsn(name);
         if (target.isEmpty()) return null;
-        // Use normalized comparison: RuneLite's Actor.getName() returns NBSP
-        // (U+00A0) while server-side RSNs use regular spaces or underscores.
-        // Without this normalization the opponent lookup silently returns null
-        // and the hint arrow / engagement check never fire.
+        // Normalized comparison: RuneLite's Actor.getName() uses NBSP (U+00A0)
+        // while server-side RSNs use regular spaces or underscores.
         for (Player player : client.getPlayers())
         {
             if (player == null) continue;

@@ -154,8 +154,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         scrollContent.setBackground(ColorScheme.DARK_GRAY_COLOR);
         scrollContent.add(bossListPanel, BorderLayout.NORTH);
 
-        // Preferred-size inflation is now suppressed at the JTabbedPane level in
-        // RuneAlyticsPanel (the parent PluginPanel), so no override is needed here.
+        // Preferred-size inflation is handled at the JTabbedPane level in RuneAlyticsPanel.
         scrollPane = new JScrollPane(scrollContent);
         scrollPane.setBorder(null);
         scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -404,7 +403,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         return btn;
     }
 
-    // ── Eye-icon colours (issue #6 — clear ON / OFF indication) ─────────────
+    // ── Eye-icon colours ─────────────
     /** Green: all drops are shown (ignored ones included). */
     private static final Color EYE_BG_ALL_SHOWN  = new Color( 30, 110,  40);
     private static final Color EYE_BORDER_SHOWN  = new Color( 70, 180,  90);
@@ -731,12 +730,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private void rebuildBossCardGrid(String npcName, List<BossKillStats.AggregatedDrop> drops)
     {
-        // Swap ONLY the inner item grid inside the existing wrapper. The previous
-        // version added a brand-new wrapper to the outer card's CENTER, which (a)
-        // displaced the container holding the header row — so the boss name / KC /
-        // value / collapse control vanished the first time a new drop type
-        // appeared — and (b) orphaned the header's collapse listener, which
-        // captures this wrapper instance. Reusing the wrapper keeps both intact.
+        // Swap only the inner item grid inside the existing wrapper, preserving the
+        // header row and its collapse listener (which captures this wrapper instance).
         JPanel gridWrapper = bossGridWrapperMap.get(npcName);
         if (gridWrapper == null) { invalidateFingerprint(); refreshDisplay(); return; }
 
@@ -828,9 +823,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     }
                     catch (Throwable ex)
                     {
-                        // Catch Throwable (not just Exception) so AssertionError
-                        // and other Errors from deep RuneLite APIs are handled
-                        // rather than escaping and leaving refreshing=true forever.
+                        // Catch Throwable so Errors from RuneLite APIs don't leave refreshing=true.
                         log.error("Refresh EDT rebuild failed", ex);
                     }
                     finally

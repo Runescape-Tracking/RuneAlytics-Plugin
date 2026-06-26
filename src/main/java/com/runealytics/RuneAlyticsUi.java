@@ -28,9 +28,8 @@ public final class RuneAlyticsUi
     private static final Color MUTED_TEXT     = new Color(200, 200, 200);
     private static final Color CARD_BORDER    = new Color(60, 60, 60, 180);
 
-    // Hard-code white instead of ColorScheme.TEXT_COLOR — that constant's
-    // exact runtime value varies between RuneLite releases and can render
-    // as blue/cyan, making text unreadable on dark backgrounds.
+    // Hard-coded white; ColorScheme.TEXT_COLOR varies between RuneLite releases
+    // and can render unreadably on dark backgrounds.
     private static final Color LABEL_WHITE    = Color.WHITE;
 
     private static final int CARD_CORNER_RADIUS = 6;

@@ -6,14 +6,8 @@ import com.google.gson.JsonObject;
 import java.util.List;
 
 /**
- * Single source of truth for building the {@code drop} / {@code kill} JSON
- * objects that get POSTed to the RuneAlytics server.
- *
- * <p>Before this class existed the same JSON layout was constructed inline in
- * four different places inside {@link LootTrackerApiClient} — every API change
- * had to be hand-mirrored to all four copies and they had already drifted
- * (e.g. {@code bulkSyncKills} was writing {@code npc_id = kill.getWorld()},
- * which is a bug). All callers should now go through these methods.</p>
+ * Builds the {@code drop} / {@code kill} JSON objects POSTed to the RuneAlytics
+ * server. Central schema shared by all loot upload paths.
  */
 public final class LootKillJsonBuilder
 {
@@ -21,11 +15,8 @@ public final class LootKillJsonBuilder
 
     /**
      * Builds a single {@code DropRecord} JSON object matching the
-     * {@code /loot/*} API schema.
-     *
-     * <p>Items with no resolvable name are still included (using a synthetic
-     * {@code "Item #<id>"} label) so loot is never silently lost just because
-     * the {@code ItemManager} cache hasn't filled the name yet.</p>
+     * {@code /loot/*} API schema. Items with no resolvable name are included
+     * with a synthetic {@code "Item #<id>"} label.
      */
     public static JsonObject buildDrop(LootStorageData.DropRecord drop)
     {
@@ -91,9 +82,8 @@ public final class LootKillJsonBuilder
         payload.addProperty("total_loot_value", totalValue);
         payload.addProperty("drop_count",       dropCount);
 
-        // Optional shared location object, per-kill. Omitted when the kill has
-        // no captured location (older storage records / location unavailable) so
-        // the server's nullable handling and older website code keep working.
+        // Optional per-kill location object. Omitted when the kill has no
+        // captured location.
         PlayerLocationSnapshot location = kill.getLocation();
         if (location != null)
         {

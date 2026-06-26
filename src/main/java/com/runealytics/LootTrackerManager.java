@@ -248,8 +248,8 @@ public class LootTrackerManager
 
     // ═════════════════════════════════════════════════════════════════════════
     //  WIDGET / CONTAINER IDs
-    //  Single source of truth lives in {@link RewardSources}. The legacy
-    //  WIDGET_WHISPERER alias is kept here because RuneAlyticsPlugin still
+    //  Single source of truth lives in {@link RewardSources}. The
+    //  WIDGET_WHISPERER alias is exposed here because RuneAlyticsPlugin
     //  references it via {@code LootTrackerManager.WIDGET_WHISPERER}.
     // ═════════════════════════════════════════════════════════════════════════
     static final int WIDGET_WHISPERER = RewardSources.WIDGET_WHISPERER;
@@ -307,9 +307,8 @@ public class LootTrackerManager
 
     /**
      * Boss containers hidden from the panel entirely. Mirrors {@link #hiddenDrops}
-     * but at the boss-card level (issue: toggle whole containers, not just items).
-     * Display-only — kills/drops for a hidden boss are still recorded and synced,
-     * only client rendering is suppressed.
+     * but at the boss-card level. Display-only — kills/drops for a hidden boss
+     * are still recorded and synced, only client rendering is suppressed.
      */
     private final Set<String> hiddenBosses = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -323,10 +322,9 @@ public class LootTrackerManager
     // ─────────────────────────────────────────────────────────────────────────
     //  LIVE-SYNC DEBOUNCE
     //
-    //  After every kill we kick off a debounced bulk-sync so drops show up on
-    //  the website within a few seconds (issue #2 — the 60-second scheduled
-    //  task was too slow to feel "live").  At most one upload is in flight at
-    //  a time; rapid consecutive kills coalesce into one HTTP call.
+    //  After every kill a debounced bulk-sync is started so drops appear on the
+    //  website within a few seconds. At most one upload is in flight at a time;
+    //  rapid consecutive kills coalesce into one HTTP call.
     // ─────────────────────────────────────────────────────────────────────────
 
     private static final long LIVE_SYNC_DEBOUNCE_MS = 2_500;
@@ -409,9 +407,8 @@ public class LootTrackerManager
         }
 
         // Record the kill even if every drop was filtered out by
-        // minimumLootValue — otherwise the kill counter silently misses every
-        // kill whose loot happened to all be low-value. The bulk-sync path skips
-        // zero-drop kills from server upload, so they stay local-only for KC.
+        // minimumLootValue, so the kill counter stays accurate. Zero-drop kills
+        // stay local-only; the bulk-sync path skips them from server upload.
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
         recordKill(name, npc.getId(), npc.getCombatLevel(), client.getWorld(), drops);
     }
@@ -420,13 +417,10 @@ public class LootTrackerManager
     //  LOOT PATH 1b – ZERO-LOOT NPC KILLS
     //
     //  RuneLite's NpcLootReceived event only fires when the kill produced at
-    //  least one item.  Many NPCs (low-level mobs, some bosses on a dry kill)
-    //  die without dropping anything, which silently dropped the kill from
-    //  every counter that hangs off NpcLootReceived.
-    //
-    //  RuneAlyticsPlugin now also watches ActorDeath + HitsplatApplied to
-    //  detect a "I killed it" event that is independent of loot, and routes
-    //  those kills here so the per-NPC kill count stays accurate.
+    //  least one item. Many NPCs (low-level mobs, some bosses on a dry kill)
+    //  die without dropping anything. RuneAlyticsPlugin watches ActorDeath +
+    //  HitsplatApplied to detect a loot-independent kill and routes those kills
+    //  here so the per-NPC kill count stays accurate.
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
@@ -654,15 +648,12 @@ public class LootTrackerManager
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT PATH 7 – IMPLING / IMP JAR LOOT
     //
-    //  Catching an imp gives the player an impling jar (which is recorded as a
-    //  Hunter skilling drop via the existing path). The actual loot only
-    //  materialises when the player "Loot-jar"s the impling jar, which yields
-    //  no XP — so the generic skilling diff misses it.
-    //
-    //  We expose a dedicated entry point that the plugin calls after detecting
-    //  a "Loot-jar" or "Loot" click on an "* impling jar" item, then diffing
-    //  the inventory. Each impling tier is tracked separately so the user
-    //  sees "Impling: Eclectic" instead of everything bucketing into "Hunter".
+    //  Catching an imp gives an impling jar (recorded as a Hunter skilling
+    //  drop). The loot only materialises when the player loots the jar, which
+    //  yields no XP, so the generic skilling diff misses it. A dedicated entry
+    //  point handles the inventory diff after a "Loot-jar" / "Loot" click on an
+    //  "* impling jar" item. Each impling tier is tracked separately (e.g.
+    //  "Impling: Eclectic").
     // ═════════════════════════════════════════════════════════════════════════
 
     public static final String IMPLING_PREFIX = "Impling: ";
@@ -1039,18 +1030,13 @@ public class LootTrackerManager
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT PATH 5 – GROUND ITEM SPAWN  (ItemSpawned fallback / supplement)
     //
-    //  This path serves two distinct purposes:
-    //    1. SUPPLEMENT: NpcLootReceived already fired for this NPC and the
-    //       ground items are the same drops. We must not record a second kill
-    //       — instead we dedupe against the last kill's drops and append only
-    //       the truly-extra items (e.g. coins added by RoW that bypassed the
-    //       primary event).
-    //    2. FALLBACK: NpcLootReceived did NOT fire (new content RuneLite
-    //       hasn't catalogued yet). The ground items are the only signal we
-    //       have — record them as a fresh kill.
-    //
-    //  Calling {@code processNpcLoot} unconditionally here is what caused
-    //  every Callisto / Vorkath / etc. kill to be counted twice (issue #12).
+    //  This path serves two purposes:
+    //    1. SUPPLEMENT: NpcLootReceived already fired for this NPC with the
+    //       same drops. No second kill is recorded; the items are deduped
+    //       against the last kill's drops and only the extra items are appended
+    //       (e.g. coins added by RoW that bypassed the primary event).
+    //    2. FALLBACK: NpcLootReceived did not fire (new content RuneLite hasn't
+    //       catalogued yet). The ground items are recorded as a fresh kill.
     // ═════════════════════════════════════════════════════════════════════════
 
     public void processGroundItemBatch(NPC npc, List<ItemStack> items)
@@ -1158,17 +1144,10 @@ public class LootTrackerManager
 
 
     /**
-     * The single write path for all loot sources.
-     *
-     * <p>If {@code gameKC} is positive, the local {@link BossKillStats} counter
-     * is synced to {@code gameKC - 1} before the kill is added.</p>
-     *
-     * <p>This intentionally does <b>NOT</b> trigger a server sync.  All server
-     * traffic happens via the 60-second scheduled task
-     * ({@link RuneAlyticsPlugin#syncDataScheduled}) which batches unsynced
-     * kills via {@link #uploadUnsyncedKills()}.  Per-kill syncing was causing
-     * one HTTP call per drop, which would melt the server and rate-limit the
-     * client during long boss sessions.</p>
+     * The single write path for all loot sources. When {@code gameKC} is
+     * positive, the local {@link BossKillStats} counter is synced to
+     * {@code gameKC - 1} before the kill is added. Does not sync to the server;
+     * unsynced kills are uploaded in batches by {@link #uploadUnsyncedKills()}.
      */
     private void recordKill(
             String npcName, int npcId, int combatLevel, int world,
@@ -1203,14 +1182,11 @@ public class LootTrackerManager
         killRecord.setAccountType(state.getCurrentAccountSubtype());
         killRecord.setLocation(location);
 
-        // 5. Update the in-memory UI stats and persistent storage.
-        //    When a kill carries an authoritative game kill count (e.g. the
-        //    Whisperer KC chat message), seed the in-memory counter to
-        //    gameKC - 1 so addKill() lands it exactly on gameKC. Without this
-        //    the panel showed a session-relative count (1, 2, 3…) while storage
-        //    held the real KC, and a later non-gameKC kill would compute its
-        //    number from the wrong base. Only raise the counter (mirrors the
-        //    RuneLite-import path) so a stale/low gameKC can't regress it.
+        // 5. Update the in-memory UI stats and persistent storage. When a kill
+        //    carries an authoritative game kill count (e.g. the Whisperer KC
+        //    chat message), seed the in-memory counter to gameKC - 1 so
+        //    addKill() lands it exactly on gameKC. Only raise the counter so a
+        //    stale/low gameKC can't regress it.
         if (gameKC > 0 && gameKC > stats.getKillCount())
         {
             stats.setKillCount(gameKC - 1);
@@ -1292,13 +1268,12 @@ public class LootTrackerManager
         String username = state.getVerifiedUsername();
         if (username == null) return;
 
-        // Atomically claim the sync slot — closes the check-then-act race where
-        // the scheduled task and a live-sync could both pass canSync() and then
-        // both upload, double-counting on the server.
+        // Atomically claim the sync slot so the scheduled task and a live-sync
+        // can't both upload and double-count on the server.
         if (!state.tryStartSync()) return;
 
-        // Run off the client thread on the shared executor (not a hand-rolled
-        // raw thread) so rapid kills can't spawn unbounded threads.
+        // Run off the client thread on the shared executor so rapid kills can't
+        // spawn unbounded threads.
         executorService.execute(() -> {
             try
             {
@@ -1429,8 +1404,7 @@ public class LootTrackerManager
     {
         LootStorageData data = storageManager.getCurrentData();
 
-        // Always restore the persisted RuneAlytics-specific ignore list
-        // (issue #6 — must survive a restart).
+        // Always restore the persisted RuneAlytics-specific ignore list.
         rehydrateHiddenDrops();
         rehydrateHiddenBosses();
 
@@ -1441,11 +1415,8 @@ public class LootTrackerManager
             return;
         }
 
-        // One single client-thread hop for the whole dataset — calling
-        // clientThread.invoke() per kill record was catastrophically slow
-        // against a large history (e.g. 340 bosses / 164k+ kills) and meant
-        // refreshLootDisplay() never reached the point of populating
-        // bossKillStats or refreshing the panel.
+        // One client-thread hop for the whole dataset; a per-kill hop is too
+        // slow against a large history.
         boolean backfilled = backfillAllMissingDropValues(data);
 
         bossKillStats.clear();
@@ -1483,9 +1454,7 @@ public class LootTrackerManager
             bossKillStats.put(stats.getNpcName(), stats);
         }
 
-        // Persist once, outside the loop, if any drop's value was backfilled —
-        // otherwise items imported before the price-resolution fix (e.g. via
-        // importFromRuneLiteLootTracker) would show 0 value every session.
+        // Persist once, outside the loop, if any drop's value was backfilled.
         if (backfilled)
         {
             log.debug("[Loot] Backfilled missing GE/alch values on legacy drop record(s) — saving");
@@ -1497,18 +1466,11 @@ public class LootTrackerManager
     }
 
     /**
-     * Re-resolves GE price / high alch / total value for every drop across
-     * every boss/kill that was stored as 0 by an older code path (e.g. the
-     * RuneLite loot-tracker import, or a server sync of data uploaded before
-     * the price-resolution fix). Mutates the drop records in place.
+     * Re-resolves GE price / high alch / total value for every drop stored as 0.
+     * Mutates the drop records in place.
      *
-     * <p>Runs the entire scan inside a single {@link ClientThread#invoke}
-     * call rather than one hop per kill — ItemManager's composition/price
-     * lookups read through to the client's item definition cache and must
-     * run on the client thread, but the cross-thread round trip itself is
-     * the expensive part, not the lookup. One hop for the whole history
-     * keeps this from blocking the panel for an extended period against a
-     * large kill log.</p>
+     * <p>Runs the whole scan inside a single {@link ClientThread#invoke} call;
+     * ItemManager's composition/price lookups must run on the client thread.</p>
      *
      * @return true if any drop's value was recomputed
      */
@@ -1551,16 +1513,12 @@ public class LootTrackerManager
                             drop.setTotalValue((long) gePrice * drop.getQuantity());
                             changed[0] = true;
 
-                            // bd.getAggregatedDrops() is a separate persisted
-                            // snapshot (per-item rows the panel reads via
-                            // getStorageDropsForBoss) that was set once from
-                            // whichever drop first created the entry — it
-                            // never picks up later corrections to the
-                            // underlying KillRecord drops, which is why the
-                            // boss-level total could be right while the
-                            // per-item GE/alch values stayed stuck at 0.
-                            // Patch the matching aggregate entry too so it
-                            // matches the now-corrected drop.
+                            // aggregatedDrops is a separate persisted snapshot
+                            // (per-item rows the panel reads via
+                            // getStorageDropsForBoss), seeded from the first
+                            // drop and not updated by later corrections. Patch
+                            // the matching aggregate entry so it matches the
+                            // corrected drop.
                             LootStorageData.AggregatedDrop agg =
                                     bd.getAggregatedDrops() != null
                                             ? bd.getAggregatedDrops().get(drop.getItemId())
@@ -1610,9 +1568,8 @@ public class LootTrackerManager
             drop.setPet(agg.isPet());
 
             // Use zero GE price + zero high-alch as an EDT-safe proxy for
-            // "untradeable" — avoids calling ItemManager.getItemComposition()
-            // which requires the client thread and throws AssertionError from
-            // the EDT (issue with the previous implementation).
+            // "untradeable"; ItemManager.getItemComposition() requires the
+            // client thread and throws from the EDT.
             boolean likelyUntradeable = !agg.isPet()
                     && agg.getGePrice() == 0
                     && agg.getHighAlch() == 0;
@@ -1840,12 +1797,11 @@ public class LootTrackerManager
                 existingKCsByBoss.put(normalizeBossName(entry.getKey()), kcs);
             }
 
-            // ItemManager composition/price lookups read through the client's
-            // item-definition cache and must run on the client thread (they
-            // assert it). This method is invoked off the client thread (panel
-            // executor), so the previous direct calls threw / read unsafely.
-            // Do the whole record-build pass in a single client-thread hop and
-            // block until it finishes (one round trip for the whole file).
+            // ItemManager composition/price lookups read the client's
+            // item-definition cache and must run on the client thread. This
+            // method is invoked off the client thread (panel executor), so the
+            // whole record-build pass runs in a single client-thread hop,
+            // blocking until it finishes.
             final int[] tally = new int[4]; // [0]=imported [1]=dupes [2]=noDrops [3]=bosses
             final String[] importError = { null };
             final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
@@ -1881,9 +1837,8 @@ public class LootTrackerManager
                     int qty    = dropObj.has("qty") ? dropObj.get("qty").getAsInt() : 1;
                     if (itemId <= 0) continue;
 
-                    // Imported records only carry id/qty — resolve name and value
-                    // the same way a live drop does, otherwise every imported
-                    // item shows up with a blank name and 0 GE/alch/total.
+                    // Imported records only carry id/qty — resolve name and
+                    // value the same way a live drop does.
                     ItemComposition comp = itemManager.getItemComposition(itemId);
                     int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, itemId);
                     long totalValue = (long) gePrice * qty;
@@ -1917,12 +1872,11 @@ public class LootTrackerManager
                 killRecord.setTimestamp(System.currentTimeMillis());
                 killRecord.setWorld(0);
                 killRecord.setCombatLevel(0);
-                killRecord.setDrops(drops); // We can just pass the list directly
-                killRecord.setSyncedToServer(false); // Mark for bulk sync later
+                killRecord.setDrops(drops);
+                killRecord.setSyncedToServer(false); // picked up by the next batch
                 killRecord.setGameMode(state.getCurrentGameMode());
                 killRecord.setAccountType(state.getCurrentAccountSubtype());
 
-                // This now matches the BossKillStats.addKill(KillRecord) signature
                 stats.addKill(killRecord);
 
                 storageManager.addKill(bossName, npcId, 0, killNumber, 0, 0, drops);
@@ -2038,8 +1992,7 @@ public class LootTrackerManager
 
     /**
      * Pushes the in-memory hidden-drops map down to {@link LootStorageData} so
-     * it survives a restart.  Independent of RuneLite's own ignore feature
-     * (issue #6 — users wanted a RuneAlytics-specific list, right-click driven).
+     * it survives a restart. Independent of RuneLite's own ignore feature.
      */
     private void persistHiddenDrops()
     {

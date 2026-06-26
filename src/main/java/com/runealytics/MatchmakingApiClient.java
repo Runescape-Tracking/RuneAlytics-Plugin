@@ -43,9 +43,8 @@ public class MatchmakingApiClient
     }
 
     /**
-     * Poll / load a match.  Inventory, gear, overhead prayer, and skull status
-     * are sent on every poll so the server can run real-time validation and
-     * return updated compliance results — zero rule logic lives in the plugin.
+     * Polls or loads a match. Inventory, gear, overhead prayer, and skull status
+     * are sent so the server can validate and return updated compliance results.
      *
      * @param overheadIconOrdinal {@code HeadIcon.ordinal()} of the active
      *                            overhead prayer, or {@code -1} for none.
@@ -117,13 +116,12 @@ public class MatchmakingApiClient
     }
 
     /**
-     * Signals that real combat has started between the two match participants
-     * (a hit landed between the pair).  This is the ONLY call that transitions
-     * the match from Ready → Fighting server-side.  Readying up no longer
-     * starts the fight; only an actual exchange of blows does.
+     * Signals that combat has started between the two match participants. This
+     * is the only call that transitions the match from Ready to Fighting
+     * server-side.
      *
-     * <p>The server treats this idempotently, so it is safe for both clients
-     * to report the same engagement.</p>
+     * <p>The server treats this idempotently, so both clients may report the
+     * same engagement safely.</p>
      */
     public MatchmakingApiResult engageCombat(
             String verificationCode,
@@ -210,15 +208,13 @@ public class MatchmakingApiClient
             boolean isSkulled,
             boolean protectItem)
     {
-        // Lean item data only — {id, qty} / {slot, id, qty}.  The website
-        // prices every item itself so the plugin ships no GE values.
+        // Lean item data — {id, qty} / {slot, id, qty}; the website prices each
+        // item.
         if (inventory != null) payload.add("player_inventory", inventory);
         if (gear      != null) payload.add("player_gear",      gear);
 
-        // ALWAYS send overhead_icon (even -1 = no overhead) so the server
-        // clears stale state when the player turns the prayer off.  Previously
-        // we omitted the field when it was -1, which made the server hold the
-        // last-known value forever.
+        // Always send overhead_icon (even -1 = no overhead) so the server clears
+        // state when the player turns the prayer off.
         payload.addProperty("overhead_icon", overheadIconOrdinal);
         payload.addProperty("is_skulled",    isSkulled);
 
