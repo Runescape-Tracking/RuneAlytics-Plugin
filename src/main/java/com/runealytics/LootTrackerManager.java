@@ -1871,8 +1871,9 @@ public class LootTrackerManager
             String json = new String(java.nio.file.Files.readAllBytes(dataFile.toPath()));
             com.google.gson.JsonArray records = new com.google.gson.JsonParser().parse(json).getAsJsonArray();
 
-            LootStorageData current = storageManager.getCurrentData();
-            if (current == null) current = storageManager.loadData();
+            LootStorageData currentLoaded = storageManager.getCurrentData();
+            if (currentLoaded == null) currentLoaded = storageManager.loadData();
+            final LootStorageData current = currentLoaded;
 
             Map<String, Set<Integer>> existingKCsByBoss = new HashMap<>();
             for (Map.Entry<String, LootStorageData.BossKillData> entry : current.getBossKills().entrySet())
