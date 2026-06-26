@@ -1373,6 +1373,7 @@ public class LootTrackerManager
             {
                 allowSync = true;
                 downloadKillHistoryFromServer();
+                cleanupZeroValueDrops();
                 uploadUnsyncedKills();
                 SwingUtilities.invokeLater(() -> {
                     if (panel != null) panel.showSyncCompleted();
@@ -1538,6 +1539,93 @@ public class LootTrackerManager
             }
         });
         return changed[0];
+    }
+
+    /**
+     * Removes drops that are genuinely worth nothing (zero GE price <em>and</em>
+     * zero high-alch, after a final re-resolve attempt) from persisted storage,
+     * then recomputes each boss's total loot value so the panel's "sort by
+     * value" ordering reflects reality. Pets are never removed — they're kept
+     * regardless of GE value.
+     *
+     * <p>Imports (website sync, RuneLite loot-tracker import) can hand us
+     * drops priced at 0 when the GE lookup raced the item cache or the item
+     * truly has no tradeable value (e.g. junk/quest items). This runs as part
+     * of every sync so the local data — and the resulting boss totals/order —
+     * stay correct without the user having to do anything.</p>
+     */
+    public void cleanupZeroValueDrops()
+    {
+        LootStorageData data = storageManager.getCurrentData();
+        if (data == null || data.getBossKills().isEmpty()) return;
+
+        boolean[] changed = { false };
+
+        clientThread.invoke(() ->
+        {
+            for (LootStorageData.BossKillData bd : data.getBossKills().values())
+            {
+                if (bd.getKills() == null) continue;
+
+                long recomputedTotal = 0;
+
+                for (LootStorageData.KillRecord kr : bd.getKills())
+                {
+                    if (kr.getDrops() == null || kr.getDrops().isEmpty()) continue;
+
+                    Iterator<LootStorageData.DropRecord> it = kr.getDrops().iterator();
+                    while (it.hasNext())
+                    {
+                        LootStorageData.DropRecord drop = it.next();
+                        if (drop.isPet() || drop.getItemId() <= 0) continue;
+
+                        if (drop.getGePrice() <= 0)
+                        {
+                            int gePrice = ItemValueResolver.perItemGeValue(itemManager, drop.getItemId());
+                            if (gePrice > 0)
+                            {
+                                drop.setGePrice(gePrice);
+                                drop.setTotalValue((long) gePrice * drop.getQuantity());
+                            }
+                        }
+                        if (drop.getHighAlch() <= 0)
+                        {
+                            ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
+                            if (comp != null) drop.setHighAlch(comp.getHaPrice());
+                        }
+
+                        if (drop.getGePrice() <= 0 && drop.getHighAlch() <= 0)
+                        {
+                            it.remove();
+                            changed[0] = true;
+                        }
+                    }
+
+                    for (LootStorageData.DropRecord drop : kr.getDrops())
+                        recomputedTotal += drop.getTotalValue();
+                }
+
+                if (bd.getAggregatedDrops() != null)
+                {
+                    boolean removedAgg = bd.getAggregatedDrops().values().removeIf(agg ->
+                            !agg.isPet() && agg.getGePrice() <= 0 && agg.getHighAlch() <= 0);
+                    changed[0] = changed[0] || removedAgg;
+                }
+
+                if (bd.getTotalLootValue() != recomputedTotal)
+                {
+                    bd.setTotalLootValue(recomputedTotal);
+                    changed[0] = true;
+                }
+            }
+        });
+
+        if (changed[0])
+        {
+            log.debug("[Loot] cleanupZeroValueDrops: removed/recomputed zero-value drop(s) — saving");
+            storageManager.scheduleSave();
+            refreshLootDisplay();
+        }
     }
 
     public Map<String, BossKillStats> getBossKillStats()
@@ -1913,6 +2001,7 @@ public class LootTrackerManager
             if (tally[0] > 0)
             {
                 storageManager.saveData();
+                cleanupZeroValueDrops();
                 SwingUtilities.invokeLater(() -> { if (panel != null) panel.refreshDisplay(); });
             }
 
