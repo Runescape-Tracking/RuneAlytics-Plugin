@@ -1542,89 +1542,37 @@ public class LootTrackerManager
     }
 
     /**
-     * Removes drops that are genuinely worth nothing (zero GE price <em>and</em>
-     * zero high-alch, after a final re-resolve attempt) from persisted storage,
-     * then recomputes each boss's total loot value so the panel's "sort by
-     * value" ordering reflects reality. Pets are never removed — they're kept
-     * regardless of GE value.
+     * Hides aggregated drops that are genuinely worth nothing (zero GE price
+     * <em>and</em> zero high-alch, after a final re-resolve attempt) using the
+     * existing per-item hide flag — never deletes anything from storage.
      *
-     * <p>Imports (website sync, RuneLite loot-tracker import) can hand us
-     * drops priced at 0 when the GE lookup raced the item cache or the item
-     * truly has no tradeable value (e.g. junk/quest items). This runs as part
-     * of every sync so the local data — and the resulting boss totals/order —
-     * stay correct without the user having to do anything.</p>
+     * <p>This intentionally never mutates {@code KillRecord}/{@code DropRecord}
+     * history: {@link ClientThread#invoke} only blocks the caller while the
+     * client thread is reachable, and on the very first tick after login (or
+     * if the item/GE price cache hasn't populated yet) {@code ItemManager} can
+     * legitimately return 0 for everything it's asked about. Treating that as
+     * "confirmed worthless" and deleting the underlying drop records would
+     * destroy real kill history on a cache miss, with no way to recover it
+     * (storage is overwritten in place, no backup is kept). Hiding is fully
+     * reversible from the panel and never touches {@code totalLootValue} or
+     * kill history, so a bad resolve has zero blast radius.</p>
      */
     public void cleanupZeroValueDrops()
     {
         LootStorageData data = storageManager.getCurrentData();
         if (data == null || data.getBossKills().isEmpty()) return;
 
-        boolean[] changed = { false };
-
-        clientThread.invoke(() ->
+        for (String npcName : data.getBossKills().keySet())
         {
-            for (LootStorageData.BossKillData bd : data.getBossKills().values())
+            for (BossKillStats.AggregatedDrop drop : getStorageDropsForBoss(npcName))
             {
-                if (bd.getKills() == null) continue;
-
-                long recomputedTotal = 0;
-
-                for (LootStorageData.KillRecord kr : bd.getKills())
+                if (drop.isPet() || drop.getItemId() <= 0) continue;
+                if (isDropHidden(npcName, drop.getItemId())) continue;
+                if (drop.getGePrice() <= 0 && drop.getHighAlchValue() <= 0)
                 {
-                    if (kr.getDrops() == null || kr.getDrops().isEmpty()) continue;
-
-                    Iterator<LootStorageData.DropRecord> it = kr.getDrops().iterator();
-                    while (it.hasNext())
-                    {
-                        LootStorageData.DropRecord drop = it.next();
-                        if (drop.isPet() || drop.getItemId() <= 0) continue;
-
-                        if (drop.getGePrice() <= 0)
-                        {
-                            int gePrice = ItemValueResolver.perItemGeValue(itemManager, drop.getItemId());
-                            if (gePrice > 0)
-                            {
-                                drop.setGePrice(gePrice);
-                                drop.setTotalValue((long) gePrice * drop.getQuantity());
-                            }
-                        }
-                        if (drop.getHighAlch() <= 0)
-                        {
-                            ItemComposition comp = itemManager.getItemComposition(drop.getItemId());
-                            if (comp != null) drop.setHighAlch(comp.getHaPrice());
-                        }
-
-                        if (drop.getGePrice() <= 0 && drop.getHighAlch() <= 0)
-                        {
-                            it.remove();
-                            changed[0] = true;
-                        }
-                    }
-
-                    for (LootStorageData.DropRecord drop : kr.getDrops())
-                        recomputedTotal += drop.getTotalValue();
-                }
-
-                if (bd.getAggregatedDrops() != null)
-                {
-                    boolean removedAgg = bd.getAggregatedDrops().values().removeIf(agg ->
-                            !agg.isPet() && agg.getGePrice() <= 0 && agg.getHighAlch() <= 0);
-                    changed[0] = changed[0] || removedAgg;
-                }
-
-                if (bd.getTotalLootValue() != recomputedTotal)
-                {
-                    bd.setTotalLootValue(recomputedTotal);
-                    changed[0] = true;
+                    hideDropForNpc(npcName, drop.getItemId());
                 }
             }
-        });
-
-        if (changed[0])
-        {
-            log.debug("[Loot] cleanupZeroValueDrops: removed/recomputed zero-value drop(s) — saving");
-            storageManager.scheduleSave();
-            refreshLootDisplay();
         }
     }
 
