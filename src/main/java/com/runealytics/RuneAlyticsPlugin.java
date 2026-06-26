@@ -218,6 +218,16 @@ public class RuneAlyticsPlugin extends Plugin
     private List<ItemStack> inventorySnapshot        = null;
     private boolean         waitingForTemporossLoot  = false;
     private boolean         waitingForWintertodtLoot = false;
+    /**
+     * Absolute expiry time (ms) for the Tempoross / Wintertodt supply-crate
+     * loot wait window. Every other attribution window (boss ground items,
+     * Whisperer, pickpocket, impling jar) is time-bounded in {@link #onGameTick};
+     * these two were not, so a flag that never saw a qualifying inventory gain
+     * stayed set forever and credited the next unrelated inventory increase
+     * (bank withdraw, GE, skilling, another kill) to Tempoross/Wintertodt.
+     */
+    private long            crateLootWaitExpiry      = 0L;
+    private static final long CRATE_LOOT_WINDOW_MS   = 60_000L;
 
     /**
      * True for {@value #WHISPERER_GROUND_ITEM_WINDOW_MS} ms after the Whisperer
@@ -486,9 +496,18 @@ public class RuneAlyticsPlugin extends Plugin
         inventorySnapshot         = null;
         waitingForTemporossLoot   = false;
         waitingForWintertodtLoot  = false;
+        crateLootWaitExpiry       = 0L;
         whispererGroundItemWindow = false;
         whispererKillTime         = null;
         whispererGroundItems.clear();
+        // Cancel any pending debounced Whisperer flush so it can't fire on the
+        // executor after a logout/account switch and process loot against a
+        // stale (or new) session.
+        if (whispererFlushTask != null)
+        {
+            whispererFlushTask.cancel(false);
+            whispererFlushTask = null;
+        }
         groundItemBuffer.clear();
         groundItemFlushScheduled.set(false);
 
@@ -1058,6 +1077,7 @@ public class RuneAlyticsPlugin extends Plugin
             clientThread.invokeLater(() -> {
                 inventorySnapshot       = getCurrentInventory();
                 waitingForTemporossLoot = true;
+                crateLootWaitExpiry     = System.currentTimeMillis() + CRATE_LOOT_WINDOW_MS;
                 log.info("Tempoross: inventory snapshot taken ({} items)", inventorySnapshot.size());
             });
             lastChestSource = "Tempoross";
@@ -1070,6 +1090,7 @@ public class RuneAlyticsPlugin extends Plugin
             clientThread.invokeLater(() -> {
                 inventorySnapshot        = getCurrentInventory();
                 waitingForWintertodtLoot = true;
+                crateLootWaitExpiry      = System.currentTimeMillis() + CRATE_LOOT_WINDOW_MS;
             });
             lastChestSource = "Wintertodt";
             return;
@@ -1233,6 +1254,18 @@ public class RuneAlyticsPlugin extends Plugin
                 whispererGroundItems.clear();
                 whispererKillTime = null;
             }
+        }
+
+        // ── Expire stale Tempoross/Wintertodt crate-loot wait windows ─────────
+        if ((waitingForTemporossLoot || waitingForWintertodtLoot)
+                && System.currentTimeMillis() > crateLootWaitExpiry)
+        {
+            log.debug("Crate-loot wait window expired (Tempoross={}, Wintertodt={})",
+                    waitingForTemporossLoot, waitingForWintertodtLoot);
+            waitingForTemporossLoot  = false;
+            waitingForWintertodtLoot = false;
+            inventorySnapshot        = null;
+            crateLootWaitExpiry      = 0L;
         }
 
         // ── Expire pickpocket attribution window ──────────────────────────────

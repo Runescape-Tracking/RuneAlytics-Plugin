@@ -396,8 +396,17 @@ public class LootStorageManager
     {
         log.debug("mergeServerData() called during manual sync");
 
-        // CRITICAL: Always reload from disk to ensure we have the latest client data
-        currentData = loadData();
+        // Merge into the LIVE in-memory data. This previously reloaded from disk
+        // unconditionally, which silently discarded any kill recorded in the
+        // last ~500ms that the debounced save thread hadn't flushed yet — manual
+        // sync runs on a different thread, so a kill made just before pressing
+        // sync would be dropped from both the UI and storage and never uploaded.
+        // The in-memory copy is always at least as fresh as disk, so only fall
+        // back to a disk load when nothing has been loaded yet this session.
+        if (currentData == null)
+        {
+            currentData = loadData();
+        }
 
         if (currentData == null)
         {

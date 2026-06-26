@@ -639,6 +639,17 @@ public class MatchmakingManager
 
             if (isStale(gen)) return;
 
+            // A poll started before the match reached a terminal state can land
+            // after a death report has already completed it. Applying that older
+            // snapshot would overwrite Completed/Canceled with a stale
+            // Ready/Fighting and "un-complete" the match. Once the result is
+            // reported, ignore any straggling poll.
+            if (resultReported)
+            {
+                requestInFlight = false;
+                return;
+            }
+
             handleResult(result);
 
             if (result.isSuccess() && result.getSession() != null)

@@ -1203,7 +1203,18 @@ public class LootTrackerManager
         killRecord.setAccountType(state.getCurrentAccountSubtype());
         killRecord.setLocation(location);
 
-        // 5. Update the in-memory UI stats and persistent storage
+        // 5. Update the in-memory UI stats and persistent storage.
+        //    When a kill carries an authoritative game kill count (e.g. the
+        //    Whisperer KC chat message), seed the in-memory counter to
+        //    gameKC - 1 so addKill() lands it exactly on gameKC. Without this
+        //    the panel showed a session-relative count (1, 2, 3…) while storage
+        //    held the real KC, and a later non-gameKC kill would compute its
+        //    number from the wrong base. Only raise the counter (mirrors the
+        //    RuneLite-import path) so a stale/low gameKC can't regress it.
+        if (gameKC > 0 && gameKC > stats.getKillCount())
+        {
+            stats.setKillCount(gameKC - 1);
+        }
         stats.addKill(killRecord);
         storageManager.addKill(
                 npcName, npcId, combatLevel, killNumber,
@@ -1829,8 +1840,21 @@ public class LootTrackerManager
                 existingKCsByBoss.put(normalizeBossName(entry.getKey()), kcs);
             }
 
-            int importedKills = 0, skippedDupes = 0, skippedNoDrops = 0, importedBosses = 0;
+            // ItemManager composition/price lookups read through the client's
+            // item-definition cache and must run on the client thread (they
+            // assert it). This method is invoked off the client thread (panel
+            // executor), so the previous direct calls threw / read unsafely.
+            // Do the whole record-build pass in a single client-thread hop and
+            // block until it finishes (one round trip for the whole file).
+            final int[] tally = new int[4]; // [0]=imported [1]=dupes [2]=noDrops [3]=bosses
+            final String[] importError = { null };
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
 
+            clientThread.invoke(() ->
+            {
+            int importedKills = 0, skippedDupes = 0, skippedNoDrops = 0, importedBosses = 0;
+            try
+            {
             for (int i = 0; i < records.size(); i++)
             {
                 com.google.gson.JsonObject rec = records.get(i).getAsJsonObject();
@@ -1907,8 +1931,32 @@ public class LootTrackerManager
                 importedKills++;
                 if (isNewBoss) importedBosses++;
             }
+            }
+            catch (Exception ex)
+            {
+                importError[0] = ex.getMessage();
+                log.error("RuneLite import: record-build pass failed", ex);
+            }
+            finally
+            {
+                tally[0] = importedKills;
+                tally[1] = skippedDupes;
+                tally[2] = skippedNoDrops;
+                tally[3] = importedBosses;
+                latch.countDown();
+            }
+            });
 
-            if (importedKills > 0)
+            if (!latch.await(20, java.util.concurrent.TimeUnit.SECONDS))
+            {
+                return "Import failed: timed out resolving item data — make sure you are logged in, then try again.";
+            }
+            if (importError[0] != null)
+            {
+                return "Import failed: " + importError[0];
+            }
+
+            if (tally[0] > 0)
             {
                 storageManager.saveData();
                 SwingUtilities.invokeLater(() -> { if (panel != null) panel.refreshDisplay(); });
@@ -1921,7 +1969,7 @@ public class LootTrackerManager
                             + "Skipped (dupes) : %d already tracked\n"
                             + "Skipped (empty) : %d had no drop data\n\n"
                             + "Source: %s",
-                    importedKills, importedBosses, skippedDupes, skippedNoDrops,
+                    tally[0], tally[3], tally[1], tally[2],
                     dataFile.getName());
         }
         catch (Exception e)
