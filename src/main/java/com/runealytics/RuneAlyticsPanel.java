@@ -354,8 +354,12 @@ public class RuneAlyticsPanel extends PluginPanel
         int idx = tabbedPane.getSelectedIndex();
         if (idx >= 0)
         {
-            configManager.setConfiguration(CONFIG_GROUP, CONFIG_LAST_TAB, String.valueOf(idx));
-            log.debug("Saved last tab index: {}", idx);
+            // Persist the tab TITLE, not its index. The tab strip changes as
+            // feature flags add/remove tabs (e.g. Matches is hidden when logged
+            // out), so a saved positional index can map to a different tab.
+            String title = tabbedPane.getTitleAt(idx);
+            configManager.setConfiguration(CONFIG_GROUP, CONFIG_LAST_TAB, title);
+            log.debug("Saved last tab: {}", title);
         }
     }
 
@@ -367,21 +371,15 @@ public class RuneAlyticsPanel extends PluginPanel
     {
         SwingUtilities.invokeLater(() -> {
             String saved = configManager.getConfiguration(CONFIG_GROUP, CONFIG_LAST_TAB);
-            if (saved == null) return;
+            if (saved == null || saved.trim().isEmpty()) return;
 
-            try
+            // Look up by title so a currently-hidden tab (or an older numeric
+            // value from a previous build) simply resolves to -1 and is ignored.
+            int idx = tabbedPane.indexOfTab(saved.trim());
+            if (idx >= 0)
             {
-                int idx   = Integer.parseInt(saved.trim());
-                int count = tabbedPane.getTabCount();
-                if (idx >= 0 && idx < count)
-                {
-                    tabbedPane.setSelectedIndex(idx);
-                    log.debug("Restored last tab index: {}", idx);
-                }
-            }
-            catch (NumberFormatException ex)
-            {
-                log.warn("Invalid saved tab index: '{}'", saved);
+                tabbedPane.setSelectedIndex(idx);
+                log.debug("Restored last tab: {}", saved.trim());
             }
         });
     }

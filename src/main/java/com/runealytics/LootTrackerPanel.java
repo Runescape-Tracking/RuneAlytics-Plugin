@@ -88,6 +88,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private final Map<String, JPanel>  bossCardMap       = new ConcurrentHashMap<>();
     private final Map<String, JLabel>  bossValueLabelMap = new ConcurrentHashMap<>();
     private final Map<String, JLabel>  bossNameLabelMap  = new ConcurrentHashMap<>();
+    /** The collapsible grid wrapper for each boss card. Stored so an incremental
+     *  rebuild can swap only the inner item grid and preserve the header row and
+     *  its expand/collapse listener (which captures this exact wrapper). */
+    private final Map<String, JPanel>  bossGridWrapperMap = new ConcurrentHashMap<>();
 
     private final Map<String, javax.swing.Timer> lootDebounceMap = new ConcurrentHashMap<>();
 
@@ -727,20 +731,23 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private void rebuildBossCardGrid(String npcName, List<BossKillStats.AggregatedDrop> drops)
     {
-        JPanel card = bossCardMap.get(npcName);
-        if (card == null) { invalidateFingerprint(); refreshDisplay(); return; }
+        // Swap ONLY the inner item grid inside the existing wrapper. The previous
+        // version added a brand-new wrapper to the outer card's CENTER, which (a)
+        // displaced the container holding the header row — so the boss name / KC /
+        // value / collapse control vanished the first time a new drop type
+        // appeared — and (b) orphaned the header's collapse listener, which
+        // captures this wrapper instance. Reusing the wrapper keeps both intact.
+        JPanel gridWrapper = bossGridWrapperMap.get(npcName);
+        if (gridWrapper == null) { invalidateFingerprint(); refreshDisplay(); return; }
 
         itemSlotMap.keySet().removeIf(k -> k.startsWith(npcName + "_"));
 
         JPanel newGrid = buildItemGrid(drops, npcName);
-        JPanel gridWrapper = new JPanel(new BorderLayout());
-        gridWrapper.setBackground(new Color(28, 28, 28));
+        gridWrapper.removeAll();
         gridWrapper.add(newGrid, BorderLayout.NORTH);
-        gridWrapper.setVisible(bossExpandedState.getOrDefault(npcName, true));
 
-        card.add(gridWrapper, BorderLayout.CENTER);
-        card.revalidate();
-        card.repaint();
+        gridWrapper.revalidate();
+        gridWrapper.repaint();
         bossListPanel.revalidate();
         bossListPanel.repaint();
     }
@@ -795,6 +802,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         bossCardMap.clear();
                         bossValueLabelMap.clear();
                         bossNameLabelMap.clear();
+                        bossGridWrapperMap.clear();
                         lootDebounceMap.values().forEach(javax.swing.Timer::stop);
                         lootDebounceMap.clear();
 
@@ -955,6 +963,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         gridWrapper.setBackground(new Color(28, 28, 28));
         gridWrapper.add(grid, BorderLayout.NORTH);
         gridWrapper.setVisible(bossExpandedState.getOrDefault(npcName, true));
+        bossGridWrapperMap.put(npcName, gridWrapper);
 
         boolean bossHidden = lootManager.isBossHidden(npcName);
         String  bossDisplayName = displayNameFor(npcName);

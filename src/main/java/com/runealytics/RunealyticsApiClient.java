@@ -478,9 +478,9 @@ public class RunealyticsApiClient
             String     body = response.body() != null ? response.body().string() : "";
             JsonObject json = gson.fromJson(body, JsonObject.class);
 
-            if (json == null || !json.has("flags"))
+            if (json == null || !json.has("flags") || !json.get("flags").isJsonObject())
             {
-                log.warn("Feature-flag response missing 'flags' field");
+                log.warn("Feature-flag response missing or invalid 'flags' object");
                 return new HashMap<>();
             }
 
@@ -493,6 +493,13 @@ public class RunealyticsApiClient
         catch (IOException e)
         {
             log.error("Failed to fetch feature flags for {}: {}", username, e.getMessage());
+            return new HashMap<>();
+        }
+        catch (com.google.gson.JsonSyntaxException e)
+        {
+            // Malformed body / unexpected JSON shape must not bubble out of the
+            // 60s feature-flag poll or the login executor task.
+            log.warn("Feature-flag response was not valid JSON for {}: {}", username, e.getMessage());
             return new HashMap<>();
         }
     }

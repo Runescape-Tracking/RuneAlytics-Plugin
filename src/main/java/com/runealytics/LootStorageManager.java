@@ -471,10 +471,20 @@ public class LootStorageManager
                 existingKillNumbers.add(kill.getKillNumber());
             }
 
-            // Add ONLY new kills from server that we don't have
+            // Add ONLY new kills from server that we don't have.
+            //
+            // Dedup is by kill timestamp (±1s), which is the canonical key the
+            // server itself uses (it derives kill_time from the upload timestamp
+            // and dedups on kill_time ±1s). The /loot/history endpoint does NOT
+            // return a per-kill number, so every server kill arrives with
+            // killNumber == 0. Using 0 as a dedup key is actively harmful: merged
+            // server kills are stored locally with killNumber 0, so after the
+            // first merge `existingKillNumbers` contains 0 and EVERY subsequent
+            // server kill (also 0) would be wrongly skipped — including genuinely
+            // new ones. Only treat the kill number as a dedup key when it is a
+            // real positive value.
             for (LootStorageData.KillRecord serverKill : serverBoss.getKills())
             {
-                // Check by both timestamp (±1 second) AND kill number
                 boolean existsByTimestamp = false;
                 for (long existingTs : existingTimestamps)
                 {
@@ -485,7 +495,8 @@ public class LootStorageManager
                     }
                 }
 
-                boolean existsByKillNumber = existingKillNumbers.contains(serverKill.getKillNumber());
+                boolean existsByKillNumber = serverKill.getKillNumber() > 0
+                        && existingKillNumbers.contains(serverKill.getKillNumber());
 
                 // Skip if exists by either method
                 if (existsByTimestamp || existsByKillNumber)
