@@ -69,6 +69,19 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private JButton           syncButton;
     private JLabel            syncStatusLabel;
     private javax.swing.Timer syncResetTimer;
+    /** "Reconcile With RuneLite Tracker" button for the 3-way merge sync. */
+    private JButton           reconcileButton;
+    /** Shown when RuneLite tracker history can't be tied to the current account. */
+    private JPanel            rlHistoryWarningPanel;
+    /** Status panel for account sync / death recovery guard. */
+    private JPanel            syncStatusPanel;
+    /** Label showing the current RuneScape account key and RuneAlytics link status. */
+    private JLabel            accountStatusLabel;
+    /** Banner shown while death recovery suppression is active. */
+    private JPanel            deathRecoveryBanner;
+    private JLabel            deathRecoveryLabel;
+    /** Reference to the plugin — set after construction via {@link #setPlugin}. */
+    private RuneAlyticsPlugin plugin;
     private JButton           filterAllButton;
     private JButton           filterCombatButton;
     private JComboBox<String> skillsCombo;
@@ -318,8 +331,27 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         syncButton.setToolTipText("Sync with RuneLite Loot Tracker & RuneAlytics server");
         syncButton.addActionListener(e -> onSyncClicked());
 
+        // ── "Reconcile" button for 3-way absolute-merge sync ─────────────────
+        reconcileButton = new JButton("Reconcile");
+        reconcileButton.setPreferredSize(new Dimension(75, 24));
+        reconcileButton.setBackground(new Color(45, 65, 45));
+        reconcileButton.setForeground(Color.WHITE);
+        reconcileButton.setFocusPainted(false);
+        reconcileButton.setBorder(BorderFactory.createLineBorder(new Color(60, 100, 60), 1));
+        reconcileButton.setFont(FILTER_FONT);
+        reconcileButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        reconcileButton.setToolTipText(
+                "<html>Reconcile With RuneLite Tracker: merges website totals, plugin local totals,<br>"
+                + "and RuneLite Loot Tracker totals into the highest known absolute values.</html>");
+        reconcileButton.addActionListener(e -> onReconcileClicked());
+
+        JPanel syncBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        syncBtns.setOpaque(false);
+        syncBtns.add(reconcileButton);
+        syncBtns.add(syncButton);
+
         btnRow.add(leftBtns,   BorderLayout.WEST);
-        btnRow.add(syncButton, BorderLayout.EAST);
+        btnRow.add(syncBtns,   BorderLayout.EAST);
         header.add(btnRow);
 
         // ── Sync status line (hidden until a sync completes / fails) ─────────
@@ -1207,4 +1239,145 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 + "Alch: "     + formatGp(drop.getHighAlchValue()) + " ea"
                 + "</html>";
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  NEW: ACCOUNT SYNC STATUS & DEATH RECOVERY GUARD UI
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Injects the plugin reference so the new buttons can call
+     * {@link RuneAlyticsPlugin#performAbsoluteMergeSync()} etc.
+     *
+     * <p>Must be called on the EDT before the panel is first shown.</p>
+     */
+    public void setPlugin(RuneAlyticsPlugin plugin)
+    {
+        this.plugin = plugin;
+    }
+
+    /** Called by the "Reconcile With RuneLite Tracker" button. */
+    private void onReconcileClicked()
+    {
+        if (plugin == null) return;
+        if (reconcileButton != null)
+        {
+            reconcileButton.setEnabled(false);
+            reconcileButton.setBackground(new Color(30, 45, 30));
+            syncStatusLabel.setText("Reconciling…");
+            syncStatusLabel.setForeground(new Color(100, 200, 120));
+        }
+        plugin.performAbsoluteMergeSync();
+    }
+
+    /**
+     * Shows the result of a completed absolute-merge sync in the status area.
+     *
+     * <p>Must be called on the EDT.</p>
+     */
+    public void showAbsoluteMergeResult(LootSyncMergeService.MergeResult result)
+    {
+        if (!SwingUtilities.isEventDispatchThread())
+        {
+            SwingUtilities.invokeLater(() -> showAbsoluteMergeResult(result));
+            return;
+        }
+
+        // Re-enable buttons
+        if (reconcileButton != null) reconcileButton.setEnabled(true);
+
+        if (result.isRuneliteHistorySkipped())
+        {
+            showRuneLiteHistoryWarning();
+        }
+
+        if (result.isSuccess())
+        {
+            String summary = String.format("Merged: %d sources, %d items%s",
+                    result.getSourcesCount(), result.getItemsCount(),
+                    result.isUploadedToWebsite() ? " ✓ uploaded" : " (offline)");
+            syncStatusLabel.setText(summary);
+            syncStatusLabel.setForeground(new Color(100, 200, 120));
+            flashSyncButton(true);
+        }
+        else
+        {
+            showSyncFailed(result.getBlockedReason());
+        }
+    }
+
+    /**
+     * Shows an inline warning that RuneLite Loot Tracker history could not be
+     * safely matched to the current account.
+     */
+    public void showRuneLiteHistoryWarning()
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            if (syncStatusLabel != null)
+            {
+                syncStatusLabel.setText(
+                    "<html><font color='#FFA040'>RuneLite Loot Tracker history could not be safely matched "
+                    + "to this account. Live events only.</font></html>");
+                syncStatusLabel.setForeground(new Color(255, 160, 64));
+            }
+        });
+    }
+
+    /**
+     * Shows a prominent banner when death-recovery suppression is active.
+     *
+     * <p>Must be called on the EDT.</p>
+     *
+     * @param suppressedCount  number of item-gain events suppressed so far
+     */
+    public void showDeathRecoveryActive(int suppressedCount)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            if (syncStatusLabel != null)
+            {
+                syncStatusLabel.setText(
+                    "<html><b><font color='#FF6060'>⚠ Death recovery detected.</font></b> "
+                    + "Item pickups are temporarily ignored ("
+                    + suppressedCount + " suppressed).</html>");
+                syncStatusLabel.setForeground(new Color(255, 100, 100));
+            }
+        });
+    }
+
+    /** Clears the death-recovery banner once recovery mode ends. */
+    public void clearDeathRecoveryBanner()
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            if (syncStatusLabel != null)
+            {
+                syncStatusLabel.setText(" ");
+                syncStatusLabel.setForeground(new Color(0, 0, 0, 0));
+            }
+        });
+    }
+
+    /**
+     * Shows an account-mismatch warning in the sync status area.
+     *
+     * <p>Called by the plugin when {@link CurrentPlayerIdentityService#canSync()}
+     * returns {@code false}.</p>
+     */
+    public void showAccountMismatch(String mismatchMessage)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            if (syncStatusLabel != null)
+            {
+                syncStatusLabel.setText(
+                    "<html><font color='#FF8040'>" + mismatchMessage + "</font></html>");
+                syncStatusLabel.setForeground(new Color(255, 128, 64));
+            }
+            if (reconcileButton != null) reconcileButton.setEnabled(false);
+            if (syncButton != null)      syncButton.setEnabled(false);
+        });
+    }
+
+    private void showRuneLiteHistoryWarningHelper() {}
 }

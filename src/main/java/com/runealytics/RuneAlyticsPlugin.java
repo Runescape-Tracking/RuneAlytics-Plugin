@@ -139,6 +139,9 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private MatchmakingMinimapOverlay matchmakingOverlay;
     @Inject private LiveMapMinimapOverlay     liveMapOverlay;
     @Inject private OverlayManager           overlayManager;
+    @Inject private CurrentPlayerIdentityService currentPlayerIdentity;
+    @Inject private LootSyncMergeService     lootSyncMergeService;
+    @Inject private DeathRecoveryGuard       deathRecoveryGuard;
 
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
@@ -352,6 +355,8 @@ public class RuneAlyticsPlugin extends Plugin
                 injector.getInstance(RuneAlyticsVerificationPanel.class);
 
                 lootTrackerPanel = lootPanel;
+                // Give the panel a reference to this plugin for the new buttons.
+                lootPanel.setPlugin(this);
                 // Sync starts disabled until feature flags confirm it is active
                 lootPanel.setSyncEnabled(false);
 
@@ -538,6 +543,9 @@ public class RuneAlyticsPlugin extends Plugin
     {
         Actor actor = event.getActor();
 
+        // ── Death recovery guard: detect local player death ───────────────────
+        deathRecoveryGuard.onActorDeath(event);
+
         // ── Matchmaking: report player deaths to server ───────────────────────
         if (actor instanceof Player)
         {
@@ -604,6 +612,9 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onWidgetLoaded(WidgetLoaded event)
     {
+        // ── Death recovery guard: detect gravestone / Death's Office UI ───────
+        deathRecoveryGuard.onWidgetLoaded(event);
+
         if (!config.enableLootTracking()) return;
 
         int gid = event.getGroupId();
@@ -711,6 +722,15 @@ public class RuneAlyticsPlugin extends Plugin
 
         clientThread.invokeLater(() ->
         {
+            // ── Death recovery guard: suppressed inventory changes are ignored ─
+            // NpcLootReceived/PlayerLootReceived paths don't need this guard
+            // because they are confirmed kill attributions from RuneLite.
+            if (deathRecoveryGuard.shouldSuppressLootEvent())
+            {
+                log.debug("[death-guard] Inventory diff suppressed during recovery mode");
+                return;
+            }
+
             // ── Equip/unequip detection (must run first) ──────────────────────
             // Find items that just left equipment; their ids are subtracted from
             // every inventory gain below so an unequip isn't mistaken for a drop.
@@ -975,6 +995,9 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onChatMessage(ChatMessage event)
     {
+        // ── Death recovery guard: detect death messages ───────────────────────
+        deathRecoveryGuard.onChatMessage(event);
+
         if (!config.enableLootTracking()) return;
 
         ChatMessageType type = event.getType();
@@ -1124,6 +1147,9 @@ public class RuneAlyticsPlugin extends Plugin
     {
         gameTickCount++;
 
+        // ── Death recovery guard: update region tracking ──────────────────────
+        deathRecoveryGuard.onGameTick();
+
         // ── Matchmaking polling / automation ─────────────────────────────────
         // Runs on the client thread, so inventory/gear reads are safe.
         matchmakingManager.onGameTick();
@@ -1217,6 +1243,9 @@ public class RuneAlyticsPlugin extends Plugin
     {
         GameState gs = event.getGameState();
         log.debug("GameState: {}", gs);
+
+        // ── Death recovery guard: reset on logout/hop ─────────────────────────
+        deathRecoveryGuard.onGameStateChanged(event);
 
         if (gs == GameState.LOGIN_SCREEN)
         {
@@ -1564,9 +1593,64 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     /**
-     * Polls feature flags from the server every 60 seconds while logged in and
-     * verified, keeping the UI consistent with the server state.
+     * Performs the full three-source absolute-merge sync:
+     * website snapshot + plugin local + RuneLite tracker → max-absolute → upload.
+     *
+     * <p>Called by the "Reconcile With RuneLite Tracker" button in the UI.
+     * Runs on the background executor (never the client thread).</p>
      */
+    public void performAbsoluteMergeSync()
+    {
+        executorService.submit(() ->
+        {
+            if (!state.tryStartSync()) return;
+            try
+            {
+                log.debug("[plugin] Starting absolute-merge sync");
+                LootSyncMergeService.MergeResult result = lootSyncMergeService.performMerge();
+
+                SwingUtilities.invokeLater(() ->
+                {
+                    if (lootTrackerPanel != null)
+                    {
+                        if (result.isSuccess())
+                            lootTrackerPanel.showAbsoluteMergeResult(result);
+                        else
+                            lootTrackerPanel.showSyncFailed(result.getBlockedReason());
+                    }
+                });
+            }
+            catch (Exception e)
+            {
+                log.error("[plugin] Absolute-merge sync failed", e);
+                SwingUtilities.invokeLater(() -> {
+                    if (lootTrackerPanel != null)
+                        lootTrackerPanel.showSyncFailed(e.getMessage());
+                });
+            }
+            finally
+            {
+                state.endSync();
+            }
+        });
+    }
+
+    /**
+     * Exposes the DeathRecoveryGuard to the panel UI so the "End Recovery Mode"
+     * button can call it.
+     */
+    public DeathRecoveryGuard getDeathRecoveryGuard()
+    {
+        return deathRecoveryGuard;
+    }
+
+    /**
+     * Exposes the CurrentPlayerIdentityService for panel account-status display.
+     */
+    public CurrentPlayerIdentityService getCurrentPlayerIdentity()
+    {
+        return currentPlayerIdentity;
+    }
     @net.runelite.client.task.Schedule(
             period = 60000,
             unit   = ChronoUnit.MILLIS,
