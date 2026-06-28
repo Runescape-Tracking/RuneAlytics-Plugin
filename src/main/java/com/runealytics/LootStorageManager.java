@@ -572,6 +572,35 @@ public class LootStorageManager
     }
 
     /**
+     * Persists the current account's data to disk immediately (cancelling any
+     * pending debounced save). Call on logout, while
+     * {@link RuneAlyticsState#getVerifiedUsername()} still refers to the account
+     * whose data is in memory, so nothing is lost before {@link #dropCache()}.
+     */
+    public synchronized void flushNow()
+    {
+        if (pendingSave != null && !pendingSave.isDone())
+        {
+            pendingSave.cancel(false);
+            pendingSave = null;
+        }
+        saveData();
+    }
+
+    /**
+     * Drops the in-memory copy so the next {@link #getCurrentData()} reloads the
+     * file for whichever account is logged in now. Prevents one account's loot
+     * from being read/written under another account after a profile switch.
+     *
+     * <p>Does NOT write to disk — callers must {@link #flushNow()} first if the
+     * cached data still needs persisting.</p>
+     */
+    public synchronized void dropCache()
+    {
+        currentData = null;
+    }
+
+    /**
      * Flushes any pending save and stops the background save executor.
      */
     public synchronized void shutdown()

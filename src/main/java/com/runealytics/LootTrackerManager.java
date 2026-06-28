@@ -274,8 +274,13 @@ public class LootTrackerManager
     /** Reference to the UI panel; may be null before first login. */
     private LootTrackerPanel panel;
 
-    /** True after local data has been loaded this session (prevents re-load on hop). */
-    private boolean hasLoadedData = false;
+    /**
+     * Normalized username whose loot is currently loaded into memory + the
+     * panel, or {@code null} when nothing is loaded (startup / after logout).
+     * Tracked instead of a plain boolean so an account switch forces a reload
+     * rather than leaving the previous account's loot on screen.
+     */
+    private String loadedAccount = null;
 
     /**
      * Gate: server sync is only permitted during a manual sync operation.
@@ -1471,10 +1476,46 @@ public class LootTrackerManager
 
     public void loadFromStorage()
     {
-        if (hasLoadedData) { log.debug("Data already loaded this session"); return; }
-        log.debug("Loading local loot data");
+        String username = state.getVerifiedUsername();
+        String norm = (username == null || username.isEmpty()) ? null : username.toLowerCase();
+
+        // Already showing this exact account's data — nothing to do (guards the
+        // repeated local-player spawns within one session).
+        if (norm != null && norm.equals(loadedAccount))
+        {
+            log.debug("Loot data already loaded for '{}'", norm);
+            return;
+        }
+
+        // First load this session, or a different account just logged in: drop
+        // any cached copy belonging to the previous account before reloading so
+        // we never display or sync one account's loot under another.
+        log.debug("Loading local loot data for '{}' (was '{}')", norm, loadedAccount);
+        storageManager.dropCache();
         refreshLootDisplay();
-        hasLoadedData = true;
+        loadedAccount = norm;
+    }
+
+    /**
+     * Clears the in-memory + on-screen loot when the player logs out, so the
+     * panel resets to empty and the next login reloads that account's own data.
+     *
+     * <p>The current account's data is flushed to disk first (while the verified
+     * username still points at it), then the cache is dropped. Safe to call from
+     * the client thread.</p>
+     */
+    public void resetForLogout()
+    {
+        storageManager.flushNow();   // persist the account we're leaving
+        storageManager.dropCache();  // next login reloads the correct file
+
+        bossKillStats.clear();
+        hiddenDrops.clear();
+        hiddenBosses.clear();
+        loadedAccount = null;
+
+        if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
+        log.debug("Loot tracker reset for logout");
     }
 
     private void refreshLootDisplay()

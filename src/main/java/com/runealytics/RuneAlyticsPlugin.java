@@ -1258,6 +1258,11 @@ public class RuneAlyticsPlugin extends Plugin
             // double-upload. Upload-only; runs async so logout isn't delayed.
             performLogoutSyncFlush();
 
+            // Clear the in-memory + on-screen loot so the panel resets to empty
+            // and a different account logging in next can't inherit this
+            // account's loot (which would then sync under the wrong account).
+            lootManager.resetForLogout();
+
             state.setLoggedIn(false);
             // Stop the live-map heartbeat while at the login screen.
             stopHeartbeat();
@@ -2018,6 +2023,11 @@ public class RuneAlyticsPlugin extends Plugin
 
             executorService.submit(() ->
             {
+                // Now that the verified account is known, (re)load that account's
+                // own loot. No-op if the post-spawn load already loaded it; forces
+                // a reload if it had loaded a stale/previous account.
+                lootManager.loadFromStorage();
+
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
                 boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
 
