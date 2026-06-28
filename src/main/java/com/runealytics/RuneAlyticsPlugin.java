@@ -359,8 +359,10 @@ public class RuneAlyticsPlugin extends Plugin
                 lootTrackerPanel = lootPanel;
                 // Give the panel a reference to this plugin for the new buttons.
                 lootPanel.setPlugin(this);
-                // Sync starts disabled until feature flags confirm it is active
-                lootPanel.setSyncEnabled(false);
+                // Sync starts in a neutral "checking…" state until feature flags
+                // confirm whether it is active — never assert it's turned off
+                // before we actually know (it defaults ON for verified players).
+                lootPanel.setSyncChecking();
 
                 // Loot Tracker has no feature gate — local tracking is always available.
                 // Sync availability is controlled separately via setSyncEnabled().
@@ -1267,7 +1269,9 @@ public class RuneAlyticsPlugin extends Plugin
             lastMatchEnabledFlag = null;
 
             matchmakingManager.reset(); // clear any active match on logout
-            if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(false);
+            // Back to the neutral "unknown" state — the next login re-fetches the
+            // flag rather than leaving a stale "turned off" message behind.
+            if (lootTrackerPanel != null) lootTrackerPanel.setSyncChecking();
             SwingUtilities.invokeLater(() -> {
                 mainPanel.showLoggedOutState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
@@ -2015,10 +2019,19 @@ public class RuneAlyticsPlugin extends Plugin
             executorService.submit(() ->
             {
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
+                boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
+
+                // LOGGED_IN fired before verification completed, so its
+                // setSyncEnabled() call was skipped. Apply the loot flag here so
+                // the Sync button reflects reality immediately instead of staying
+                // in its "checking…" state until the next 60s feature poll.
+                lastLootSyncFlag = lootSync;
+                if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
+
                 SwingUtilities.invokeLater(() ->
                 {
                     mainPanel.showMainFeatures(
-                            flags.getOrDefault(FEATURE_LOOT, false),
+                            lootSync,
                             flags.getOrDefault(FEATURE_MATCHES, false));
                     injector.getInstance(MatchmakingPanel.class).refreshLoginState();
                 });

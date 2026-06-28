@@ -624,11 +624,30 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             syncButton.setEnabled(enabled);
             syncButton.setToolTipText(enabled
                     ? "Sync with RuneLite Loot Tracker & RuneAlytics server"
-                    : "Loot syncing is disabled — enable Loot Tracker on RuneAlytics.com");
+                    : "Loot syncing is turned off for this account — enable Loot Tracker on RuneAlytics.com");
             syncButton.setBackground(enabled ? new Color(40, 60, 90) : new Color(35, 35, 35));
             syncButton.setForeground(enabled ? Color.WHITE : new Color(100, 100, 100));
             syncButton.setBorder(BorderFactory.createLineBorder(
                     enabled ? new Color(60, 90, 130) : new Color(55, 55, 55), 1));
+        });
+    }
+
+    /**
+     * Neutral pre-load state for the Sync button: disabled and greyed out, but
+     * without claiming loot sync is turned off. Used before the server feature
+     * flags have been fetched (startup / pre-verification) so the tooltip never
+     * misleads users into thinking they must go enable a feature that is on by
+     * default.
+     */
+    public void setSyncChecking()
+    {
+        SwingUtilities.invokeLater(() -> {
+            if (syncButton == null) return;
+            syncButton.setEnabled(false);
+            syncButton.setToolTipText("Checking loot sync availability…");
+            syncButton.setBackground(new Color(35, 35, 35));
+            syncButton.setForeground(new Color(100, 100, 100));
+            syncButton.setBorder(BorderFactory.createLineBorder(new Color(55, 55, 55), 1));
         });
     }
 
