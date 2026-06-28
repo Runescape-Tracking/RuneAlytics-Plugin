@@ -69,8 +69,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private JButton           syncButton;
     private JLabel            syncStatusLabel;
     private javax.swing.Timer syncResetTimer;
-    /** "Reconcile With RuneLite Tracker" button for the 3-way merge sync. */
-    private JButton           reconcileButton;
     /** Shown when RuneLite tracker history can't be tied to the current account. */
     private JPanel            rlHistoryWarningPanel;
     /** Status panel for account sync / death recovery guard. */
@@ -319,39 +317,28 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         header.add(iconBtnRow);
         header.add(Box.createVerticalStrut(4));
 
-        // ── Sync buttons row: [Reconcile ──────────────────] [Sync] ─────────
-        // Two action buttons on their own row so neither is crowded.
-        JPanel syncBtnRow = new JPanel(new BorderLayout(4, 0));
+        // ── Sync row: one full-width button that reconciles + syncs ──────────
+        // Sync now performs the complete reconcile (website + plugin + RuneLite
+        // tracker → max-absolute) and upload in a single action.
+        JPanel syncBtnRow = new JPanel(new BorderLayout(0, 0));
         syncBtnRow.setOpaque(false);
         syncBtnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         syncBtnRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        // ── "Reconcile" button — stretches to fill remaining width ───────────
-        reconcileButton = new JButton("Reconcile");
-        reconcileButton.setBackground(new Color(45, 65, 45));
-        reconcileButton.setForeground(Color.WHITE);
-        reconcileButton.setFocusPainted(false);
-        reconcileButton.setBorder(BorderFactory.createLineBorder(new Color(60, 100, 60), 1));
-        reconcileButton.setFont(FILTER_FONT);
-        reconcileButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        reconcileButton.setToolTipText(
-                "<html>Reconcile: merges website totals, plugin local totals,<br>"
-                + "and RuneLite Loot Tracker totals into the highest known absolute values.</html>");
-        reconcileButton.addActionListener(e -> onReconcileClicked());
-
         syncButton = new JButton("Sync");
-        syncButton.setPreferredSize(new Dimension(52, 24));
         syncButton.setBackground(new Color(40, 60, 90));
         syncButton.setForeground(Color.WHITE);
         syncButton.setFocusPainted(false);
         syncButton.setBorder(BorderFactory.createLineBorder(new Color(60, 90, 130), 1));
         syncButton.setFont(FILTER_FONT);
         syncButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        syncButton.setToolTipText("Sync with RuneLite Loot Tracker & RuneAlytics server");
+        syncButton.setToolTipText(
+                "<html>Sync &amp; reconcile loot: merges RuneAlytics website totals, plugin local<br>"
+                + "totals, and RuneLite Loot Tracker totals into the highest known values,<br>"
+                + "then uploads them for the account you're logged into.</html>");
         syncButton.addActionListener(e -> onSyncClicked());
 
-        syncBtnRow.add(reconcileButton, BorderLayout.CENTER);
-        syncBtnRow.add(syncButton,      BorderLayout.EAST);
+        syncBtnRow.add(syncButton, BorderLayout.CENTER);
         header.add(syncBtnRow);
 
         // ── Sync status line (hidden until a sync completes / fails) ─────────
@@ -585,6 +572,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             return;
         }
 
+        if (plugin == null)
+        {
+            log.warn("onSyncClicked: plugin reference not set, cannot sync");
+            return;
+        }
+
         lastSyncTime = System.currentTimeMillis();
         syncButton.setEnabled(false);
         syncButton.setText("⟳ Sync…");
@@ -592,7 +585,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         syncButton.setBorder(BorderFactory.createLineBorder(new Color(80, 120, 180), 1));
         syncStatusLabel.setText("Syncing…");
         syncStatusLabel.setForeground(new Color(100, 160, 220));
-        lootManager.performManualSync(username);
+        plugin.performLootSync(true);
     }
 
     public void showSyncCompleted()
@@ -1245,28 +1238,14 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Injects the plugin reference so the new buttons can call
-     * {@link RuneAlyticsPlugin#performAbsoluteMergeSync()} etc.
+     * Injects the plugin reference so the Sync button can call
+     * {@link RuneAlyticsPlugin#performLootSync(boolean)}.
      *
      * <p>Must be called on the EDT before the panel is first shown.</p>
      */
     public void setPlugin(RuneAlyticsPlugin plugin)
     {
         this.plugin = plugin;
-    }
-
-    /** Called by the "Reconcile With RuneLite Tracker" button. */
-    private void onReconcileClicked()
-    {
-        if (plugin == null) return;
-        if (reconcileButton != null)
-        {
-            reconcileButton.setEnabled(false);
-            reconcileButton.setBackground(new Color(30, 45, 30));
-            syncStatusLabel.setText("Reconciling…");
-            syncStatusLabel.setForeground(new Color(100, 200, 120));
-        }
-        plugin.performAbsoluteMergeSync();
     }
 
     /**
@@ -1281,9 +1260,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             SwingUtilities.invokeLater(() -> showAbsoluteMergeResult(result));
             return;
         }
-
-        // Re-enable buttons
-        if (reconcileButton != null) reconcileButton.setEnabled(true);
 
         if (result.isRuneliteHistorySkipped())
         {
@@ -1374,10 +1350,16 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     "<html><font color='#FF8040'>" + mismatchMessage + "</font></html>");
                 syncStatusLabel.setForeground(new Color(255, 128, 64));
             }
-            if (reconcileButton != null) reconcileButton.setEnabled(false);
-            if (syncButton != null)      syncButton.setEnabled(false);
+            if (syncResetTimer != null) syncResetTimer.stop();
+            if (syncButton != null)
+            {
+                // Restore the label/colour but leave it disabled — the feature
+                // flag poll re-enables it once the accounts match again.
+                syncButton.setText("Sync");
+                syncButton.setBackground(new Color(40, 60, 90));
+                syncButton.setBorder(BorderFactory.createLineBorder(new Color(60, 90, 130), 1));
+                syncButton.setEnabled(false);
+            }
         });
     }
-
-    private void showRuneLiteHistoryWarningHelper() {}
 }

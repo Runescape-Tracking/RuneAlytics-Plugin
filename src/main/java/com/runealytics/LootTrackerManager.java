@@ -1247,6 +1247,19 @@ public class LootTrackerManager
         if (username == null) return;
         if (!state.tryStartSync()) return;
 
+        try            { downloadHistoryBlocking(username); }
+        finally        { state.endSync(); }
+    }
+
+    /**
+     * Blocking, slot-free download of server kill history for {@code username}
+     * into local storage. The caller is responsible for holding the sync slot
+     * (so this never races a concurrent upload) and for scoping
+     * {@code username} to the currently logged-in account.
+     */
+    void downloadHistoryBlocking(String username)
+    {
+        if (username == null || username.isEmpty()) return;
         try
         {
             Map<String, LootStorageData.BossKillData> serverData =
@@ -1256,11 +1269,10 @@ public class LootTrackerManager
             {
                 storageManager.mergeServerData(serverData);
                 refreshLootDisplay();
-                log.debug("Merged {} bosses from server", serverData.size());
+                log.debug("Merged {} bosses from server for {}", serverData.size(), username);
             }
         }
         catch (Exception e) { log.error("Failed to download kill history", e); }
-        finally             { state.endSync(); }
     }
 
     public void uploadUnsyncedKills()
@@ -1275,64 +1287,94 @@ public class LootTrackerManager
         // Run off the client thread on the shared executor so rapid kills can't
         // spawn unbounded threads.
         executorService.execute(() -> {
-            try
+            try     { uploadUnsyncedKillsBlocking(username); }
+            finally { state.endSync(); }
+        });
+    }
+
+    /**
+     * Blocking, slot-free batch upload of all unsynced kills for
+     * {@code username}. The caller MUST already hold the sync slot (via
+     * {@link RuneAlyticsState#tryStartSync()}) so this never double-uploads
+     * alongside a live sync. Runs inline on the calling (background) thread.
+     */
+    void uploadUnsyncedKillsBlocking(String username)
+    {
+        if (username == null || username.isEmpty()) return;
+        try
+        {
+            Map<String, List<LootStorageData.KillRecord>> unsynced =
+                    storageManager.getAllUnsyncedKills();
+
+            if (unsynced.isEmpty()) return;
+
+            int total = unsynced.values().stream().mapToInt(List::size).sum();
+            log.debug("Uploading {} unsynced kills across {} bosses", total, unsynced.size());
+
+            final int BATCH_SIZE = 50;
+            List<LootStorageData.KillRecord> batchBuffer = new ArrayList<>();
+            Map<String, List<LootStorageData.KillRecord>> currentBatchMap = new HashMap<>();
+
+            // Iterate by boss directly to avoid building large temporary maps
+            for (Map.Entry<String, List<LootStorageData.KillRecord>> entry : unsynced.entrySet())
             {
-                Map<String, List<LootStorageData.KillRecord>> unsynced =
-                        storageManager.getAllUnsyncedKills();
+                String bossName = entry.getKey();
+                List<LootStorageData.KillRecord> kills = new ArrayList<>(entry.getValue());
 
-                if (unsynced.isEmpty()) return;
-
-                int total = unsynced.values().stream().mapToInt(List::size).sum();
-                log.debug("Uploading {} unsynced kills across {} bosses", total, unsynced.size());
-
-                final int BATCH_SIZE = 50;
-                List<LootStorageData.KillRecord> batchBuffer = new ArrayList<>();
-                Map<String, List<LootStorageData.KillRecord>> currentBatchMap = new HashMap<>();
-
-                // Iterate by boss directly to avoid building large temporary maps
-                for (Map.Entry<String, List<LootStorageData.KillRecord>> entry : unsynced.entrySet())
+                for (LootStorageData.KillRecord kill : kills)
                 {
-                    String bossName = entry.getKey();
-                    List<LootStorageData.KillRecord> kills = new ArrayList<>(entry.getValue());
+                    currentBatchMap.computeIfAbsent(bossName, k -> new ArrayList<>()).add(kill);
+                    batchBuffer.add(kill);
 
-                    for (LootStorageData.KillRecord kill : kills)
+                    // When batch reaches limit, sync it
+                    if (batchBuffer.size() >= BATCH_SIZE)
                     {
-                        currentBatchMap.computeIfAbsent(bossName, k -> new ArrayList<>()).add(kill);
-                        batchBuffer.add(kill);
-
-                        // When batch reaches limit, sync it
-                        if (batchBuffer.size() >= BATCH_SIZE)
-                        {
-                            processBatch(username, currentBatchMap);
-                            batchBuffer.clear();
-                            currentBatchMap.clear();
-                            Thread.sleep(500); // Safe to sleep on background thread
-                        }
+                        processBatch(username, currentBatchMap);
+                        batchBuffer.clear();
+                        currentBatchMap.clear();
+                        Thread.sleep(500); // Safe to sleep on background thread
                     }
                 }
+            }
 
-                // Sync any remaining kills in the final partial batch
-                if (!batchBuffer.isEmpty())
-                {
-                    processBatch(username, currentBatchMap);
-                }
-            }
-            catch (Exception e)
+            // Sync any remaining kills in the final partial batch
+            if (!batchBuffer.isEmpty())
             {
-                log.error("Upload unsynced kills failed", e);
+                processBatch(username, currentBatchMap);
             }
-            finally
+        }
+        catch (Exception e)
+        {
+            log.error("Upload unsynced kills failed", e);
+        }
+        finally
+        {
+            // Trigger a UI refresh if the panel is open
+            if (panel != null)
             {
-                // Ensure the sync state is released so the user can sync again
-                state.endSync();
+                SwingUtilities.invokeLater(() -> panel.refreshDisplay());
+            }
+        }
+    }
 
-                // Trigger a UI refresh if the panel is open
-                if (panel != null)
-                {
-                    SwingUtilities.invokeLater(() -> panel.refreshDisplay());
-                }
-            }
-        });
+    /**
+     * Runs the legacy loot sync steps inline (pull history + import RuneLite +
+     * cleanup + upload kills), scoped to {@code username}. The caller MUST hold
+     * the sync slot. When {@code pull} is {@code false} (e.g. a logout flush)
+     * the download/import steps are skipped and only the upload runs, keeping
+     * the operation fast.
+     */
+    public void syncLegacyBlocking(String username, boolean pull)
+    {
+        if (username == null || username.isEmpty()) return;
+
+        if (pull)
+        {
+            downloadHistoryBlocking(username);
+            importFromRuneLiteLootTrackerSilently(username);
+            cleanupZeroValueDrops();
+        }
+        uploadUnsyncedKillsBlocking(username);
     }
 
     /**

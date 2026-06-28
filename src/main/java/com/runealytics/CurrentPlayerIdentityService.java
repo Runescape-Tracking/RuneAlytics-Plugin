@@ -46,6 +46,14 @@ public class CurrentPlayerIdentityService
     private final Client           client;
     private final RuneAlyticsState state;
 
+    /**
+     * The last non-null normalized account name observed while logged in.
+     * Captured on the client thread via {@link #rememberCurrentPlayer()} so it
+     * survives the logout transition (when {@code getLocalPlayer()} is already
+     * null) and can scope a logout-time flush sync.
+     */
+    private volatile String lastKnownAccountKey;
+
     @Inject
     public CurrentPlayerIdentityService(Client client, RuneAlyticsState state)
     {
@@ -68,6 +76,40 @@ public class CurrentPlayerIdentityService
         if (name == null || name.isEmpty()) return null;
 
         return normalizeUsername(name);
+    }
+
+    /**
+     * Caches the current player's normalized name as the last-known account.
+     *
+     * <p>MUST be called on the client thread (reads live client state). Safe to
+     * call repeatedly — it is a no-op when no player is rendered.</p>
+     */
+    public void rememberCurrentPlayer()
+    {
+        String current = getCurrentNormalizedUsername();
+        if (current != null) lastKnownAccountKey = current;
+    }
+
+    /**
+     * Returns the last account that was seen logged in, or {@code null} if none
+     * has been observed this session. Useful for a logout flush, when the live
+     * player is already gone.
+     */
+    public String getLastKnownAccountKey()
+    {
+        return lastKnownAccountKey;
+    }
+
+    /**
+     * Returns {@code true} when {@code accountKey} is the RuneAlytics-linked
+     * account (or when no account is linked yet). Used to guard a logout flush
+     * against pushing one account's data under another's link.
+     */
+    public boolean isLinkedAccount(String accountKey)
+    {
+        if (accountKey == null) return false;
+        String linkedName = getLinkedNormalizedUsername();
+        return linkedName == null || linkedName.isEmpty() || linkedName.equals(accountKey);
     }
 
     /**

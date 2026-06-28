@@ -16,57 +16,51 @@ import java.util.*;
  * Reads RuneLite's default Loot Tracker data and returns per-source,
  * per-item absolute quantity totals for the currently logged-in account.
  *
- * <h2>Critical account-scoping limitation</h2>
- * <p>RuneLite's {@code profiles2/*.properties} files do not contain a field
- * that reliably maps a profile ID to a RuneScape display name.  We attempt
- * to read a {@code profile.name} or {@code runelite.profile.name} property
- * from each file; when found, we filter to the profile whose name matches
- * the current account.  When no profile-name property can be found, we
- * {@code SKIP} that file entirely rather than importing unknown data.</p>
- *
- * <p>If no profile with a matching name is found, {@link #canImportHistorical()}
- * returns {@code false} and the caller should show the UI warning defined in
- * Part 9 of the specification.  Forward-sync via live {@code LootReceived}
- * events is always safe and is unaffected by this limitation.</p>
- *
- * <h2>How to use</h2>
+ * <h2>How RuneLite stores loot (and why account scoping matters)</h2>
+ * <p>RuneLite keeps all per-account ("RS profile") data inside the shared
+ * {@code profiles2/*.properties} files using keys of the form:</p>
  * <pre>
- * DefaultRuneLiteLootTrackerReader reader = ...;
- * if (reader.canImportHistorical()) {
- *     Map&lt;String, Map&lt;Integer, Integer&gt;&gt; loot = reader.readForAccount(username);
- *     // merge loot into plugin state
- * } else {
- *     // show UI warning, use live LootReceived events only
- * }
+ *   loottracker.rsprofile.&lt;RSPROFILE_KEY&gt;.drops_&lt;TYPE&gt;_&lt;NAME&gt; = { ...json... }
  * </pre>
+ * <p>where {@code <RSPROFILE_KEY>} (e.g. {@code "Ro2U8NV6"}) identifies one RS
+ * account. A single file therefore contains the loot of <em>every</em> account
+ * that has ever logged in on this installation. The mapping from an
+ * {@code <RSPROFILE_KEY>} to its RuneScape display name is stored alongside as:</p>
+ * <pre>
+ *   rsprofile.rsprofile.&lt;RSPROFILE_KEY&gt;.displayName = Zezima
+ * </pre>
+ *
+ * <p>To avoid importing other accounts' loot, this reader:</p>
+ * <ol>
+ *   <li>Builds a {@code <RSPROFILE_KEY> → normalizedDisplayName} map from every
+ *       {@code rsprofile.rsprofile.*.displayName} property it can find.</li>
+ *   <li>Resolves the {@code <RSPROFILE_KEY>}(s) whose display name matches the
+ *       currently logged-in account.</li>
+ *   <li>Reads <b>only</b> the {@code loottracker.rsprofile.<that key>.drops_*}
+ *       entries — every other account's loot is ignored.</li>
+ * </ol>
+ *
+ * <p>When the current account has no identifiable RS-profile key (e.g. RuneLite
+ * never recorded a display name for it), nothing is imported and the caller
+ * should show the "history could not be matched" warning. Forward-sync via live
+ * {@code LootReceived} events is always safe and unaffected by this limitation.</p>
  *
  * <h2>Data format</h2>
  * <p>Returns a {@code Map<sourceName, Map<itemId, totalQuantity>>} where
- * {@code totalQuantity} is the <em>absolute</em> total that RuneLite's tracker
- * has recorded.  These values must be treated as absolute totals, never as
- * incremental new drops.</p>
+ * {@code totalQuantity} is the <em>absolute</em> total RuneLite has recorded.
+ * These values must be treated as absolute totals, never as incremental drops.</p>
  */
 @Slf4j
 @Singleton
 public class DefaultRuneLiteLootTrackerReader
 {
-    /**
-     * Property keys we search in each .properties profile file to identify
-     * the account associated with that profile.
-     *
-     * RuneLite does not commit to a stable key for this, so we try several
-     * candidates in order.  If none matches, the profile is skipped.
-     */
-    private static final String[] PROFILE_NAME_KEYS = {
-        "profile.name",
-        "runelite.profile.name",
-        "rsprofile.name",
-        "runelite.rsprofile.displayName",
-    };
-
-    /** Prefix for RuneLite Loot Tracker entries in profile .properties files. */
+    /** Loot entries: {@code loottracker.rsprofile.<KEY>.drops_<TYPE>_<NAME>}. */
     private static final String LOOT_KEY_PREFIX = "loottracker.rsprofile.";
     private static final String DROPS_INFIX     = ".drops_";
+
+    /** Account-name mapping: {@code rsprofile.rsprofile.<KEY>.displayName}. */
+    private static final String RSPROFILE_KEY_PREFIX = "rsprofile.rsprofile.";
+    private static final String DISPLAY_NAME_SUFFIX  = ".displayName";
 
     @Inject
     public DefaultRuneLiteLootTrackerReader() {}
@@ -74,38 +68,29 @@ public class DefaultRuneLiteLootTrackerReader
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Returns {@code true} if at least one {@code profiles2/*.properties} file
-     * with an identifiable profile name exists.  When {@code false}, callers
-     * must NOT import historical RuneLite Loot Tracker data and should show the
-     * UI warning described in Part 9 of the specification.
+     * Returns {@code true} when at least one RS-profile display name can be read
+     * from the {@code profiles2} files — i.e. RuneLite has tagged accounts and
+     * we are able to scope loot per account. When {@code false}, callers must
+     * NOT import historical RuneLite loot and should rely on live events.
      */
     public boolean canImportHistorical()
     {
-        File profiles2 = new File(RuneLite.RUNELITE_DIR, "profiles2");
-        if (!profiles2.isDirectory()) return false;
-
-        File[] files = profiles2.listFiles(f -> f.isFile() && f.getName().endsWith(".properties"));
-        if (files == null || files.length == 0) return false;
-
-        for (File f : files)
+        for (File f : listProfileFiles())
         {
-            if (readProfileName(f) != null) return true;
+            if (!readProfileKeyToAccount(loadProperties(f)).isEmpty()) return true;
         }
-
         return false;
     }
 
     /**
-     * Reads RuneLite Loot Tracker absolute totals for the given account.
+     * Reads RuneLite Loot Tracker absolute totals for {@code accountKey}.
      *
-     * <p>Only profiles whose identified name matches
-     * {@link CurrentPlayerIdentityService#normalizeUsername(String) normalizeUsername(accountKey)}
-     * are imported.  Profiles without a readable name are silently skipped
-     * (the caller should check {@link #canImportHistorical()} first).</p>
+     * <p>Only loot stored under the RS-profile key(s) whose display name matches
+     * {@code accountKey} is returned. All other accounts' loot is ignored.</p>
      *
      * @param  accountKey  normalized RuneScape username, e.g. {@code "zezima"}
-     * @return map of {sourceName → {itemId → absoluteQuantity}}.
-     *         Returns an empty map — never null — when no matching data exists.
+     * @return map of {sourceName → {itemId → absoluteQuantity}};
+     *         empty (never null) when no matching data exists
      */
     public Map<String, Map<Integer, Long>> readForAccount(String accountKey)
     {
@@ -115,66 +100,48 @@ public class DefaultRuneLiteLootTrackerReader
             return Collections.emptyMap();
         }
 
-        File profiles2 = new File(RuneLite.RUNELITE_DIR, "profiles2");
-        if (!profiles2.isDirectory())
+        List<File> files = listProfileFiles();
+        if (files.isEmpty())
         {
-            log.debug("[rl-reader] No profiles2 directory found — no RuneLite tracker data to read");
+            log.debug("[rl-reader] No profiles2 files found — no RuneLite tracker data to read");
             return Collections.emptyMap();
         }
-
-        File[] files = profiles2.listFiles(f -> f.isFile() && f.getName().endsWith(".properties"));
-        if (files == null || files.length == 0)
-        {
-            log.debug("[rl-reader] profiles2 directory is empty");
-            return Collections.emptyMap();
-        }
-
-        // Sort by last-modified descending so the most-recently-used profile
-        // wins when multiple profiles have the same name (shouldn't happen
-        // normally but is a safe tie-break).
-        Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
 
         Map<String, Map<Integer, Long>> result = new HashMap<>();
-        int skippedProfiles  = 0;
-        int matchedProfiles  = 0;
+        int filesWithLoot     = 0;
+        int knownAccountKeys  = 0;
 
         for (File propFile : files)
         {
-            String profileName = readProfileName(propFile);
-            if (profileName == null)
+            Properties props = loadProperties(propFile);
+            if (props == null) continue;
+
+            // 1. Which RS-profile keys in this file belong to the current account?
+            Map<String, String> keyToAccount = readProfileKeyToAccount(props);
+            knownAccountKeys += keyToAccount.size();
+
+            Set<String> matchingKeys = new HashSet<>();
+            for (Map.Entry<String, String> e : keyToAccount.entrySet())
             {
-                // Cannot determine which account owns this profile — skip it.
-                // This is the intended safe-default behaviour per the spec.
-                skippedProfiles++;
-                log.debug("[rl-reader] Skipping profile '{}' — no profile name property found",
-                        propFile.getName());
-                continue;
+                if (accountKey.equals(e.getValue())) matchingKeys.add(e.getKey());
             }
+            if (matchingKeys.isEmpty()) continue;
 
-            String normalizedProfileName = CurrentPlayerIdentityService.normalizeUsername(profileName);
-            if (!accountKey.equals(normalizedProfileName))
-            {
-                log.debug("[rl-reader] Skipping profile '{}' (account='{}') — not current account '{}'",
-                        propFile.getName(), normalizedProfileName, accountKey);
-                continue;
-            }
-
-            matchedProfiles++;
-            log.debug("[rl-reader] Reading profile '{}' for account '{}'",
-                    propFile.getName(), accountKey);
-
-            readLootFromProfile(propFile, result);
+            // 2. Read only loot stored under those keys.
+            if (readLootForKeys(props, matchingKeys, result)) filesWithLoot++;
         }
 
-        log.debug("[rl-reader] Read complete: {} matching profiles, {} skipped (no name), {} sources found",
-                matchedProfiles, skippedProfiles, result.size());
-
-        if (matchedProfiles == 0 && skippedProfiles > 0)
+        if (result.isEmpty())
         {
-            log.warn("[rl-reader] Found {} profile(s) but none had a readable name. "
-                    + "Historical RuneLite Loot Tracker data will NOT be imported. "
-                    + "Forward-sync via live LootReceived events is still active.",
-                    skippedProfiles);
+            log.warn("[rl-reader] No RuneLite loot matched account '{}' "
+                    + "({} RS-profile name(s) seen across {} file(s)). "
+                    + "Historical import skipped; live LootReceived events still active.",
+                    accountKey, knownAccountKeys, files.size());
+        }
+        else
+        {
+            log.debug("[rl-reader] Read {} source(s) for account '{}' from {} file(s)",
+                    result.size(), accountKey, filesWithLoot);
         }
 
         return result;
@@ -182,53 +149,68 @@ public class DefaultRuneLiteLootTrackerReader
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    /**
-     * Attempts to read a profile display name from the given .properties file.
-     *
-     * @return the raw profile name, or {@code null} if none of the candidate
-     *         property keys are found in this file.
-     */
-    private String readProfileName(File propFile)
+    /** Lists every {@code profiles2/*.properties} file, or empty when absent. */
+    private List<File> listProfileFiles()
     {
-        Properties props = loadProperties(propFile);
-        if (props == null) return null;
+        File profiles2 = new File(RuneLite.RUNELITE_DIR, "profiles2");
+        if (!profiles2.isDirectory()) return Collections.emptyList();
 
-        for (String key : PROFILE_NAME_KEYS)
-        {
-            String val = props.getProperty(key);
-            if (val != null && !val.isBlank()) return val.trim();
-        }
+        File[] files = profiles2.listFiles(f -> f.isFile() && f.getName().endsWith(".properties"));
+        if (files == null || files.length == 0) return Collections.emptyList();
 
-        return null;
+        // Most-recently-modified first, so a tie on display name prefers the
+        // freshest profile data.
+        Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        return Arrays.asList(files);
     }
 
     /**
-     * Parses all {@code loottracker.rsprofile.*.drops_*} entries from a
-     * .properties file and merges the absolute totals into {@code dest}.
-     *
-     * <p>The value format is a JSON object with:</p>
-     * <pre>
-     * {
-     *   "name":  "Vorkath",
-     *   "type":  "NPC",
-     *   "kills": 42,
-     *   "drops": [itemId, quantity, itemId, quantity, ...]
-     * }
-     * </pre>
+     * Builds {@code <RSPROFILE_KEY> → normalizedDisplayName} from all
+     * {@code rsprofile.rsprofile.<KEY>.displayName} properties in this file.
      */
-    private void readLootFromProfile(File propFile,
+    private Map<String, String> readProfileKeyToAccount(Properties props)
+    {
+        if (props == null) return Collections.emptyMap();
+
+        Map<String, String> map = new HashMap<>();
+        for (String key : props.stringPropertyNames())
+        {
+            if (!key.startsWith(RSPROFILE_KEY_PREFIX) || !key.endsWith(DISPLAY_NAME_SUFFIX)) continue;
+
+            String rsKey = key.substring(
+                    RSPROFILE_KEY_PREFIX.length(),
+                    key.length() - DISPLAY_NAME_SUFFIX.length());
+            if (rsKey.isEmpty() || rsKey.contains(".")) continue; // guard nested keys
+
+            String name = props.getProperty(key);
+            String normalized = CurrentPlayerIdentityService.normalizeUsername(name);
+            if (normalized != null) map.put(rsKey, normalized);
+        }
+        return map;
+    }
+
+    /**
+     * Parses {@code loottracker.rsprofile.<KEY>.drops_*} entries whose
+     * {@code <KEY>} is in {@code allowedKeys} and merges absolute totals into
+     * {@code dest}. The loot value JSON looks like:
+     * <pre>{"type":"NPC","name":"Goblin guard","kills":1,"drops":[526,1,995,5]}</pre>
+     *
+     * @return {@code true} if at least one entry was parsed
+     */
+    private boolean readLootForKeys(Properties props, Set<String> allowedKeys,
             Map<String, Map<Integer, Long>> dest)
     {
-        Properties props = loadProperties(propFile);
-        if (props == null) return;
-
         int entriesParsed = 0;
-        int entriesSkipped = 0;
 
         for (String key : props.stringPropertyNames())
         {
             if (!key.startsWith(LOOT_KEY_PREFIX)) continue;
-            if (!key.contains(DROPS_INFIX))       continue;
+
+            int dropsIdx = key.indexOf(DROPS_INFIX, LOOT_KEY_PREFIX.length());
+            if (dropsIdx < 0) continue;
+
+            String rsKey = key.substring(LOOT_KEY_PREFIX.length(), dropsIdx);
+            if (!allowedKeys.contains(rsKey)) continue; // belongs to another account
 
             String val = props.getProperty(key);
             if (val == null || val.isBlank()) continue;
@@ -238,11 +220,7 @@ public class DefaultRuneLiteLootTrackerReader
                 JsonObject obj = new JsonParser().parse(val).getAsJsonObject();
 
                 String name = obj.has("name") ? obj.get("name").getAsString() : "Unknown";
-                if (!obj.has("drops") || !obj.get("drops").isJsonArray())
-                {
-                    entriesSkipped++;
-                    continue;
-                }
+                if (!obj.has("drops") || !obj.get("drops").isJsonArray()) continue;
 
                 JsonArray flatDrops = obj.getAsJsonArray("drops");
                 Map<Integer, Long> sourceMap = dest.computeIfAbsent(name, k -> new HashMap<>());
@@ -253,10 +231,8 @@ public class DefaultRuneLiteLootTrackerReader
                     long qty    = flatDrops.get(i + 1).getAsLong();
                     if (itemId <= 0 || qty <= 0) continue;
 
-                    // RuneLite loot tracker stores ABSOLUTE totals.
-                    // Use max so multiple profiles for the same account don't
-                    // accidentally under-count (in case data is split across
-                    // profile files after a client migration).
+                    // RuneLite stores ABSOLUTE totals. max() guards against the
+                    // same account's data being split across profile files.
                     sourceMap.merge(itemId, qty, Math::max);
                 }
 
@@ -264,13 +240,11 @@ public class DefaultRuneLiteLootTrackerReader
             }
             catch (Exception e)
             {
-                entriesSkipped++;
                 log.debug("[rl-reader] Failed to parse entry {}: {}", key, e.getMessage());
             }
         }
 
-        log.debug("[rl-reader] {} — parsed {} entries, skipped {}", propFile.getName(),
-                entriesParsed, entriesSkipped);
+        return entriesParsed > 0;
     }
 
     private Properties loadProperties(File propFile)

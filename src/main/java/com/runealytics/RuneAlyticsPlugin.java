@@ -154,6 +154,8 @@ public class RuneAlyticsPlugin extends Plugin
     private static final long HEARTBEAT_PERIOD_MS        = 20_000;
     /** Delay before the first heartbeat after login so player/RSN state settles. */
     private static final long HEARTBEAT_INITIAL_DELAY_MS = 5_000;
+    /** Delay before the automatic post-login loot reconcile, so login isn't slowed. */
+    private static final long LOGIN_AUTO_SYNC_DELAY_MS   = 6_000;
     /** Repeating heartbeat task; non-null only while the player is logged in. */
     private ScheduledFuture<?> heartbeatTask;
 
@@ -1249,6 +1251,11 @@ public class RuneAlyticsPlugin extends Plugin
 
         if (gs == GameState.LOGIN_SCREEN)
         {
+            // Flush this account's loot to the server BEFORE marking logged-out,
+            // so the sync slot can still be claimed and the live-sync path can't
+            // double-upload. Upload-only; runs async so logout isn't delayed.
+            performLogoutSyncFlush();
+
             state.setLoggedIn(false);
             // Stop the live-map heartbeat while at the login screen.
             stopHeartbeat();
@@ -1314,6 +1321,17 @@ public class RuneAlyticsPlugin extends Plugin
                 if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
                 SwingUtilities.invokeLater(() ->
                         mainPanel.showMainFeatures(true, matchEnabled));
+
+                // Auto-reconcile loot on login. Delayed so the login itself
+                // isn't slowed and the client has settled (local player + item
+                // cache ready); runs on the background executor.
+                if (lootSync && config.syncLootToServer())
+                {
+                    executorService.schedule(
+                            () -> performLootSync(false),
+                            LOGIN_AUTO_SYNC_DELAY_MS,
+                            java.util.concurrent.TimeUnit.MILLISECONDS);
+                }
             });
         }
     }
@@ -1329,6 +1347,10 @@ public class RuneAlyticsPlugin extends Plugin
         if (event.getPlayer() != client.getLocalPlayer()) return;
 
         log.debug("Local player spawned");
+
+        // Cache the account name now (client thread) so a logout flush can scope
+        // the sync after the local player is gone.
+        currentPlayerIdentity.rememberCurrentPlayer();
 
         // Always check per-account token and refresh the verification UI on login
         checkVerificationStatus();
@@ -1593,46 +1615,104 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     /**
-     * Performs the full three-source absolute-merge sync:
-     * website snapshot + plugin local + RuneLite tracker → max-absolute → upload.
+     * Unified loot sync triggered by the single "Sync" button and by the
+     * automatic login sync.
      *
-     * <p>Called by the "Reconcile With RuneLite Tracker" button in the UI.
-     * Runs on the background executor (never the client thread).</p>
+     * <p>Runs the full pipeline for the <em>currently logged-in</em> account:
+     * pull server history → import RuneLite tracker → upload unsynced kills →
+     * three-source absolute-merge reconcile → upload. All scoped to the live
+     * account so no other profile's data can leak in.</p>
+     *
+     * <p>Blocked (with a UI message when {@code userInitiated}) if no account is
+     * logged in or the logged-in account doesn't match the linked RuneAlytics
+     * account. Always runs off the client thread.</p>
      */
-    public void performAbsoluteMergeSync()
+    public void performLootSync(boolean userInitiated)
     {
+        if (!currentPlayerIdentity.canSync())
+        {
+            if (userInitiated && lootTrackerPanel != null)
+            {
+                String msg = currentPlayerIdentity.getMismatchMessage();
+                if (msg != null) lootTrackerPanel.showAccountMismatch(msg);
+            }
+            return;
+        }
+
+        final String accountKey = currentPlayerIdentity.getAccountKey();
+        if (accountKey == null) return;
+
         executorService.submit(() ->
         {
-            if (!state.tryStartSync()) return;
-            try
-            {
-                log.debug("[plugin] Starting absolute-merge sync");
-                LootSyncMergeService.MergeResult result = lootSyncMergeService.performMerge();
-
-                SwingUtilities.invokeLater(() ->
-                {
-                    if (lootTrackerPanel != null)
-                    {
-                        if (result.isSuccess())
-                            lootTrackerPanel.showAbsoluteMergeResult(result);
-                        else
-                            lootTrackerPanel.showSyncFailed(result.getBlockedReason());
-                    }
-                });
-            }
-            catch (Exception e)
-            {
-                log.error("[plugin] Absolute-merge sync failed", e);
-                SwingUtilities.invokeLater(() -> {
-                    if (lootTrackerPanel != null)
-                        lootTrackerPanel.showSyncFailed(e.getMessage());
-                });
-            }
-            finally
-            {
-                state.endSync();
-            }
+            if (!state.tryStartSync()) return; // a sync is already running
+            try     { runSyncPipeline(accountKey, true, userInitiated); }
+            finally { state.endSync(); }
         });
+    }
+
+    /**
+     * Flushes the current account's loot to the server on logout.
+     *
+     * <p>Must be called on the client thread <em>before</em> {@code loggedIn} is
+     * flipped to {@code false}, so the sync slot can be claimed while the
+     * session is still valid. Upload-only (no pull) to keep logout snappy.</p>
+     */
+    private void performLogoutSyncFlush()
+    {
+        final String accountKey = currentPlayerIdentity.getLastKnownAccountKey();
+        if (accountKey == null) return;
+        if (!currentPlayerIdentity.isLinkedAccount(accountKey)) return;
+
+        // Claim the slot synchronously while still logged in; the live-sync
+        // path therefore cannot also upload and double-count.
+        if (!state.tryStartSync()) return;
+
+        executorService.submit(() ->
+        {
+            try     { runSyncPipeline(accountKey, false, false); }
+            finally { state.endSync(); }
+        });
+    }
+
+    /**
+     * Shared sync body. The caller MUST already hold the sync slot.
+     *
+     * @param accountKey    normalized account to scope every step to
+     * @param pull          when {@code true}, also pull server history + import
+     *                      RuneLite tracker before uploading; {@code false} for
+     *                      an upload-only logout flush
+     * @param userInitiated when {@code true}, surface failures in the UI
+     */
+    private void runSyncPipeline(String accountKey, boolean pull, boolean userInitiated)
+    {
+        try
+        {
+            log.debug("[plugin] Loot sync start (account='{}', pull={})", accountKey, pull);
+
+            // 1. Legacy per-kill history + RuneLite import + upload.
+            lootManager.syncLegacyBlocking(accountKey, pull);
+
+            // 2. Three-source absolute-merge reconcile (scoped to this account).
+            LootSyncMergeService.MergeResult result =
+                    lootSyncMergeService.performMergeForAccount(accountKey);
+
+            SwingUtilities.invokeLater(() ->
+            {
+                if (lootTrackerPanel == null) return;
+                if (result.isSuccess())          lootTrackerPanel.showAbsoluteMergeResult(result);
+                else if (userInitiated)          lootTrackerPanel.showSyncFailed(result.getBlockedReason());
+            });
+        }
+        catch (Exception e)
+        {
+            log.error("[plugin] Loot sync failed", e);
+            if (userInitiated)
+            {
+                SwingUtilities.invokeLater(() -> {
+                    if (lootTrackerPanel != null) lootTrackerPanel.showSyncFailed(e.getMessage());
+                });
+            }
+        }
     }
 
     /**

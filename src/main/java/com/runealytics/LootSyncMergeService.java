@@ -92,6 +92,28 @@ public class LootSyncMergeService
             return MergeResult.blocked("No RuneScape account detected. Log in before syncing.");
         }
 
+        return performMergeForAccount(accountKey);
+    }
+
+    /**
+     * Performs the three-source merge for an explicitly supplied
+     * {@code accountKey}.
+     *
+     * <p>Unlike {@link #performMerge()}, this does not re-read the live client
+     * identity, so it is safe to call during a logout flush (when the local
+     * player is already gone). Callers are responsible for having validated
+     * that {@code accountKey} is the account that should be synced (e.g. via
+     * {@link CurrentPlayerIdentityService#isLinkedAccount(String)}).</p>
+     *
+     * @param accountKey normalized RuneScape account name; must be non-null
+     */
+    public MergeResult performMergeForAccount(String accountKey)
+    {
+        if (accountKey == null || accountKey.isEmpty())
+        {
+            return MergeResult.blocked("No RuneScape account detected. Log in before syncing.");
+        }
+
         log.debug("[merge] Starting 3-source merge for account '{}'", accountKey);
 
         // ── 2. Fetch website snapshot ─────────────────────────────────────────
