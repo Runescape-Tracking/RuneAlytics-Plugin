@@ -1867,13 +1867,28 @@ public class LootTrackerManager
                     props.load(isr);
                 }
 
-                // Which rsprofile key(s) in this file belong to the target
-                // account? Loot under any other key must be ignored.
-                java.util.Set<String> matchingKeys =
-                        matchingProfileKeys(props, normalizedTarget);
-                if (matchingKeys.isEmpty()) continue;
+                // Build the full rsprofile-key → account map for this file, then
+                // pick the key(s) that belong to the target account. Loot under
+                // any other key must be ignored.
+                java.util.Map<String, String> keyToAccount = profileKeyDisplayNames(props);
+                java.util.Set<String> matchingKeys = new java.util.HashSet<>();
+                for (java.util.Map.Entry<String, String> e : keyToAccount.entrySet())
+                {
+                    if (normalizedTarget.equals(e.getValue())) matchingKeys.add(e.getKey());
+                }
+
+                if (matchingKeys.isEmpty())
+                {
+                    log.info("[rl-import] {} → no rsprofile key maps to account '{}' "
+                            + "(known accounts: {}); importing nothing from this file",
+                            propFile.getName(), normalizedTarget,
+                            new java.util.HashSet<>(keyToAccount.values()));
+                    continue;
+                }
 
                 int before = allRecords.size();
+                int ignoredEntries = 0;
+                java.util.Set<String> ignoredKeys = new java.util.HashSet<>();
 
                 for (String key : props.stringPropertyNames())
                 {
@@ -1882,7 +1897,13 @@ public class LootTrackerManager
                     if (dropsIdx < 0) continue;
 
                     String rsKey = key.substring("loottracker.rsprofile.".length(), dropsIdx);
-                    if (!matchingKeys.contains(rsKey)) continue; // another account
+                    if (!matchingKeys.contains(rsKey))
+                    {
+                        // Belongs to a different account on this PC — skip it.
+                        ignoredEntries++;
+                        ignoredKeys.add(rsKey);
+                        continue;
+                    }
 
                     String val = props.getProperty(key);
                     if (val == null || val.isEmpty()) continue;
@@ -1927,8 +1948,11 @@ public class LootTrackerManager
                     }
                 }
 
-                log.debug("profiles2: {} → {} loot entries", propFile.getName(),
-                        allRecords.size() - before);
+                log.info("[rl-import] {} → account '{}' matched key(s) {}; "
+                        + "imported {} loot source(s); ignored {} source(s) belonging to "
+                        + "{} other account-key(s) {}",
+                        propFile.getName(), normalizedTarget, matchingKeys,
+                        allRecords.size() - before, ignoredEntries, ignoredKeys.size(), ignoredKeys);
             }
             catch (Exception e)
             {
@@ -1962,17 +1986,16 @@ public class LootTrackerManager
     }
 
     /**
-     * Returns the set of RuneLite rsprofile key(s) in {@code props} whose
-     * {@code rsprofile.rsprofile.<KEY>.displayName} matches
-     * {@code normalizedTarget}. Mirrors {@link DefaultRuneLiteLootTrackerReader}
-     * so the legacy per-kill import is scoped to the same account as the
-     * absolute-merge reader and never leaks other players' loot.
+     * Builds the {@code rsprofile-key → normalized account name} map from all
+     * {@code rsprofile.rsprofile.<KEY>.displayName} properties in {@code props}.
+     * Mirrors {@link DefaultRuneLiteLootTrackerReader} so the legacy per-kill
+     * import is scoped to the same account as the absolute-merge reader and
+     * never leaks other players' loot.
      */
-    private java.util.Set<String> matchingProfileKeys(
-            java.util.Properties props, String normalizedTarget)
+    private java.util.Map<String, String> profileKeyDisplayNames(java.util.Properties props)
     {
-        java.util.Set<String> keys = new java.util.HashSet<>();
-        if (props == null) return keys;
+        java.util.Map<String, String> map = new java.util.HashMap<>();
+        if (props == null) return map;
 
         final String prefix = "rsprofile.rsprofile.";
         final String suffix = ".displayName";
@@ -1986,9 +2009,9 @@ public class LootTrackerManager
 
             String normalized =
                     CurrentPlayerIdentityService.normalizeUsername(props.getProperty(key));
-            if (normalizedTarget.equals(normalized)) keys.add(rsKey);
+            if (normalized != null) map.put(rsKey, normalized);
         }
-        return keys;
+        return map;
     }
 
     public String importFromRuneLiteLootTracker(String username)
