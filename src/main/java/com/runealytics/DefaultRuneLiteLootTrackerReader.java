@@ -167,6 +167,12 @@ public class DefaultRuneLiteLootTrackerReader
             if (readLootForKeys(propFile.getName(), props, matchingKeys, result)) filesWithLoot++;
         }
 
+        // Drop sources that ended up with neither a kill count nor any item —
+        // e.g. an entry whose "drops" array was empty or whose only pairs were
+        // filtered out (itemId<=0/qty<=0). These carry no real information and
+        // must never reach the merge step as a phantom 0-KC/0-loot source.
+        result.values().removeIf(t -> t.killCount <= 0 && t.items.isEmpty());
+
         if (result.isEmpty())
         {
             log.warn("[rl-reader] No RuneLite loot matched account '{}' across {} file(s). "
