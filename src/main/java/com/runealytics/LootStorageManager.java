@@ -404,6 +404,7 @@ public class LootStorageManager
         int killsAdded = 0;
         int dropsAdded = 0;
         int bossesSkipped = 0;
+        boolean killCountOnlyUpdated = false;
 
         for (Map.Entry<String, LootStorageData.BossKillData> entry : serverData.entrySet())
         {
@@ -431,7 +432,23 @@ public class LootStorageManager
             }
             else
             {
-                // Boss doesn't exist locally - create new from server
+                // Boss doesn't exist locally yet. Only worth creating a row at
+                // all if the server actually reports kills/loot for it — don't
+                // create a 0-KC, no-drop placeholder that would just show as an
+                // empty container on the panel.
+                boolean serverHasRealData = serverBoss.getKillCount() > 0
+                        || (serverBoss.getKills() != null && !serverBoss.getKills().isEmpty())
+                        || (serverBoss.getAggregatedDrops() != null
+                                && serverBoss.getAggregatedDrops().values().stream()
+                                        .anyMatch(d -> d.getTotalQuantity() > 0));
+                if (!serverHasRealData)
+                {
+                    log.debug("❌ SKIPPING SERVER DATA: {} - no kills/loot reported, not creating placeholder",
+                            npcName);
+                    bossesSkipped++;
+                    continue;
+                }
+
                 log.debug("➕ NEW BOSS from server: {} with {} kills", npcName, serverBoss.getKillCount());
                 localBoss = new LootStorageData.BossKillData();
                 localBoss.setNpcName(npcName);
@@ -515,10 +532,13 @@ public class LootStorageManager
                 }
             }
 
-            // Update kill count and prestige from server only if kills were
-            // merged for this boss.
-            if (bossKillsAdded > 0)
+            // Update kill count and prestige from server when kills were merged
+            // for this boss, OR when the server simply reports a higher
+            // aggregate kill count than we have locally (max-wins, same rule
+            // applied to item quantities elsewhere).
+            if (bossKillsAdded > 0 || serverBoss.getKillCount() > localBoss.getKillCount())
             {
+                if (bossKillsAdded == 0) killCountOnlyUpdated = true;
                 int originalKillCount = localBoss.getKillCount();
                 int originalPrestige = localBoss.getPrestige();
                 long originalValue = localBoss.getTotalLootValue();
@@ -545,7 +565,7 @@ public class LootStorageManager
             }
         }
 
-        if (killsAdded > 0 || dropsAdded > 0)
+        if (killsAdded > 0 || dropsAdded > 0 || killCountOnlyUpdated)
         {
             currentData.setLastSyncTimestamp(System.currentTimeMillis());
             saveData();
