@@ -293,20 +293,16 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         header.add(filterRow);
         header.add(Box.createVerticalStrut(6));
 
-        // ── Action buttons row ───────────────────────────────────────────────
-        JPanel btnRow = new JPanel(new BorderLayout(4, 0));
-        btnRow.setOpaque(false);
-        btnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        btnRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
-
-        JPanel leftBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
-        leftBtns.setOpaque(false);
+        // ── Icon buttons row: 👁 ⇅ 🗑 ⬇ ────────────────────────────────────
+        JPanel iconBtnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
+        iconBtnRow.setOpaque(false);
+        iconBtnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         eyeButton   = makeIconButton("👁",  "Toggle hidden drops");
         sortButton  = makeIconButton("⇅",  currentSort.getLabel());
         clearButton = makeIconButton("🗑", "Clear all loot data");
         sortButton.setBackground(new Color(45, 70, 45));
-        applyEyeButtonState();   // start with the correct red/green colour
+        applyEyeButtonState();
 
         eyeButton  .addActionListener(e -> toggleHiddenItems());
         sortButton .addActionListener(e -> cycleSortMode());
@@ -315,10 +311,33 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         JButton importBtn = makeIconButton("⬇", "Import from RuneLite Loot Tracker");
         importBtn.addActionListener(e -> onImportFromRuneLiteClicked());
 
-        leftBtns.add(eyeButton);
-        leftBtns.add(sortButton);
-        leftBtns.add(clearButton);
-        leftBtns.add(importBtn);
+        iconBtnRow.add(eyeButton);
+        iconBtnRow.add(sortButton);
+        iconBtnRow.add(clearButton);
+        iconBtnRow.add(importBtn);
+
+        header.add(iconBtnRow);
+        header.add(Box.createVerticalStrut(4));
+
+        // ── Sync buttons row: [Reconcile ──────────────────] [Sync] ─────────
+        // Two action buttons on their own row so neither is crowded.
+        JPanel syncBtnRow = new JPanel(new BorderLayout(4, 0));
+        syncBtnRow.setOpaque(false);
+        syncBtnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        syncBtnRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+
+        // ── "Reconcile" button — stretches to fill remaining width ───────────
+        reconcileButton = new JButton("Reconcile");
+        reconcileButton.setBackground(new Color(45, 65, 45));
+        reconcileButton.setForeground(Color.WHITE);
+        reconcileButton.setFocusPainted(false);
+        reconcileButton.setBorder(BorderFactory.createLineBorder(new Color(60, 100, 60), 1));
+        reconcileButton.setFont(FILTER_FONT);
+        reconcileButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        reconcileButton.setToolTipText(
+                "<html>Reconcile: merges website totals, plugin local totals,<br>"
+                + "and RuneLite Loot Tracker totals into the highest known absolute values.</html>");
+        reconcileButton.addActionListener(e -> onReconcileClicked());
 
         syncButton = new JButton("Sync");
         syncButton.setPreferredSize(new Dimension(52, 24));
@@ -331,28 +350,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         syncButton.setToolTipText("Sync with RuneLite Loot Tracker & RuneAlytics server");
         syncButton.addActionListener(e -> onSyncClicked());
 
-        // ── "Reconcile" button for 3-way absolute-merge sync ─────────────────
-        reconcileButton = new JButton("Reconcile");
-        reconcileButton.setPreferredSize(new Dimension(75, 24));
-        reconcileButton.setBackground(new Color(45, 65, 45));
-        reconcileButton.setForeground(Color.WHITE);
-        reconcileButton.setFocusPainted(false);
-        reconcileButton.setBorder(BorderFactory.createLineBorder(new Color(60, 100, 60), 1));
-        reconcileButton.setFont(FILTER_FONT);
-        reconcileButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        reconcileButton.setToolTipText(
-                "<html>Reconcile With RuneLite Tracker: merges website totals, plugin local totals,<br>"
-                + "and RuneLite Loot Tracker totals into the highest known absolute values.</html>");
-        reconcileButton.addActionListener(e -> onReconcileClicked());
-
-        JPanel syncBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-        syncBtns.setOpaque(false);
-        syncBtns.add(reconcileButton);
-        syncBtns.add(syncButton);
-
-        btnRow.add(leftBtns,   BorderLayout.WEST);
-        btnRow.add(syncBtns,   BorderLayout.EAST);
-        header.add(btnRow);
+        syncBtnRow.add(reconcileButton, BorderLayout.CENTER);
+        syncBtnRow.add(syncButton,      BorderLayout.EAST);
+        header.add(syncBtnRow);
 
         // ── Sync status line (hidden until a sync completes / fails) ─────────
         syncStatusLabel = new JLabel(" ");
