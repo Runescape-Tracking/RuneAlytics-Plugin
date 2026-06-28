@@ -185,27 +185,13 @@ public class LootSyncMergeService
             }
         }
 
-        // Website-side kill count, taken from whatever this account's local
-        // storage already holds (it was populated from the server's per-kill
-        // history, which is the website's authoritative KC).
-        //
-        // Only carry this forward for sources that currently have real loot
-        // recorded. A stored killCount with zero drops is either (a) a
-        // genuine dry kill, which RuneLite's own tracker leg below will
-        // re-supply on every sync anyway, or (b) a leftover placeholder from
-        // a stale local entry — feeding it back here would resurrect that
-        // placeholder forever, defeating the empty-container purge. Local
-        // storage must never be an independent merge input.
-        for (Map.Entry<String, LootStorageData.BossKillData> e : localData.getBossKills().entrySet())
-        {
-            LootStorageData.BossKillData bd = e.getValue();
-            boolean hasDrops = bd.getAggregatedDrops() != null
-                    && bd.getAggregatedDrops().values().stream().anyMatch(d -> d.getTotalQuantity() > 0);
-            if (!hasDrops) continue;
-
-            ctx.mergeKillCount(normalizeBossKey(e.getKey()), e.getKey(),
-                    bd.getKillCount(), "website");
-        }
+        // NOTE: the website snapshot has no per-source kill_count field (only
+        // items), so there is no real "website KC" to merge here. Local
+        // storage is NEVER read as a merge input — only the live website
+        // snapshot and RuneLite's own tracker file (below) feed the merge.
+        // The account's already-recorded kill count is preserved as a floor
+        // directly in applyMergedToLocalStorage (it only ever raises KC, never
+        // lowers it), so nothing is lost by not looping it back through here.
 
         // RuneLite default tracker leg.
         // RuneLite stores only item IDs, so names are resolved via ItemManager —
