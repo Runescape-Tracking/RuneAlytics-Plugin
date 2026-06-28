@@ -1805,6 +1805,17 @@ public class LootTrackerManager
         hiddenDrops.clear();
         lastPlayerLootTime.clear();
         storageManager.clearData();
+
+        // Clearing is an explicit "I want this account empty" signal, so latch
+        // the RuneLite backfill marker. Otherwise the next sync would treat the
+        // now-empty account as never-backfilled and re-import RuneLite's stored
+        // history, undoing the clear.
+        String username = state.getVerifiedUsername();
+        if (username != null && !username.isEmpty())
+        {
+            markRuneliteHistoryBackfilled(username);
+        }
+
         if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
         notifyDataRefresh();
     }

@@ -1734,9 +1734,12 @@ public class RuneAlyticsPlugin extends Plugin
             LootSyncMergeService.MergeResult result =
                     lootSyncMergeService.performMergeForAccount(accountKey, backfillRuneliteHistory);
 
-            // Latch the account as backfilled once the first sync completes
-            // without error, so RuneLite history is never re-read for it.
-            if (backfillRuneliteHistory && result.isSuccess())
+            // Latch the account as backfilled now that the one-time RuneLite
+            // read has run. Tied to reaching this point (not to merge success):
+            // the history is already in the local store, so re-importing it is
+            // pointless. A hard failure above throws and skips this, so the
+            // backfill is retried on the next sync instead of being lost.
+            if (backfillRuneliteHistory)
             {
                 lootManager.markRuneliteHistoryBackfilled(accountKey);
             }
