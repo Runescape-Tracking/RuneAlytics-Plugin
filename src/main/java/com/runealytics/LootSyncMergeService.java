@@ -21,15 +21,15 @@ import java.util.concurrent.TimeUnit;
  * <ol>
  *   <li>Fetch the website's saved absolute totals
  *       ({@code GET /runelite/loot/snapshot}).</li>
- *   <li>Read RuneAlytics plugin local totals from
- *       {@link LootStorageManager#getCurrentData()}.</li>
- *   <li>Read RuneLite default Loot Tracker totals from
- *       {@link DefaultRuneLiteLootTrackerReader#readForAccount(String)}.
- *       <br><em>If historical data cannot be safely tied to the current account,
- *       this leg is skipped.</em></li>
+ *   <li>Read RuneLite's own default Loot Tracker totals straight from its
+ *       {@code profiles2/*.properties} save file via
+ *       {@link DefaultRuneLiteLootTrackerReader#readForAccount(String)},
+ *       scoped to the currently logged-in OSRS username. This is read fresh
+ *       on every sync — RuneLite's file is the source of truth, never a
+ *       plugin-side cache or temp file.</li>
  *   <li>For each (source, item) tuple, the final quantity is
- *       {@code max(website, plugin_local, runelite_default)}.</li>
- *   <li>Update the plugin local cache to the merged totals.</li>
+ *       {@code max(website, runelite_default)}.</li>
+ *   <li>Update the plugin local cache (display only) to the merged totals.</li>
  *   <li>{@code POST} merged totals to {@code /runelite/loot/sync-absolute}.</li>
  * </ol>
  *
@@ -77,7 +77,8 @@ public class LootSyncMergeService
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Performs the full three-source merge for the currently logged-in account.
+     * Performs the full website + RuneLite-tracker merge for the currently
+     * logged-in account.
      *
      * <p>Must be called from a background executor thread, never from the
      * RuneLite client thread (network I/O is involved).</p>
@@ -118,33 +119,12 @@ public class LootSyncMergeService
      */
     public MergeResult performMergeForAccount(String accountKey)
     {
-        return performMergeForAccount(accountKey, true);
-    }
-
-    /**
-     * Performs the three-source merge for an explicitly supplied
-     * {@code accountKey}, with control over whether RuneLite's stored Loot
-     * Tracker history is folded in.
-     *
-     * <p>RuneLite history is a cumulative backfill source: it should be read
-     * exactly once per account (the first sync). On every later sync
-     * {@code includeRuneliteHistory} is {@code false} so that a cleared
-     * account is not silently re-populated from RuneLite's own files. Live
-     * loot is unaffected — it is already captured in the plugin's local
-     * store.</p>
-     *
-     * @param accountKey             normalized RuneScape account name; must be non-null
-     * @param includeRuneliteHistory whether to read RuneLite's stored Loot Tracker totals
-     */
-    public MergeResult performMergeForAccount(String accountKey, boolean includeRuneliteHistory)
-    {
         if (accountKey == null || accountKey.isEmpty())
         {
             return MergeResult.blocked("No RuneScape account detected. Log in before syncing.");
         }
 
-        log.debug("[merge] Starting 3-source merge for account '{}' (includeRuneliteHistory={})",
-                accountKey, includeRuneliteHistory);
+        log.debug("[merge] Starting merge for account '{}'", accountKey);
 
         // ── 2. Fetch website snapshot ─────────────────────────────────────────
         LootTrackerApiClient.LootSnapshot websiteSnapshot = null;
@@ -160,34 +140,29 @@ public class LootSyncMergeService
             // Non-fatal: continue with local data only.
         }
 
-        // ── 3. Read plugin local totals ───────────────────────────────────────
-        LootStorageData localData = storageManager.getCurrentData();
-        log.debug("[merge] Plugin local data: {} sources", localData.getBossKills().size());
-
-        // ── 4. Read RuneLite default tracker (best-effort, account-filtered) ──
-        // Only read RuneLite's stored history on the first sync for an account.
-        // Afterwards its totals already live in the plugin's local store, so
-        // re-reading would resurrect loot the player deliberately cleared.
-        boolean rlHistoricalAvailable = includeRuneliteHistory && rlReader.canImportHistorical();
+        // ── 3. Read RuneLite default tracker (best-effort, account-filtered) ──
+        // Read directly from RuneLite's own profiles2/*.properties save file
+        // on every sync — never from a plugin-side cache or temp file. This is
+        // the canonical source of truth for what RuneLite has tracked.
+        boolean rlAvailable = rlReader.canImportHistorical();
         Map<String, Map<Integer, Long>> rlTotals = Collections.emptyMap();
         boolean rlSkippedDueToAccount = false;
 
-        if (rlHistoricalAvailable)
+        if (rlAvailable)
         {
             rlTotals = rlReader.readForAccount(accountKey);
             rlSkippedDueToAccount = rlTotals.isEmpty();
             log.debug("[merge] RuneLite tracker: {} sources (account-filtered)", rlTotals.size());
         }
-        else if (!includeRuneliteHistory)
-        {
-            log.debug("[merge] Skipping RuneLite history for '{}' — already backfilled once; "
-                    + "live loot only from here on.", accountKey);
-        }
         else
         {
             log.info("[merge] RuneLite Loot Tracker historical data cannot be safely matched to "
-                    + "this account. Using live LootReceived events only.");
+                    + "this account. Using website data only.");
         }
+
+        // Local cache, kept only so the panel has something to render between
+        // syncs; it is never read as a merge input.
+        LootStorageData localData = storageManager.getCurrentData();
 
         // ── 5. Three-source merge ─────────────────────────────────────────────
         MergeContext ctx = new MergeContext(accountKey);
@@ -201,32 +176,12 @@ public class LootSyncMergeService
                 {
                     String itemKey = e.getKey();
                     long   qty     = e.getValue();
+                    if (qty <= 0) continue; // never surface a zero-quantity drop
                     int    itemId  = websiteSnapshot.itemIdsByKey.getOrDefault(itemKey, 0);
                     String name    = websiteSnapshot.itemNamesByKey.getOrDefault(itemKey, itemKey);
                     ctx.mergeItem(srcData.sourceKey, srcData.sourceName, null,
                             itemId, name, qty, "website");
                 }
-            }
-        }
-
-        // Plugin local leg
-        for (Map.Entry<String, LootStorageData.BossKillData> bossEntry : localData.getBossKills().entrySet())
-        {
-            String                         bossName = bossEntry.getKey();
-            LootStorageData.BossKillData   bossData = bossEntry.getValue();
-
-            for (Map.Entry<Integer, LootStorageData.AggregatedDrop> dropEntry
-                    : bossData.getAggregatedDrops().entrySet())
-            {
-                LootStorageData.AggregatedDrop agg = dropEntry.getValue();
-                ctx.mergeItem(
-                        normalizeBossKey(bossName),
-                        bossName,
-                        null,
-                        agg.getItemId(),
-                        agg.getItemName(),
-                        agg.getTotalQuantity(),
-                        "runealytics_plugin");
             }
         }
 
@@ -281,7 +236,7 @@ public class LootSyncMergeService
                 merged.size(),
                 itemsTotal,
                 uploaded,
-                !rlHistoricalAvailable || rlSkippedDueToAccount,
+                !rlAvailable || rlSkippedDueToAccount,
                 uploadError);
     }
 
@@ -299,6 +254,11 @@ public class LootSyncMergeService
     {
         for (MergedSource src : merged)
         {
+            // Skip sources with no actual loot — don't create an empty
+            // placeholder row (0 KC, no drops) on the panel.
+            boolean hasLoot = src.items.stream().anyMatch(i -> i.quantity > 0);
+            if (!hasLoot) continue;
+
             LootStorageData.BossKillData bossData =
                     localData.getBossKills().computeIfAbsent(src.sourceName, k -> {
                         LootStorageData.BossKillData bd = new LootStorageData.BossKillData();
@@ -308,6 +268,8 @@ public class LootSyncMergeService
 
             for (MergedItem item : src.items)
             {
+                if (item.quantity <= 0) continue;
+
                 LootStorageData.AggregatedDrop existing =
                         bossData.getAggregatedDrops().get(item.itemId > 0 ? item.itemId : -1);
 
@@ -464,7 +426,7 @@ public class LootSyncMergeService
                     if (sourceType == null && mi.sourceType != null)
                         sourceType = mi.sourceType;
 
-                    String reason = "max_of_website_plugin_runelite (winner: " + mi.winnerSource + ")";
+                    String reason = "max_of_website_runelite (winner: " + mi.winnerSource + ")";
                     items.add(new MergedItem(mi.itemId,
                             mi.itemName != null ? mi.itemName : "Unknown",
                             mi.quantity,

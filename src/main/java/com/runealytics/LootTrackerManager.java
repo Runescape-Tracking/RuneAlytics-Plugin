@@ -1367,63 +1367,27 @@ public class LootTrackerManager
     }
 
     /**
-     * Runs the legacy loot sync steps inline (pull history + import RuneLite +
-     * cleanup + upload kills), scoped to {@code username}. The caller MUST hold
-     * the sync slot. When {@code pull} is {@code false} (e.g. a logout flush)
-     * the download/import steps are skipped and only the upload runs, keeping
-     * the operation fast.
+     * Runs the legacy loot sync steps inline (pull history + cleanup + upload
+     * kills), scoped to {@code username}. The caller MUST hold the sync slot.
+     * When {@code pull} is {@code false} (e.g. a logout flush) the
+     * download/cleanup steps are skipped and only the upload runs, keeping the
+     * operation fast.
+     *
+     * <p>RuneLite's own Loot Tracker file is intentionally NOT imported here —
+     * it is read directly (and freshly, every sync) by
+     * {@link LootSyncMergeService}, never copied into this plugin's local
+     * cache or any temp file.</p>
      */
-    public void syncLegacyBlocking(String username, boolean pull, boolean importRuneliteHistory)
+    public void syncLegacyBlocking(String username, boolean pull)
     {
         if (username == null || username.isEmpty()) return;
 
         if (pull)
         {
             downloadHistoryBlocking(username);
-            if (importRuneliteHistory)
-            {
-                importFromRuneLiteLootTrackerSilently(username);
-            }
             cleanupZeroValueDrops();
         }
         uploadUnsyncedKillsBlocking(username);
-    }
-
-    // ── RuneLite history one-time backfill marker ───────────────────────────
-    //
-    // RuneLite's own Loot Tracker stores cumulative per-account totals. We
-    // backfill it into RuneAlytics exactly once per account (the first sync);
-    // after that only live loot is tracked. This makes a cleared account stay
-    // cleared instead of being re-populated from RuneLite's files on the next
-    // sync. The marker is stored in RuneLite config (NOT the per-account loot
-    // JSON), so it survives the user deleting their runealytics-loot-*.json.
-
-    private static final String RL_BACKFILL_GROUP = "runealytics";
-
-    private static String runeliteBackfillKey(String accountKey)
-    {
-        return "rlbackfill_" + accountKey.toLowerCase().replace(' ', '_');
-    }
-
-    /**
-     * @return {@code true} if RuneLite's stored Loot Tracker history has
-     *         already been backfilled for {@code accountKey} (so it must not
-     *         be re-imported on this sync).
-     */
-    public boolean hasBackfilledRuneliteHistory(String accountKey)
-    {
-        if (accountKey == null || accountKey.isEmpty()) return true;
-        String v = configManager.getConfiguration(RL_BACKFILL_GROUP, runeliteBackfillKey(accountKey));
-        return v != null && !v.isEmpty();
-    }
-
-    /** Latches {@code accountKey} as backfilled so RuneLite history is never re-read for it. */
-    public void markRuneliteHistoryBackfilled(String accountKey)
-    {
-        if (accountKey == null || accountKey.isEmpty()) return;
-        configManager.setConfiguration(RL_BACKFILL_GROUP, runeliteBackfillKey(accountKey), "1");
-        log.debug("[rl-import] Marked RuneLite history backfilled for '{}' — live loot only from now on.",
-                accountKey);
     }
 
     /**
@@ -1586,6 +1550,16 @@ public class LootTrackerManager
         for (Map.Entry<String, LootStorageData.BossKillData> entry : data.getBossKills().entrySet())
         {
             LootStorageData.BossKillData bd = entry.getValue();
+
+            // Skip placeholder entries: 0 kill count and no recorded drops.
+            // These can show up as empty rows on the panel (e.g. a source the
+            // merge saw on the website/RuneLite side with no actual loot).
+            boolean hasKills = bd.getKills() != null && !bd.getKills().isEmpty();
+            boolean hasDrops = bd.getAggregatedDrops() != null
+                    && bd.getAggregatedDrops().values().stream()
+                            .anyMatch(d -> d.getTotalQuantity() > 0);
+            if (bd.getKillCount() <= 0 && !hasKills && !hasDrops) continue;
+
             BossKillStats stats = new BossKillStats(bd.getNpcName(), bd.getNpcId());
             stats.setPrestige(bd.getPrestige());
 
@@ -1806,16 +1780,10 @@ public class LootTrackerManager
         lastPlayerLootTime.clear();
         storageManager.clearData();
 
-        // Clearing is an explicit "I want this account empty" signal, so latch
-        // the RuneLite backfill marker. Otherwise the next sync would treat the
-        // now-empty account as never-backfilled and re-import RuneLite's stored
-        // history, undoing the clear.
-        String username = state.getVerifiedUsername();
-        if (username != null && !username.isEmpty())
-        {
-            markRuneliteHistoryBackfilled(username);
-        }
-
+        // After clearing, the plugin keeps no cache/temp file for this
+        // account — the next sync reads only RuneLite's own Loot Tracker file
+        // (live, scoped to this username) and pushes those totals to the
+        // server to catch it up.
         if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
         notifyDataRefresh();
     }

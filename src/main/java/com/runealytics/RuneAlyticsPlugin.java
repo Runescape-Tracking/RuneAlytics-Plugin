@@ -1718,31 +1718,16 @@ public class RuneAlyticsPlugin extends Plugin
     {
         try
         {
-            // RuneLite's stored Loot Tracker history is a one-time backfill per
-            // account: read it on the first sync only, then never again, so a
-            // cleared account is not silently re-populated from RuneLite's files.
-            // Decide once up front and feed the same answer to both legs.
-            boolean backfillRuneliteHistory = !lootManager.hasBackfilledRuneliteHistory(accountKey);
+            log.debug("[plugin] Loot sync start (account='{}', pull={})", accountKey, pull);
 
-            log.debug("[plugin] Loot sync start (account='{}', pull={}, backfillRuneliteHistory={})",
-                    accountKey, pull, backfillRuneliteHistory);
+            // 1. Legacy per-kill website history pull + upload.
+            lootManager.syncLegacyBlocking(accountKey, pull);
 
-            // 1. Legacy per-kill history + (first-time) RuneLite import + upload.
-            lootManager.syncLegacyBlocking(accountKey, pull, backfillRuneliteHistory);
-
-            // 2. Three-source absolute-merge reconcile (scoped to this account).
+            // 2. Absolute-merge reconcile: website + RuneLite's own rsprofile
+            //    loot tracker file, read fresh every sync and scoped to this
+            //    account's OSRS username.
             LootSyncMergeService.MergeResult result =
-                    lootSyncMergeService.performMergeForAccount(accountKey, backfillRuneliteHistory);
-
-            // Latch the account as backfilled now that the one-time RuneLite
-            // read has run. Tied to reaching this point (not to merge success):
-            // the history is already in the local store, so re-importing it is
-            // pointless. A hard failure above throws and skips this, so the
-            // backfill is retried on the next sync instead of being lost.
-            if (backfillRuneliteHistory)
-            {
-                lootManager.markRuneliteHistoryBackfilled(accountKey);
-            }
+                    lootSyncMergeService.performMergeForAccount(accountKey);
 
             SwingUtilities.invokeLater(() ->
             {
