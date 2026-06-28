@@ -1635,16 +1635,38 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 String msg = currentPlayerIdentity.getMismatchMessage();
                 if (msg != null) lootTrackerPanel.showAccountMismatch(msg);
+                // getMismatchMessage() should never be null when canSync() is
+                // false, but guard against a TOCTOU race so the button (already
+                // showing "Syncing…") is never left stuck.
+                else                lootTrackerPanel.showSyncBusy("Log in to sync loot…");
             }
             return;
         }
 
         final String accountKey = currentPlayerIdentity.getAccountKey();
-        if (accountKey == null) return;
+        if (accountKey == null)
+        {
+            // canSync() was true a moment ago but the player just logged out.
+            if (userInitiated && lootTrackerPanel != null)
+            {
+                lootTrackerPanel.showSyncBusy("Log in to sync loot…");
+            }
+            return;
+        }
 
         executorService.submit(() ->
         {
-            if (!state.tryStartSync()) return; // a sync is already running
+            if (!state.tryStartSync())
+            {
+                // A sync (live/auto/manual) is already running. Reset the button
+                // so a manual click doesn't get stuck on "Syncing…".
+                if (userInitiated && lootTrackerPanel != null)
+                {
+                    SwingUtilities.invokeLater(() ->
+                            lootTrackerPanel.showSyncBusy("A sync is already running…"));
+                }
+                return;
+            }
             try     { runSyncPipeline(accountKey, true, userInitiated); }
             finally { state.endSync(); }
         });
@@ -1703,13 +1725,16 @@ public class RuneAlyticsPlugin extends Plugin
                 else if (userInitiated)          lootTrackerPanel.showSyncFailed(result.getBlockedReason());
             });
         }
-        catch (Exception e)
+        catch (Throwable t)
         {
-            log.error("[plugin] Loot sync failed", e);
+            // Catch Throwable (not just Exception) so an Error — e.g. an
+            // ItemManager "must be called on client thread" assertion — still
+            // resets the Sync button instead of leaving it stuck on "Syncing…".
+            log.error("[plugin] Loot sync failed", t);
             if (userInitiated)
             {
                 SwingUtilities.invokeLater(() -> {
-                    if (lootTrackerPanel != null) lootTrackerPanel.showSyncFailed(e.getMessage());
+                    if (lootTrackerPanel != null) lootTrackerPanel.showSyncFailed(t.getMessage());
                 });
             }
         }

@@ -75,7 +75,13 @@ public class DefaultRuneLiteLootTrackerReader
      */
     public boolean canImportHistorical()
     {
-        for (File f : listProfileFiles())
+        return canImportHistorical(listProfileFiles());
+    }
+
+    /** Testable core of {@link #canImportHistorical()} over an explicit file list. */
+    boolean canImportHistorical(List<File> files)
+    {
+        for (File f : files)
         {
             if (!readProfileKeyToAccount(loadProperties(f)).isEmpty()) return true;
         }
@@ -94,14 +100,23 @@ public class DefaultRuneLiteLootTrackerReader
      */
     public Map<String, Map<Integer, Long>> readForAccount(String accountKey)
     {
+        return readForAccount(accountKey, listProfileFiles());
+    }
+
+    /**
+     * Testable core of {@link #readForAccount(String)} over an explicit file
+     * list, so the per-account scoping can be unit-tested without depending on
+     * {@code RuneLite.RUNELITE_DIR}.
+     */
+    Map<String, Map<Integer, Long>> readForAccount(String accountKey, List<File> files)
+    {
         if (accountKey == null || accountKey.isEmpty())
         {
             log.warn("[rl-reader] readForAccount called with null/empty accountKey — skipping");
             return Collections.emptyMap();
         }
 
-        List<File> files = listProfileFiles();
-        if (files.isEmpty())
+        if (files == null || files.isEmpty())
         {
             log.debug("[rl-reader] No profiles2 files found — no RuneLite tracker data to read");
             return Collections.emptyMap();

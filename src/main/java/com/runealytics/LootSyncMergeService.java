@@ -2,12 +2,15 @@ package com.runealytics;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.game.ItemManager;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Orchestrates the three-source absolute loot merge and submits the result
@@ -44,11 +47,15 @@ import java.util.*;
 @Singleton
 public class LootSyncMergeService
 {
+    /** Max time to wait for the client thread to resolve RuneLite item names. */
+    private static final long NAME_RESOLVE_TIMEOUT_MS = 5_000;
+
     private final CurrentPlayerIdentityService  identity;
     private final LootStorageManager            storageManager;
     private final LootTrackerApiClient          apiClient;
     private final DefaultRuneLiteLootTrackerReader rlReader;
     private final ItemManager                   itemManager;
+    private final ClientThread                  clientThread;
 
     @Inject
     public LootSyncMergeService(
@@ -56,13 +63,15 @@ public class LootSyncMergeService
             LootStorageManager storageManager,
             LootTrackerApiClient apiClient,
             DefaultRuneLiteLootTrackerReader rlReader,
-            ItemManager itemManager)
+            ItemManager itemManager,
+            ClientThread clientThread)
     {
         this.identity       = identity;
         this.storageManager = storageManager;
         this.apiClient      = apiClient;
         this.rlReader       = rlReader;
         this.itemManager    = itemManager;
+        this.clientThread   = clientThread;
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -192,7 +201,14 @@ public class LootSyncMergeService
             }
         }
 
-        // RuneLite default tracker leg
+        // RuneLite default tracker leg.
+        // RuneLite stores only item IDs, so names are resolved via ItemManager —
+        // which MUST run on the client thread. Resolve every needed name up front
+        // in a single client-thread hop rather than per-item inside this loop.
+        Set<Integer> rlItemIds = new HashSet<>();
+        for (Map<Integer, Long> items : rlTotals.values()) rlItemIds.addAll(items.keySet());
+        Map<Integer, String> rlItemNames = resolveItemNames(rlItemIds);
+
         for (Map.Entry<String, Map<Integer, Long>> srcEntry : rlTotals.entrySet())
         {
             String sourceName = srcEntry.getKey();
@@ -201,8 +217,7 @@ public class LootSyncMergeService
             {
                 int  itemId = itemEntry.getKey();
                 long qty    = itemEntry.getValue();
-                // We only have item IDs from RuneLite, not names; resolve via ItemManager.
-                String itemName = resolveItemName(itemId);
+                String itemName = rlItemNames.getOrDefault(itemId, "Item " + itemId);
                 ctx.mergeItem(sourceKey, sourceName, null,
                         itemId, itemName, qty, "runelite_default_loot_tracker");
             }
@@ -301,12 +316,53 @@ public class LootSyncMergeService
         return name;
     }
 
-    private String resolveItemName(int itemId)
+    /**
+     * Resolves display names for the given item IDs via {@link ItemManager}.
+     *
+     * <p>{@code ItemManager.getItemComposition} asserts it is called on the
+     * client thread, so the whole batch is resolved inside a single
+     * {@link ClientThread} hop and we block (with a timeout) for the result.
+     * This method is only ever called from the background sync executor — never
+     * the client thread — so blocking here cannot deadlock the game loop. Item
+     * IDs that can't be resolved fall back to {@code "Item <id>"}.</p>
+     */
+    private Map<Integer, String> resolveItemNames(Set<Integer> itemIds)
+    {
+        Map<Integer, String> names = new java.util.concurrent.ConcurrentHashMap<>();
+        if (itemIds == null || itemIds.isEmpty()) return names;
+
+        CountDownLatch latch = new CountDownLatch(1);
+        clientThread.invokeLater(() ->
+        {
+            try     { for (int id : itemIds) names.put(id, safeItemName(id)); }
+            finally { latch.countDown(); }
+        });
+
+        try
+        {
+            if (!latch.await(NAME_RESOLVE_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+            {
+                log.warn("[merge] Timed out resolving {} RuneLite item name(s); using fallbacks",
+                        itemIds.size());
+            }
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
+
+        // Backfill any IDs the client thread didn't resolve in time.
+        for (int id : itemIds) names.putIfAbsent(id, "Item " + id);
+        return names;
+    }
+
+    /** Resolves a single item name; MUST be called on the client thread. */
+    private String safeItemName(int itemId)
     {
         try
         {
             net.runelite.api.ItemComposition comp = itemManager.getItemComposition(itemId);
-            return comp != null ? comp.getName() : "Item " + itemId;
+            return comp != null && comp.getName() != null ? comp.getName() : "Item " + itemId;
         }
         catch (Exception e)
         {

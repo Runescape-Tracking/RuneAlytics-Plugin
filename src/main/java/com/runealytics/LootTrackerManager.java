@@ -1798,6 +1798,17 @@ public class LootTrackerManager
 
         if (propFiles == null || propFiles.length == 0) return null;
 
+        // Scope to the requested account. RuneLite stores EVERY account's loot
+        // in the same files, namespaced by an opaque rsprofile key; without this
+        // filter we would import other players' loot that shares this PC.
+        final String normalizedTarget =
+                CurrentPlayerIdentityService.normalizeUsername(username);
+        if (normalizedTarget == null || normalizedTarget.isEmpty())
+        {
+            log.debug("profiles2: no normalized account to scope import to — skipping");
+            return null;
+        }
+
         java.util.Arrays.sort(propFiles,
                 (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
 
@@ -1815,12 +1826,22 @@ public class LootTrackerManager
                     props.load(isr);
                 }
 
+                // Which rsprofile key(s) in this file belong to the target
+                // account? Loot under any other key must be ignored.
+                java.util.Set<String> matchingKeys =
+                        matchingProfileKeys(props, normalizedTarget);
+                if (matchingKeys.isEmpty()) continue;
+
                 int before = allRecords.size();
 
                 for (String key : props.stringPropertyNames())
                 {
                     if (!key.startsWith("loottracker.rsprofile.")) continue;
-                    if (!key.contains(".drops_"))               continue;
+                    int dropsIdx = key.indexOf(".drops_", "loottracker.rsprofile.".length());
+                    if (dropsIdx < 0) continue;
+
+                    String rsKey = key.substring("loottracker.rsprofile.".length(), dropsIdx);
+                    if (!matchingKeys.contains(rsKey)) continue; // another account
 
                     String val = props.getProperty(key);
                     if (val == null || val.isEmpty()) continue;
@@ -1897,6 +1918,36 @@ public class LootTrackerManager
             log.error("Failed to write profiles2 loot temp file", e);
             return null;
         }
+    }
+
+    /**
+     * Returns the set of RuneLite rsprofile key(s) in {@code props} whose
+     * {@code rsprofile.rsprofile.<KEY>.displayName} matches
+     * {@code normalizedTarget}. Mirrors {@link DefaultRuneLiteLootTrackerReader}
+     * so the legacy per-kill import is scoped to the same account as the
+     * absolute-merge reader and never leaks other players' loot.
+     */
+    private java.util.Set<String> matchingProfileKeys(
+            java.util.Properties props, String normalizedTarget)
+    {
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        if (props == null) return keys;
+
+        final String prefix = "rsprofile.rsprofile.";
+        final String suffix = ".displayName";
+
+        for (String key : props.stringPropertyNames())
+        {
+            if (!key.startsWith(prefix) || !key.endsWith(suffix)) continue;
+
+            String rsKey = key.substring(prefix.length(), key.length() - suffix.length());
+            if (rsKey.isEmpty() || rsKey.contains(".")) continue; // guard nested keys
+
+            String normalized =
+                    CurrentPlayerIdentityService.normalizeUsername(props.getProperty(key));
+            if (normalizedTarget.equals(normalized)) keys.add(rsKey);
+        }
+        return keys;
     }
 
     public String importFromRuneLiteLootTracker(String username)

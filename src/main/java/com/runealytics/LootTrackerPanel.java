@@ -291,10 +291,16 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         header.add(filterRow);
         header.add(Box.createVerticalStrut(6));
 
-        // ── Icon buttons row: 👁 ⇅ 🗑 ⬇ ────────────────────────────────────
-        JPanel iconBtnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
-        iconBtnRow.setOpaque(false);
-        iconBtnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // ── Action row: [👁 ⇅ 🗑 ⬇]  ……………………………  [Sync] ─────────────────
+        // Icon buttons on the left, the Sync button on the right (sitting under
+        // the Skills dropdown of the filter row above).
+        JPanel btnRow = new JPanel(new BorderLayout(4, 0));
+        btnRow.setOpaque(false);
+        btnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        btnRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+
+        JPanel iconBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
+        iconBtns.setOpaque(false);
 
         eyeButton   = makeIconButton("👁",  "Toggle hidden drops");
         sortButton  = makeIconButton("⇅",  currentSort.getLabel());
@@ -309,23 +315,15 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         JButton importBtn = makeIconButton("⬇", "Import from RuneLite Loot Tracker");
         importBtn.addActionListener(e -> onImportFromRuneLiteClicked());
 
-        iconBtnRow.add(eyeButton);
-        iconBtnRow.add(sortButton);
-        iconBtnRow.add(clearButton);
-        iconBtnRow.add(importBtn);
+        iconBtns.add(eyeButton);
+        iconBtns.add(sortButton);
+        iconBtns.add(clearButton);
+        iconBtns.add(importBtn);
 
-        header.add(iconBtnRow);
-        header.add(Box.createVerticalStrut(4));
-
-        // ── Sync row: one full-width button that reconciles + syncs ──────────
         // Sync now performs the complete reconcile (website + plugin + RuneLite
         // tracker → max-absolute) and upload in a single action.
-        JPanel syncBtnRow = new JPanel(new BorderLayout(0, 0));
-        syncBtnRow.setOpaque(false);
-        syncBtnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        syncBtnRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
-
         syncButton = new JButton("Sync");
+        syncButton.setPreferredSize(new Dimension(52, 24));
         syncButton.setBackground(new Color(40, 60, 90));
         syncButton.setForeground(Color.WHITE);
         syncButton.setFocusPainted(false);
@@ -338,8 +336,13 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 + "then uploads them for the account you're logged into.</html>");
         syncButton.addActionListener(e -> onSyncClicked());
 
-        syncBtnRow.add(syncButton, BorderLayout.CENTER);
-        header.add(syncBtnRow);
+        JPanel syncWrap = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        syncWrap.setOpaque(false);
+        syncWrap.add(syncButton);
+
+        btnRow.add(iconBtns, BorderLayout.WEST);
+        btnRow.add(syncWrap, BorderLayout.EAST);
+        header.add(btnRow);
 
         // ── Sync status line (hidden until a sync completes / fails) ─────────
         syncStatusLabel = new JLabel(" ");
@@ -665,6 +668,34 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         syncButton.setBorder(BorderFactory.createLineBorder(new Color(60, 90, 130), 1));
         syncStatusLabel.setText(" ");
         syncStatusLabel.setForeground(new Color(0, 0, 0, 0));
+    }
+
+    /**
+     * Resets the Sync button to its idle state and shows a transient info
+     * message. Used when a manual sync can't start because another sync is
+     * already running, so the button never gets stuck on "Syncing…".
+     */
+    public void showSyncBusy(String message)
+    {
+        if (!SwingUtilities.isEventDispatchThread())
+        {
+            SwingUtilities.invokeLater(() -> showSyncBusy(message));
+            return;
+        }
+        if (syncResetTimer != null) syncResetTimer.stop();
+        if (syncButton != null)
+        {
+            syncButton.setEnabled(true);
+            resetSyncButton();
+        }
+        if (syncStatusLabel != null)
+        {
+            syncStatusLabel.setText(message);
+            syncStatusLabel.setForeground(new Color(200, 160, 60));
+        }
+        syncResetTimer = new javax.swing.Timer(2_500, e -> resetSyncButton());
+        syncResetTimer.setRepeats(false);
+        syncResetTimer.start();
     }
 
     @Override
