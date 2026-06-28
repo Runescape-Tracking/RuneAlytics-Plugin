@@ -1718,14 +1718,28 @@ public class RuneAlyticsPlugin extends Plugin
     {
         try
         {
-            log.debug("[plugin] Loot sync start (account='{}', pull={})", accountKey, pull);
+            // RuneLite's stored Loot Tracker history is a one-time backfill per
+            // account: read it on the first sync only, then never again, so a
+            // cleared account is not silently re-populated from RuneLite's files.
+            // Decide once up front and feed the same answer to both legs.
+            boolean backfillRuneliteHistory = !lootManager.hasBackfilledRuneliteHistory(accountKey);
 
-            // 1. Legacy per-kill history + RuneLite import + upload.
-            lootManager.syncLegacyBlocking(accountKey, pull);
+            log.debug("[plugin] Loot sync start (account='{}', pull={}, backfillRuneliteHistory={})",
+                    accountKey, pull, backfillRuneliteHistory);
+
+            // 1. Legacy per-kill history + (first-time) RuneLite import + upload.
+            lootManager.syncLegacyBlocking(accountKey, pull, backfillRuneliteHistory);
 
             // 2. Three-source absolute-merge reconcile (scoped to this account).
             LootSyncMergeService.MergeResult result =
-                    lootSyncMergeService.performMergeForAccount(accountKey);
+                    lootSyncMergeService.performMergeForAccount(accountKey, backfillRuneliteHistory);
+
+            // Latch the account as backfilled once the first sync completes
+            // without error, so RuneLite history is never re-read for it.
+            if (backfillRuneliteHistory && result.isSuccess())
+            {
+                lootManager.markRuneliteHistoryBackfilled(accountKey);
+            }
 
             SwingUtilities.invokeLater(() ->
             {

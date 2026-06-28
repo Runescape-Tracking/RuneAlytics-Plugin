@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
+import net.runelite.client.config.ConfigManager;
 import net.runelite.client.game.ItemManager;
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -265,6 +266,7 @@ public class LootTrackerManager
     private final RuneAlyticsState         state;
     private final LootStorageManager       storageManager;
     private final LootTrackerApiClient     apiClient;
+    private final ConfigManager            configManager;
     private final ScheduledExecutorService executorService;
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -349,6 +351,7 @@ public class LootTrackerManager
             RuneAlyticsState         state,
             LootStorageManager       storageManager,
             LootTrackerApiClient     apiClient,
+            ConfigManager            configManager,
             ScheduledExecutorService executorService
     )
     {
@@ -359,6 +362,7 @@ public class LootTrackerManager
         this.state           = state;
         this.storageManager  = storageManager;
         this.apiClient       = apiClient;
+        this.configManager   = configManager;
         this.executorService = executorService;
     }
 
@@ -1369,17 +1373,57 @@ public class LootTrackerManager
      * the download/import steps are skipped and only the upload runs, keeping
      * the operation fast.
      */
-    public void syncLegacyBlocking(String username, boolean pull)
+    public void syncLegacyBlocking(String username, boolean pull, boolean importRuneliteHistory)
     {
         if (username == null || username.isEmpty()) return;
 
         if (pull)
         {
             downloadHistoryBlocking(username);
-            importFromRuneLiteLootTrackerSilently(username);
+            if (importRuneliteHistory)
+            {
+                importFromRuneLiteLootTrackerSilently(username);
+            }
             cleanupZeroValueDrops();
         }
         uploadUnsyncedKillsBlocking(username);
+    }
+
+    // ── RuneLite history one-time backfill marker ───────────────────────────
+    //
+    // RuneLite's own Loot Tracker stores cumulative per-account totals. We
+    // backfill it into RuneAlytics exactly once per account (the first sync);
+    // after that only live loot is tracked. This makes a cleared account stay
+    // cleared instead of being re-populated from RuneLite's files on the next
+    // sync. The marker is stored in RuneLite config (NOT the per-account loot
+    // JSON), so it survives the user deleting their runealytics-loot-*.json.
+
+    private static final String RL_BACKFILL_GROUP = "runealytics";
+
+    private static String runeliteBackfillKey(String accountKey)
+    {
+        return "rlbackfill_" + accountKey.toLowerCase().replace(' ', '_');
+    }
+
+    /**
+     * @return {@code true} if RuneLite's stored Loot Tracker history has
+     *         already been backfilled for {@code accountKey} (so it must not
+     *         be re-imported on this sync).
+     */
+    public boolean hasBackfilledRuneliteHistory(String accountKey)
+    {
+        if (accountKey == null || accountKey.isEmpty()) return true;
+        String v = configManager.getConfiguration(RL_BACKFILL_GROUP, runeliteBackfillKey(accountKey));
+        return v != null && !v.isEmpty();
+    }
+
+    /** Latches {@code accountKey} as backfilled so RuneLite history is never re-read for it. */
+    public void markRuneliteHistoryBackfilled(String accountKey)
+    {
+        if (accountKey == null || accountKey.isEmpty()) return;
+        configManager.setConfiguration(RL_BACKFILL_GROUP, runeliteBackfillKey(accountKey), "1");
+        log.debug("[rl-import] Marked RuneLite history backfilled for '{}' — live loot only from now on.",
+                accountKey);
     }
 
     /**

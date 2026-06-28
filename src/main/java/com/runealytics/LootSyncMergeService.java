@@ -118,12 +118,33 @@ public class LootSyncMergeService
      */
     public MergeResult performMergeForAccount(String accountKey)
     {
+        return performMergeForAccount(accountKey, true);
+    }
+
+    /**
+     * Performs the three-source merge for an explicitly supplied
+     * {@code accountKey}, with control over whether RuneLite's stored Loot
+     * Tracker history is folded in.
+     *
+     * <p>RuneLite history is a cumulative backfill source: it should be read
+     * exactly once per account (the first sync). On every later sync
+     * {@code includeRuneliteHistory} is {@code false} so that a cleared
+     * account is not silently re-populated from RuneLite's own files. Live
+     * loot is unaffected — it is already captured in the plugin's local
+     * store.</p>
+     *
+     * @param accountKey             normalized RuneScape account name; must be non-null
+     * @param includeRuneliteHistory whether to read RuneLite's stored Loot Tracker totals
+     */
+    public MergeResult performMergeForAccount(String accountKey, boolean includeRuneliteHistory)
+    {
         if (accountKey == null || accountKey.isEmpty())
         {
             return MergeResult.blocked("No RuneScape account detected. Log in before syncing.");
         }
 
-        log.debug("[merge] Starting 3-source merge for account '{}'", accountKey);
+        log.debug("[merge] Starting 3-source merge for account '{}' (includeRuneliteHistory={})",
+                accountKey, includeRuneliteHistory);
 
         // ── 2. Fetch website snapshot ─────────────────────────────────────────
         LootTrackerApiClient.LootSnapshot websiteSnapshot = null;
@@ -144,7 +165,10 @@ public class LootSyncMergeService
         log.debug("[merge] Plugin local data: {} sources", localData.getBossKills().size());
 
         // ── 4. Read RuneLite default tracker (best-effort, account-filtered) ──
-        boolean rlHistoricalAvailable = rlReader.canImportHistorical();
+        // Only read RuneLite's stored history on the first sync for an account.
+        // Afterwards its totals already live in the plugin's local store, so
+        // re-reading would resurrect loot the player deliberately cleared.
+        boolean rlHistoricalAvailable = includeRuneliteHistory && rlReader.canImportHistorical();
         Map<String, Map<Integer, Long>> rlTotals = Collections.emptyMap();
         boolean rlSkippedDueToAccount = false;
 
@@ -153,6 +177,11 @@ public class LootSyncMergeService
             rlTotals = rlReader.readForAccount(accountKey);
             rlSkippedDueToAccount = rlTotals.isEmpty();
             log.debug("[merge] RuneLite tracker: {} sources (account-filtered)", rlTotals.size());
+        }
+        else if (!includeRuneliteHistory)
+        {
+            log.debug("[merge] Skipping RuneLite history for '{}' — already backfilled once; "
+                    + "live loot only from here on.", accountKey);
         }
         else
         {
