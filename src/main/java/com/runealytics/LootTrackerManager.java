@@ -1547,6 +1547,9 @@ public class LootTrackerManager
 
         bossKillStats.clear();
 
+        List<String> emptyPlaceholderKeys = new ArrayList<>();
+        boolean purgedPlaceholders = false;
+
         for (Map.Entry<String, LootStorageData.BossKillData> entry : data.getBossKills().entrySet())
         {
             LootStorageData.BossKillData bd = entry.getValue();
@@ -1554,11 +1557,19 @@ public class LootTrackerManager
             // Skip placeholder entries: 0 kill count and no recorded drops.
             // These can show up as empty rows on the panel (e.g. a source the
             // merge saw on the website/RuneLite side with no actual loot).
-            boolean hasKills = bd.getKills() != null && !bd.getKills().isEmpty();
+            // Note: a non-empty kills list with no actual kill count/drops in
+            // it doesn't count as "real" data, so this checks effective totals
+            // rather than just list emptiness.
             boolean hasDrops = bd.getAggregatedDrops() != null
                     && bd.getAggregatedDrops().values().stream()
                             .anyMatch(d -> d.getTotalQuantity() > 0);
-            if (bd.getKillCount() <= 0 && !hasKills && !hasDrops) continue;
+            int effectiveKillCount = Math.max(bd.getKillCount(),
+                    bd.getKills() != null ? bd.getKills().size() : 0);
+            if (effectiveKillCount <= 0 && !hasDrops)
+            {
+                emptyPlaceholderKeys.add(entry.getKey());
+                continue;
+            }
 
             BossKillStats stats = new BossKillStats(bd.getNpcName(), bd.getNpcId());
             stats.setPrestige(bd.getPrestige());
@@ -1590,10 +1601,22 @@ public class LootTrackerManager
             bossKillStats.put(stats.getNpcName(), stats);
         }
 
-        // Persist once, outside the loop, if any drop's value was backfilled.
-        if (backfilled)
+        // Purge empty placeholder entries (0 kill count, no drops) directly
+        // from persisted storage so they don't keep re-appearing on every
+        // refresh or get re-uploaded on the next sync.
+        if (!emptyPlaceholderKeys.isEmpty())
         {
-            log.debug("[Loot] Backfilled missing GE/alch values on legacy drop record(s) — saving");
+            for (String key : emptyPlaceholderKeys) data.getBossKills().remove(key);
+            purgedPlaceholders = true;
+            log.debug("[Loot] Purged {} empty placeholder boss entry(ies) from storage: {}",
+                    emptyPlaceholderKeys.size(), emptyPlaceholderKeys);
+        }
+
+        // Persist once, outside the loop, if any drop's value was backfilled
+        // or empty placeholder entries were purged.
+        if (backfilled || purgedPlaceholders)
+        {
+            log.debug("[Loot] Backfilled missing GE/alch values and/or purged placeholders — saving");
             storageManager.scheduleSave();
         }
 

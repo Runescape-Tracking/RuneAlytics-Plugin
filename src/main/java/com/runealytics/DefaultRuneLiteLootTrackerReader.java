@@ -89,16 +89,26 @@ public class DefaultRuneLiteLootTrackerReader
     }
 
     /**
+     * Per-source totals read from RuneLite's own Loot Tracker file: the
+     * cumulative kill count RuneLite has recorded for that source, alongside
+     * the absolute per-item quantities.
+     */
+    public static class SourceTotals
+    {
+        public int killCount;
+        public final Map<Integer, Long> items = new HashMap<>();
+    }
+
+    /**
      * Reads RuneLite Loot Tracker absolute totals for {@code accountKey}.
      *
      * <p>Only loot stored under the RS-profile key(s) whose display name matches
      * {@code accountKey} is returned. All other accounts' loot is ignored.</p>
      *
      * @param  accountKey  normalized RuneScape username, e.g. {@code "zezima"}
-     * @return map of {sourceName → {itemId → absoluteQuantity}};
-     *         empty (never null) when no matching data exists
+     * @return map of {sourceName → totals}; empty (never null) when no matching data exists
      */
-    public Map<String, Map<Integer, Long>> readForAccount(String accountKey)
+    public Map<String, SourceTotals> readForAccount(String accountKey)
     {
         return readForAccount(accountKey, listProfileFiles());
     }
@@ -108,7 +118,7 @@ public class DefaultRuneLiteLootTrackerReader
      * list, so the per-account scoping can be unit-tested without depending on
      * {@code RuneLite.RUNELITE_DIR}.
      */
-    Map<String, Map<Integer, Long>> readForAccount(String accountKey, List<File> files)
+    Map<String, SourceTotals> readForAccount(String accountKey, List<File> files)
     {
         if (accountKey == null || accountKey.isEmpty())
         {
@@ -118,13 +128,15 @@ public class DefaultRuneLiteLootTrackerReader
 
         if (files == null || files.isEmpty())
         {
-            log.debug("[rl-reader] No profiles2 files found — no RuneLite tracker data to read");
+            log.warn("[rl-reader] No profiles2/*.properties files found under {} — "
+                    + "no RuneLite tracker data to read for '{}'",
+                    new File(RuneLite.RUNELITE_DIR, "profiles2"), accountKey);
             return Collections.emptyMap();
         }
 
-        Map<String, Map<Integer, Long>> result = new HashMap<>();
+        Map<String, SourceTotals> result = new HashMap<>();
         int filesWithLoot     = 0;
-        int knownAccountKeys  = 0;
+        Set<String> allSeenDisplayNames = new HashSet<>();
 
         for (File propFile : files)
         {
@@ -133,28 +145,44 @@ public class DefaultRuneLiteLootTrackerReader
 
             // 1. Which RS-profile keys in this file belong to the current account?
             Map<String, String> keyToAccount = readProfileKeyToAccount(props);
-            knownAccountKeys += keyToAccount.size();
+            allSeenDisplayNames.addAll(keyToAccount.values());
 
             Set<String> matchingKeys = new HashSet<>();
             for (Map.Entry<String, String> e : keyToAccount.entrySet())
             {
                 if (accountKey.equals(e.getValue())) matchingKeys.add(e.getKey());
             }
-            if (matchingKeys.isEmpty()) continue;
+
+            if (matchingKeys.isEmpty())
+            {
+                log.debug("[rl-reader] {}: no rsprofile key maps to '{}' (keys seen here: {})",
+                        propFile.getName(), accountKey, keyToAccount);
+                continue;
+            }
+
+            log.debug("[rl-reader] {}: account '{}' matched rsprofile key(s) {}",
+                    propFile.getName(), accountKey, matchingKeys);
 
             // 2. Read only loot stored under those keys.
-            if (readLootForKeys(props, matchingKeys, result)) filesWithLoot++;
+            if (readLootForKeys(propFile.getName(), props, matchingKeys, result)) filesWithLoot++;
         }
 
         if (result.isEmpty())
         {
-            log.warn("[rl-reader] No RuneLite loot matched account '{}' "
-                    + "({} RS-profile name(s) seen across {} file(s)). "
-                    + "Historical import skipped; live LootReceived events still active.",
-                    accountKey, knownAccountKeys, files.size());
+            log.warn("[rl-reader] No RuneLite loot matched account '{}' across {} file(s). "
+                    + "Display names seen in profiles2: {}. "
+                    + "If '{}' isn't in that list, RuneLite has never recorded a displayName for "
+                    + "this exact account — check capitalization/spacing.",
+                    accountKey, files.size(), allSeenDisplayNames, accountKey);
         }
         else
         {
+            for (Map.Entry<String, SourceTotals> e : result.entrySet())
+            {
+                log.debug("[rl-reader] account '{}' source '{}': killCount={}, {} item(s) -> {}",
+                        accountKey, e.getKey(), e.getValue().killCount,
+                        e.getValue().items.size(), e.getValue().items);
+            }
             log.debug("[rl-reader] Read {} source(s) for account '{}' from {} file(s)",
                     result.size(), accountKey, filesWithLoot);
         }
@@ -212,8 +240,8 @@ public class DefaultRuneLiteLootTrackerReader
      *
      * @return {@code true} if at least one entry was parsed
      */
-    private boolean readLootForKeys(Properties props, Set<String> allowedKeys,
-            Map<String, Map<Integer, Long>> dest)
+    private boolean readLootForKeys(String fileName, Properties props, Set<String> allowedKeys,
+            Map<String, SourceTotals> dest)
     {
         int entriesParsed = 0;
 
@@ -234,22 +262,31 @@ public class DefaultRuneLiteLootTrackerReader
             {
                 JsonObject obj = new JsonParser().parse(val).getAsJsonObject();
 
-                String name = obj.has("name") ? obj.get("name").getAsString() : "Unknown";
+                String name  = obj.has("name")  ? obj.get("name").getAsString()  : "Unknown";
+                int    kills = obj.has("kills") ? obj.get("kills").getAsInt()    : 0;
                 if (!obj.has("drops") || !obj.get("drops").isJsonArray()) continue;
 
                 JsonArray flatDrops = obj.getAsJsonArray("drops");
-                Map<Integer, Long> sourceMap = dest.computeIfAbsent(name, k -> new HashMap<>());
+                SourceTotals totals = dest.computeIfAbsent(name, k -> new SourceTotals());
 
+                // RuneLite stores ABSOLUTE kill counts/quantities. max() guards
+                // against the same account's data being split across files or
+                // across multiple drops_<TYPE>_<name> entries for one source.
+                totals.killCount = Math.max(totals.killCount, kills);
+
+                int itemsBefore = totals.items.size();
                 for (int i = 0; i + 1 < flatDrops.size(); i += 2)
                 {
                     int  itemId = flatDrops.get(i).getAsInt();
                     long qty    = flatDrops.get(i + 1).getAsLong();
                     if (itemId <= 0 || qty <= 0) continue;
 
-                    // RuneLite stores ABSOLUTE totals. max() guards against the
-                    // same account's data being split across profile files.
-                    sourceMap.merge(itemId, qty, Math::max);
+                    totals.items.merge(itemId, qty, Math::max);
                 }
+
+                log.debug("[rl-reader] {} | key={} -> source='{}', runelite_kills={}, "
+                        + "{} item id/qty pair(s) parsed (raw json: {})",
+                        fileName, key, name, kills, totals.items.size() - itemsBefore, val);
 
                 entriesParsed++;
             }

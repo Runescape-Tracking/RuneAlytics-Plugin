@@ -145,7 +145,7 @@ public class LootSyncMergeService
         // on every sync — never from a plugin-side cache or temp file. This is
         // the canonical source of truth for what RuneLite has tracked.
         boolean rlAvailable = rlReader.canImportHistorical();
-        Map<String, Map<Integer, Long>> rlTotals = Collections.emptyMap();
+        Map<String, DefaultRuneLiteLootTrackerReader.SourceTotals> rlTotals = Collections.emptyMap();
         boolean rlSkippedDueToAccount = false;
 
         if (rlAvailable)
@@ -164,7 +164,7 @@ public class LootSyncMergeService
         // syncs; it is never read as a merge input.
         LootStorageData localData = storageManager.getCurrentData();
 
-        // ── 5. Three-source merge ─────────────────────────────────────────────
+        // ── 5. Item + kill-count merge ────────────────────────────────────────
         MergeContext ctx = new MergeContext(accountKey);
 
         // Website leg
@@ -185,19 +185,32 @@ public class LootSyncMergeService
             }
         }
 
+        // Website-side kill count, taken from whatever this account's local
+        // storage already holds (it was populated from the server's per-kill
+        // history, which is the website's authoritative KC).
+        for (Map.Entry<String, LootStorageData.BossKillData> e : localData.getBossKills().entrySet())
+        {
+            ctx.mergeKillCount(normalizeBossKey(e.getKey()), e.getKey(),
+                    e.getValue().getKillCount(), "website");
+        }
+
         // RuneLite default tracker leg.
         // RuneLite stores only item IDs, so names are resolved via ItemManager —
         // which MUST run on the client thread. Resolve every needed name up front
         // in a single client-thread hop rather than per-item inside this loop.
         Set<Integer> rlItemIds = new HashSet<>();
-        for (Map<Integer, Long> items : rlTotals.values()) rlItemIds.addAll(items.keySet());
+        for (DefaultRuneLiteLootTrackerReader.SourceTotals t : rlTotals.values()) rlItemIds.addAll(t.items.keySet());
         Map<Integer, String> rlItemNames = resolveItemNames(rlItemIds);
 
-        for (Map.Entry<String, Map<Integer, Long>> srcEntry : rlTotals.entrySet())
+        for (Map.Entry<String, DefaultRuneLiteLootTrackerReader.SourceTotals> srcEntry : rlTotals.entrySet())
         {
             String sourceName = srcEntry.getKey();
             String sourceKey  = normalizeBossKey(sourceName);
-            for (Map.Entry<Integer, Long> itemEntry : srcEntry.getValue().entrySet())
+            DefaultRuneLiteLootTrackerReader.SourceTotals totals = srcEntry.getValue();
+
+            ctx.mergeKillCount(sourceKey, sourceName, totals.killCount, "runelite_default_loot_tracker");
+
+            for (Map.Entry<Integer, Long> itemEntry : totals.items.entrySet())
             {
                 int  itemId = itemEntry.getKey();
                 long qty    = itemEntry.getValue();
@@ -254,10 +267,10 @@ public class LootSyncMergeService
     {
         for (MergedSource src : merged)
         {
-            // Skip sources with no actual loot — don't create an empty
-            // placeholder row (0 KC, no drops) on the panel.
+            // Skip sources with no actual loot AND no kill count — don't create
+            // an empty placeholder row (0 KC, no drops) on the panel.
             boolean hasLoot = src.items.stream().anyMatch(i -> i.quantity > 0);
-            if (!hasLoot) continue;
+            if (!hasLoot && src.killCount <= 0) continue;
 
             LootStorageData.BossKillData bossData =
                     localData.getBossKills().computeIfAbsent(src.sourceName, k -> {
@@ -265,6 +278,13 @@ public class LootSyncMergeService
                         bd.setNpcName(k);
                         return bd;
                     });
+
+            if (src.killCount > bossData.getKillCount())
+            {
+                log.debug("[merge] '{}' killCount {} -> {} (winner: {})",
+                        src.sourceName, bossData.getKillCount(), src.killCount, src.killCountWinner);
+                bossData.setKillCount(src.killCount);
+            }
 
             for (MergedItem item : src.items)
             {
@@ -369,6 +389,12 @@ public class LootSyncMergeService
     {
         /** Map: sourceKey → (itemKey → MutableItem) */
         private final Map<String, Map<String, MutableItem>> data = new LinkedHashMap<>();
+        /** Map: sourceKey → merged (max) kill count seen so far. */
+        private final Map<String, Integer> killCounts       = new LinkedHashMap<>();
+        /** Map: sourceKey → which source ("website"/"runelite_default_loot_tracker") last won the kill count. */
+        private final Map<String, String>  killCountWinners = new LinkedHashMap<>();
+        /** Map: sourceKey → display name, captured even if a source has no items. */
+        private final Map<String, String>  killCountSourceNames = new LinkedHashMap<>();
         private final String accountKey;
 
         MergeContext(String accountKey)
@@ -395,6 +421,8 @@ public class LootSyncMergeService
 
             if (quantity > item.quantity)
             {
+                log.debug("[merge] '{}' item '{}' (id={}) qty {} -> {} (source: {})",
+                        sourceName, itemName, itemId, item.quantity, quantity, source);
                 item.quantity    = quantity;
                 item.winnerSource = source;
             }
@@ -408,18 +436,42 @@ public class LootSyncMergeService
             item.sourceNames.put(source, sourceName);
         }
 
+        /**
+         * Merges a source's reported kill count using max-wins semantics — the
+         * same rule applied to item quantities: whichever source (website or
+         * RuneLite's own tracker) reports the higher kill count wins.
+         */
+        void mergeKillCount(String sourceKey, String sourceName, int killCount, String source)
+        {
+            killCountSourceNames.putIfAbsent(sourceKey, sourceName);
+            int existing = killCounts.getOrDefault(sourceKey, 0);
+            if (killCount > existing)
+            {
+                log.debug("[merge] '{}' killCount {} -> {} (source: {})",
+                        sourceName, existing, killCount, source);
+                killCounts.put(sourceKey, killCount);
+                killCountWinners.put(sourceKey, source);
+            }
+        }
+
         List<MergedSource> build()
         {
+            // Sources that only ever received a kill-count merge (e.g. RuneLite
+            // tracked kills with no recorded drops) don't appear in `data` yet —
+            // make sure they still produce a MergedSource so their KC isn't lost.
+            Set<String> allSourceKeys = new LinkedHashSet<>(data.keySet());
+            allSourceKeys.addAll(killCounts.keySet());
+
             List<MergedSource> result = new ArrayList<>();
-            for (Map.Entry<String, Map<String, MutableItem>> srcEntry : data.entrySet())
+            for (String sourceKey : allSourceKeys)
             {
-                String sourceKey = srcEntry.getKey();
+                Map<String, MutableItem> itemMap = data.getOrDefault(sourceKey, Collections.emptyMap());
                 List<MergedItem> items = new ArrayList<>();
 
                 String sourceName = null;
                 String sourceType = null;
 
-                for (MutableItem mi : srcEntry.getValue().values())
+                for (MutableItem mi : itemMap.values())
                 {
                     if (sourceName == null && !mi.sourceNames.isEmpty())
                         sourceName = mi.sourceNames.values().iterator().next();
@@ -433,10 +485,16 @@ public class LootSyncMergeService
                             reason));
                 }
 
+                int    killCount       = killCounts.getOrDefault(sourceKey, 0);
+                String killCountWinner = killCountWinners.get(sourceKey);
+                if (sourceName == null) sourceName = killCountSourceNames.get(sourceKey);
+
                 result.add(new MergedSource(sourceKey,
                         sourceName != null ? sourceName : sourceKey,
                         sourceType,
-                        items));
+                        items,
+                        killCount,
+                        killCountWinner));
             }
             return result;
         }
@@ -471,14 +529,21 @@ public class LootSyncMergeService
         public final String           sourceName;
         public final String           sourceType;
         public final List<MergedItem> items;
+        /** Max-merged kill count for this source: max(website, runelite_default). */
+        public final int              killCount;
+        /** Which source ("website" / "runelite_default_loot_tracker") provided the winning kill count. */
+        public final String           killCountWinner;
 
         public MergedSource(String sourceKey, String sourceName,
-                String sourceType, List<MergedItem> items)
+                String sourceType, List<MergedItem> items,
+                int killCount, String killCountWinner)
         {
-            this.sourceKey  = sourceKey;
-            this.sourceName = sourceName;
-            this.sourceType = sourceType;
-            this.items      = items;
+            this.sourceKey       = sourceKey;
+            this.sourceName      = sourceName;
+            this.sourceType      = sourceType;
+            this.items           = items;
+            this.killCount       = killCount;
+            this.killCountWinner = killCountWinner;
         }
     }
 

@@ -292,6 +292,7 @@ public class LootTrackerApiClient
             srcObj.addProperty("source_key",  src.sourceKey);
             srcObj.addProperty("source_name", src.sourceName);
             if (src.sourceType != null) srcObj.addProperty("source_type", src.sourceType);
+            if (src.killCount > 0) srcObj.addProperty("kill_count", src.killCount);
 
             JsonArray itemsArr = new JsonArray();
             for (LootSyncMergeService.MergedItem item : src.items)
