@@ -1526,6 +1526,22 @@ public class LootTrackerManager
         log.debug("Loot tracker reset for logout");
     }
 
+    /**
+     * Rebuilds the in-memory {@code bossKillStats} display cache from whatever
+     * is currently in {@link LootStorageManager}, purging empty placeholder
+     * entries in the process.
+     *
+     * <p>Must be called after anything writes to {@link LootStorageData}
+     * outside of this manager's own kill-recording methods — e.g. after
+     * {@link LootSyncMergeService} applies a merge directly to storage —
+     * otherwise the panel keeps rendering a stale snapshot until the next
+     * login.</p>
+     */
+    public void refreshFromStorage()
+    {
+        refreshLootDisplay();
+    }
+
     private void refreshLootDisplay()
     {
         LootStorageData data = storageManager.getCurrentData();

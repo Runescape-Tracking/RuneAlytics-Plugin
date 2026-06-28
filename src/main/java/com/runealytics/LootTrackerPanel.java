@@ -69,6 +69,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private JButton           syncButton;
     private JLabel            syncStatusLabel;
     private javax.swing.Timer syncResetTimer;
+    private javax.swing.Timer cooldownTickTimer;
     /** Shown when RuneLite tracker history can't be tied to the current account. */
     private JPanel            rlHistoryWarningPanel;
     /** Status panel for account sync / death recovery guard. */
@@ -680,13 +681,75 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         syncResetTimer.start();
     }
 
+    /**
+     * Called after the post-sync flash (or an immediate block) fades. Enters
+     * the grey cooldown state with a live countdown if a cooldown is still in
+     * effect, otherwise returns the button to its ready (blue) state.
+     */
     private void resetSyncButton()
     {
+        long remaining = SYNC_COOLDOWN_MS - (System.currentTimeMillis() - lastSyncTime);
+        if (remaining > 0) startCooldownCountdown();
+        else                setSyncReady();
+    }
+
+    /** Idle, clickable state: blue button, no countdown running. */
+    private void setSyncReady()
+    {
+        if (cooldownTickTimer != null) { cooldownTickTimer.stop(); cooldownTickTimer = null; }
+        syncButton.setEnabled(true);
         syncButton.setText("Sync");
+        syncButton.setForeground(Color.WHITE);
         syncButton.setBackground(new Color(40, 60, 90));
         syncButton.setBorder(BorderFactory.createLineBorder(new Color(60, 90, 130), 1));
         syncStatusLabel.setText(" ");
         syncStatusLabel.setForeground(new Color(0, 0, 0, 0));
+    }
+
+    /** Grey, disabled state with a 1s-ticking countdown until the cooldown ends. */
+    private void startCooldownCountdown()
+    {
+        syncButton.setEnabled(false);
+        syncButton.setForeground(new Color(100, 100, 100));
+        syncButton.setBackground(new Color(35, 35, 35));
+        syncButton.setBorder(BorderFactory.createLineBorder(new Color(55, 55, 55), 1));
+
+        if (cooldownTickTimer != null) cooldownTickTimer.stop();
+        cooldownTickTimer = new javax.swing.Timer(1_000, e -> tickCooldown());
+        cooldownTickTimer.setRepeats(true);
+        tickCooldown();
+        cooldownTickTimer.start();
+    }
+
+    private void tickCooldown()
+    {
+        long remaining = SYNC_COOLDOWN_MS - (System.currentTimeMillis() - lastSyncTime);
+        if (remaining <= 0)
+        {
+            setSyncReady();
+            return;
+        }
+        long mins = remaining / 60_000;
+        long secs = (remaining % 60_000) / 1_000;
+        syncButton.setText(String.format("⏳ %d:%02d", mins, secs));
+        syncStatusLabel.setText("Next sync available soon");
+        syncStatusLabel.setForeground(new Color(140, 140, 140));
+    }
+
+    /**
+     * Updates the small status line under the Sync button to reflect which
+     * phase of the (multi-step) sync pipeline is currently running.
+     */
+    public void showSyncPhase(String phase)
+    {
+        if (!SwingUtilities.isEventDispatchThread())
+        {
+            SwingUtilities.invokeLater(() -> showSyncPhase(phase));
+            return;
+        }
+        if (syncStatusLabel == null) return;
+        syncStatusLabel.setText(phase);
+        syncStatusLabel.setForeground(new Color(100, 160, 220));
     }
 
     /**

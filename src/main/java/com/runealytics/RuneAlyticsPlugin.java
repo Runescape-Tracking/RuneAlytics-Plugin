@@ -1720,14 +1720,30 @@ public class RuneAlyticsPlugin extends Plugin
         {
             log.debug("[plugin] Loot sync start (account='{}', pull={})", accountKey, pull);
 
+            if (userInitiated && lootTrackerPanel != null)
+            {
+                SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Syncing with server…"));
+            }
+
             // 1. Legacy per-kill website history pull + upload.
             lootManager.syncLegacyBlocking(accountKey, pull);
+
+            if (userInitiated && lootTrackerPanel != null)
+            {
+                SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Syncing RuneLite tracker…"));
+            }
 
             // 2. Absolute-merge reconcile: website + RuneLite's own rsprofile
             //    loot tracker file, read fresh every sync and scoped to this
             //    account's OSRS username.
             LootSyncMergeService.MergeResult result =
                     lootSyncMergeService.performMergeForAccount(accountKey);
+
+            // The merge writes straight to LootStorageData, bypassing the
+            // in-memory display cache — rebuild it now so the panel reflects
+            // the merged KCs/drops (and any newly-empty placeholders get
+            // purged) instead of showing a stale pre-merge snapshot.
+            lootManager.refreshFromStorage();
 
             SwingUtilities.invokeLater(() ->
             {
