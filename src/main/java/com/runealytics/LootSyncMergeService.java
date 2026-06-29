@@ -317,6 +317,10 @@ public class LootSyncMergeService
                     agg.setItemId(item.itemId);
                     agg.setItemName(item.itemName);
                     agg.setTotalQuantity((int) Math.min(item.quantity, Integer.MAX_VALUE));
+                    agg.setDropCount(1);
+                    // GE/alch price + totalValue are resolved later on the
+                    // client thread by LootTrackerManager.backfillAllMissingDropValues
+                    // — ItemManager can't be called from this background thread.
                     bossData.getAggregatedDrops().put(item.itemId > 0 ? item.itemId : -1, agg);
                 }
                 else

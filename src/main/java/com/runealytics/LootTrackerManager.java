@@ -1587,6 +1587,16 @@ public class LootTrackerManager
                 continue;
             }
 
+            if (effectiveKillCount > 0 && !hasDrops)
+            {
+                log.warn("[Loot] '{}' has {} kill(s) but no recorded drops — "
+                                + "kills.size={}, aggregatedDrops.size={} (underlying data has no items "
+                                + "for this source; nothing to display)",
+                        entry.getKey(), effectiveKillCount,
+                        bd.getKills() != null ? bd.getKills().size() : 0,
+                        bd.getAggregatedDrops() != null ? bd.getAggregatedDrops().size() : 0);
+            }
+
             BossKillStats stats = new BossKillStats(bd.getNpcName(), bd.getNpcId());
             stats.setPrestige(bd.getPrestige());
 
@@ -1683,9 +1693,9 @@ public class LootTrackerManager
             for (Map.Entry<String, LootStorageData.BossKillData> entry : data.getBossKills().entrySet())
             {
                 LootStorageData.BossKillData bd = entry.getValue();
-                if (bd.getKills() == null) continue;
 
-                for (LootStorageData.KillRecord kr : bd.getKills())
+                for (LootStorageData.KillRecord kr : bd.getKills() != null
+                        ? bd.getKills() : Collections.<LootStorageData.KillRecord>emptyList())
                 {
                     if (kr.getDrops() == null) continue;
 
@@ -1734,6 +1744,37 @@ public class LootTrackerManager
                     catch (Exception ex)
                     {
                         log.warn("[Loot] Backfill failed for a drop in '{}': {}", entry.getKey(), ex.getMessage());
+                    }
+                }
+
+                // Merge-only sources (e.g. RuneLite-tracker / website import)
+                // have aggregated totals but no per-kill records, so the loop
+                // above never touches them — resolve their price fields here
+                // directly so they don't sit at 0gp forever.
+                if (bd.getAggregatedDrops() == null) continue;
+                for (LootStorageData.AggregatedDrop agg : bd.getAggregatedDrops().values())
+                {
+                    if (agg.getItemId() <= 0 || agg.getGePrice() > 0) continue;
+                    try
+                    {
+                        int gePrice = ItemValueResolver.perItemGeValue(itemManager, agg.getItemId());
+                        if (gePrice <= 0) continue;
+
+                        agg.setGePrice(gePrice);
+                        ItemComposition comp = itemManager.getItemComposition(agg.getItemId());
+                        if (comp != null)
+                        {
+                            if (agg.getHighAlch() <= 0) agg.setHighAlch(comp.getHaPrice());
+                            if (agg.getItemName() == null || agg.getItemName().isEmpty())
+                                agg.setItemName(comp.getName());
+                        }
+                        agg.setTotalValue((long) gePrice * agg.getTotalQuantity());
+                        changed[0] = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        log.warn("[Loot] Backfill failed for aggregated drop in '{}': {}",
+                                entry.getKey(), ex.getMessage());
                     }
                 }
             }
