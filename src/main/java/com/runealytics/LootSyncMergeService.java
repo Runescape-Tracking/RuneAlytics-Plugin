@@ -30,12 +30,13 @@ import java.util.concurrent.TimeUnit;
  *   <li>{@code POST} merged totals to {@code /runelite/loot/sync-absolute}.</li>
  * </ol>
  *
- * <p>The website's full-history {@code /runelite/loot/snapshot} endpoint is
- * intentionally NOT used as a merge input: it returns the account's entire
- * lifetime loot record (every source ever recorded), which would re-surface
- * years of old kills on the panel every sync. Only RuneLite's own tracker
- * file — which reflects what's actually been tracked locally — feeds the
- * merge and the panel.</p>
+ * <h2>Website snapshot leg</h2>
+ * <p>The website's {@code /runelite/loot/snapshot} endpoint is also merged
+ * in (fetched first, below) — for each (source, item) tuple, the final
+ * quantity is {@code max(website, runelite_default)}. Any source whose name
+ * or key still contains raw chat-message markup (e.g. {@code <col=...>}
+ * tags) is rejected defensively, since that indicates malformed upstream
+ * data rather than a real NPC/source name.</p>
  *
  * <h2>Important: RuneLite default tracker data is absolute</h2>
  * <p>RuneLite's Loot Tracker stores cumulative totals, not incremental new
@@ -130,14 +131,19 @@ public class LootSyncMergeService
 
         log.debug("[merge] Starting merge for account '{}'", accountKey);
 
-        // NOTE: the website's /snapshot endpoint returns the account's entire
-        // lifetime loot history (every source ever recorded), not just what's
-        // relevant to the current tracking session. Merging that in would mean
-        // every sync re-surfaces years of old kills on the panel, which is not
-        // what the panel should show. So the website snapshot is intentionally
-        // NOT used as a merge input — RuneLite's own tracker file (read fresh
-        // below) is the only merge input, and its result is what gets uploaded
-        // to the website via sync-absolute.
+        // ── 2. Fetch website snapshot ─────────────────────────────────────────
+        LootTrackerApiClient.LootSnapshot websiteSnapshot = null;
+        try
+        {
+            websiteSnapshot = apiClient.fetchLootSnapshot(accountKey);
+            log.debug("[merge] Website snapshot: {} sources",
+                    websiteSnapshot != null ? websiteSnapshot.sources.size() : "null (fetch failed)");
+        }
+        catch (IOException e)
+        {
+            log.warn("[merge] Failed to fetch website snapshot: {}", e.getMessage());
+            // Non-fatal: continue with RuneLite data only.
+        }
 
         // ── 3. Read RuneLite default tracker (best-effort, account-filtered) ──
         // Read directly from RuneLite's own profiles2/*.properties save file
@@ -166,10 +172,39 @@ public class LootSyncMergeService
         // ── 5. Item + kill-count merge ────────────────────────────────────────
         MergeContext ctx = new MergeContext(accountKey);
 
-        // RuneLite default tracker leg — the only merge input. Local storage
-        // is never read as a merge input either; the account's already-
-        // recorded kill count is preserved as a floor directly in
-        // applyMergedToLocalStorage (it only ever raises KC, never lowers it).
+        // Website leg
+        if (websiteSnapshot != null)
+        {
+            for (LootTrackerApiClient.LootSnapshot.SourceData srcData : websiteSnapshot.sources.values())
+            {
+                if (hasMarkup(srcData.sourceKey) || hasMarkup(srcData.sourceName))
+                {
+                    log.warn("[merge] Rejected website source with malformed name/key: key='{}' name='{}'",
+                            srcData.sourceKey, srcData.sourceName);
+                    continue;
+                }
+
+                for (Map.Entry<String, Long> e : srcData.itemTotals.entrySet())
+                {
+                    String itemKey = e.getKey();
+                    long   qty     = e.getValue();
+                    if (qty <= 0) continue; // never surface a zero-quantity drop
+                    int    itemId  = websiteSnapshot.itemIdsByKey.getOrDefault(itemKey, 0);
+                    String name    = websiteSnapshot.itemNamesByKey.getOrDefault(itemKey, itemKey);
+                    if (hasMarkup(name)) continue;
+                    ctx.mergeItem(srcData.sourceKey, srcData.sourceName, null,
+                            itemId, name, qty, "website");
+                }
+            }
+        }
+
+        // NOTE: the website snapshot has no per-source kill_count field (only
+        // items), so there is no real "website KC" to merge here. The
+        // account's already-recorded kill count is preserved as a floor
+        // directly in applyMergedToLocalStorage (it only ever raises KC, never
+        // lowers it), so nothing is lost by not looping it back through here.
+
+        // RuneLite default tracker leg.
         // RuneLite stores only item IDs, so names are resolved via ItemManager —
         // which MUST run on the client thread. Resolve every needed name up front
         // in a single client-thread hop rather than per-item inside this loop.
@@ -287,6 +322,16 @@ public class LootSyncMergeService
 
         storageManager.scheduleSave();
         log.debug("[merge] Applied merged totals to local storage");
+    }
+
+    /**
+     * Detects raw chat-message markup (e.g. {@code <col=00ffff>...</col>})
+     * leaking into a source/item name — a sign of malformed upstream data
+     * that must never reach the merge or the panel.
+     */
+    private static boolean hasMarkup(String s)
+    {
+        return s != null && s.contains("<col=");
     }
 
     /**
