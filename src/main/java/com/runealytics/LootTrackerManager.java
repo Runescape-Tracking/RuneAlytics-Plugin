@@ -1590,7 +1590,7 @@ public class LootTrackerManager
             BossKillStats stats = new BossKillStats(bd.getNpcName(), bd.getNpcId());
             stats.setPrestige(bd.getPrestige());
 
-            if (bd.getKills() != null)
+            if (bd.getKills() != null && !bd.getKills().isEmpty())
             {
                 for (LootStorageData.KillRecord kr : bd.getKills())
                 {
@@ -1607,6 +1607,32 @@ public class LootTrackerManager
             else
             {
                 stats.setKillCount(bd.getKillCount());
+            }
+
+            // Sources synced purely via the website/RuneLite-tracker merge
+            // have aggregated drop totals but no per-kill records — without
+            // this, BossKillStats.getAggregatedDrops() (which sums killHistory)
+            // would come back empty and the panel would show "No drops
+            // recorded yet" even though real totals exist.
+            boolean usingPreloadedDrops = hasDrops
+                    && (bd.getKills() == null || bd.getKills().isEmpty());
+            if (hasDrops)
+            {
+                List<BossKillStats.AggregatedDrop> preloaded = new ArrayList<>();
+                long preloadedValue = 0;
+                for (LootStorageData.AggregatedDrop agg : bd.getAggregatedDrops().values())
+                {
+                    if (agg.getTotalQuantity() <= 0) continue;
+                    BossKillStats.AggregatedDrop pd = new BossKillStats.AggregatedDrop(
+                            agg.getItemId(), agg.getItemName(),
+                            agg.getTotalQuantity(), agg.getTotalValue(), agg.getDropCount(),
+                            agg.getGePrice(), agg.getHighAlch());
+                    pd.setPet(agg.isPet());
+                    preloaded.add(pd);
+                    preloadedValue += agg.getTotalValue();
+                }
+                stats.setPreloadedDrops(preloaded);
+                if (usingPreloadedDrops) stats.setTotalLootValue(preloadedValue);
             }
 
             // Drop objects are shared with bd.getKills(), so the backfill pass
