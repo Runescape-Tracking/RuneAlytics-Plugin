@@ -290,12 +290,33 @@ public class LootSyncMergeService
             boolean hasLoot = src.items.stream().anyMatch(i -> i.quantity > 0);
             if (!hasLoot && src.killCount <= 0) continue;
 
+            // Resolve the storage key by canonical name, not the raw merge
+            // name. RuneLite's tracker / the website snapshot can report a
+            // source name that differs slightly in case/spacing from
+            // whatever LootTrackerManager.normalizeBossName() produced when
+            // the entry was first created locally (e.g. via real gameplay).
+            // Without this, a pre-existing local entry (real kills/drops)
+            // and the merge's entry land under two different exact map
+            // keys, fragmenting the boss's data across two rows — one of
+            // which silently shadows the other on the panel.
+            String canonicalName = LootTrackerManager.normalizeBossName(src.sourceName);
+            String existingKey = null;
+            for (String key : localData.getBossKills().keySet())
+            {
+                if (canonicalName.equalsIgnoreCase(LootTrackerManager.normalizeBossName(key)))
+                {
+                    existingKey = key;
+                    break;
+                }
+            }
+
             LootStorageData.BossKillData bossData =
-                    localData.getBossKills().computeIfAbsent(src.sourceName, k -> {
-                        LootStorageData.BossKillData bd = new LootStorageData.BossKillData();
-                        bd.setNpcName(k);
-                        return bd;
-                    });
+                    localData.getBossKills().computeIfAbsent(
+                            existingKey != null ? existingKey : canonicalName, k -> {
+                                LootStorageData.BossKillData bd = new LootStorageData.BossKillData();
+                                bd.setNpcName(k);
+                                return bd;
+                            });
 
             if (src.killCount > bossData.getKillCount())
             {

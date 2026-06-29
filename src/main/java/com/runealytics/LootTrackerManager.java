@@ -2506,7 +2506,7 @@ public class LootTrackerManager
      * @param raw raw name from NPC, widget, or chat
      * @return canonical name, never null
      */
-    public String normalizeBossName(String raw)
+    public static String normalizeBossName(String raw)
     {
         if (raw == null || raw.isEmpty()) return "Unknown";
 
