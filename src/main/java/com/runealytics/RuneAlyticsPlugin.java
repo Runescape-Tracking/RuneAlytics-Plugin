@@ -216,8 +216,32 @@ public class RuneAlyticsPlugin extends Plugin
     /** Absolute expiry time (ms) for the RoW snapshot window. */
     private long            rowSnapshotExpiry    = 0L;
 
-    private final List<ItemStack>  groundItemBuffer         = new ArrayList<>();
-    private final AtomicBoolean    groundItemFlushScheduled = new AtomicBoolean(false);
+    /**
+     * One open "ground loot attribution window" for a single NPC kill. Kept as
+     * a list (rather than a single shared field) so that when an AOE attack
+     * kills several NPCs — same type or not — within {@link #GROUND_ITEM_WINDOW_MS}
+     * of each other, each kill gets its own buffer and location, and ground
+     * items spawning nearby are matched to whichever kill they're actually
+     * closest to instead of all being pooled onto the single most recent kill.
+     */
+    private static final class GroundLootSession
+    {
+        final NPC            npc;
+        final WorldPoint     loc;
+        final long           killTimeMs;
+        final List<ItemStack> buffer         = new ArrayList<>();
+        boolean              flushScheduled  = false;
+
+        GroundLootSession(NPC npc, WorldPoint loc, long killTimeMs)
+        {
+            this.npc = npc;
+            this.loc = loc;
+            this.killTimeMs = killTimeMs;
+        }
+    }
+
+    /** All mutations happen on the client thread (event handlers / invokeLater), so a plain list is safe. */
+    private final List<GroundLootSession> groundLootSessions = new ArrayList<>();
 
     private String lastChestSource = null;
 
@@ -446,8 +470,7 @@ public class RuneAlyticsPlugin extends Plugin
             whispererFlushTask.cancel(false);
             whispererFlushTask = null;
         }
-        groundItemBuffer.clear();
-        groundItemFlushScheduled.set(false);
+        groundLootSessions.clear();
 
         // Clear Ring of Wealth snapshot
         rowInventorySnapshot = null;
@@ -496,6 +519,15 @@ public class RuneAlyticsPlugin extends Plugin
 
         lastKilledBoss = npc;
         lastKillTime   = Instant.now();
+
+        // Open a dedicated ground-loot attribution window for THIS kill, so an
+        // AOE kill of several NPCs at once doesn't pool everyone's drops onto
+        // whichever NPC happens to die last.
+        WorldPoint killLoc = npc.getWorldLocation();
+        if (killLoc != null)
+        {
+            groundLootSessions.add(new GroundLootSession(npc, killLoc, Instant.now().toEpochMilli()));
+        }
 
         // Snapshot inventory to diff against if Ring of Wealth auto-collects coins.
         clientThread.invokeLater(() -> {
@@ -959,33 +991,49 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         // ── Normal ground item logic ──────────────────────────────────────────
-        if (lastKilledBoss == null || lastKillTime == null) return;
+        if (itemLoc == null || groundLootSessions.isEmpty()) return;
 
-        long elapsedMs = Instant.now().toEpochMilli() - lastKillTime.toEpochMilli();
-        if (elapsedMs > GROUND_ITEM_WINDOW_MS) return;
+        long now = Instant.now().toEpochMilli();
+        groundLootSessions.removeIf(s -> now - s.killTimeMs > GROUND_ITEM_WINDOW_MS);
+        if (groundLootSessions.isEmpty()) return;
 
-        WorldPoint bossLoc = lastKilledBoss.getWorldLocation();
-        if (itemLoc == null || bossLoc == null || itemLoc.distanceTo(bossLoc) > 5) return;
-
-        groundItemBuffer.add(new ItemStack(tile.getId(), tile.getQuantity()));
-
-        if (groundItemFlushScheduled.compareAndSet(false, true))
+        // Multiple kills (same or different NPC types) can have open, overlapping
+        // attribution windows at once — e.g. an AOE attack that kills several
+        // NPCs together. Attribute this item to whichever recent kill happened
+        // closest to it, rather than to "the last kill" unconditionally.
+        GroundLootSession best = null;
+        int bestDist = Integer.MAX_VALUE;
+        for (GroundLootSession s : groundLootSessions)
         {
-            final NPC boss = lastKilledBoss;
+            int dist = itemLoc.distanceTo(s.loc);
+            if (dist <= 5 && dist < bestDist)
+            {
+                best = s;
+                bestDist = dist;
+            }
+        }
+        if (best == null) return;
+
+        final GroundLootSession session = best;
+        session.buffer.add(new ItemStack(tile.getId(), tile.getQuantity()));
+
+        if (!session.flushScheduled)
+        {
+            session.flushScheduled = true;
 
             executorService.schedule(() ->
                             clientThread.invokeLater(() ->
                             {
-                                if (!groundItemBuffer.isEmpty())
+                                if (!session.buffer.isEmpty())
                                 {
-                                    List<ItemStack> batch = new ArrayList<>(groundItemBuffer);
-                                    groundItemBuffer.clear();
-                                    groundItemFlushScheduled.set(false);
-                                    lootManager.processGroundItemBatch(boss, batch);
+                                    List<ItemStack> batch = new ArrayList<>(session.buffer);
+                                    session.buffer.clear();
+                                    session.flushScheduled = false;
+                                    lootManager.processGroundItemBatch(session.npc, batch);
                                 }
                                 else
                                 {
-                                    groundItemFlushScheduled.set(false);
+                                    session.flushScheduled = false;
                                 }
                             }),
                     500, TimeUnit.MILLISECONDS);
