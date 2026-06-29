@@ -131,24 +131,12 @@ public class LootSyncMergeService
 
         log.debug("[merge] Starting merge for account '{}'", accountKey);
 
-        // ── 2. Fetch website snapshot ─────────────────────────────────────────
-        LootTrackerApiClient.LootSnapshot websiteSnapshot = null;
-        try
-        {
-            websiteSnapshot = apiClient.fetchLootSnapshot(accountKey);
-            log.debug("[merge] Website snapshot: {} sources",
-                    websiteSnapshot != null ? websiteSnapshot.sources.size() : "null (fetch failed)");
-        }
-        catch (IOException e)
-        {
-            log.warn("[merge] Failed to fetch website snapshot: {}", e.getMessage());
-            // Non-fatal: continue with RuneLite data only.
-        }
-
-        // ── 3. Read RuneLite default tracker (best-effort, account-filtered) ──
+        // ── 2. Read RuneLite default tracker first (best-effort, account-filtered) ──
         // Read directly from RuneLite's own profiles2/*.properties save file
         // on every sync — never from a plugin-side cache or temp file. This is
-        // the canonical source of truth for what RuneLite has tracked.
+        // the canonical source of truth for what RuneLite has tracked, and is
+        // checked before the website so that anything RuneLite has tracked
+        // locally but the website hasn't seen yet still gets uploaded below.
         boolean rlAvailable = rlReader.canImportHistorical();
         Map<String, DefaultRuneLiteLootTrackerReader.SourceTotals> rlTotals = Collections.emptyMap();
         boolean rlSkippedDueToAccount = false;
@@ -165,6 +153,22 @@ public class LootSyncMergeService
                     + "this account. Using website data only.");
         }
 
+        // ── 3. Fetch website snapshot ──────────────────────────────────────────
+        // Fetched after RuneLite so the merge below can fill/raise anything
+        // the website is missing relative to what RuneLite has tracked.
+        LootTrackerApiClient.LootSnapshot websiteSnapshot = null;
+        try
+        {
+            websiteSnapshot = apiClient.fetchLootSnapshot(accountKey);
+            log.debug("[merge] Website snapshot: {} sources",
+                    websiteSnapshot != null ? websiteSnapshot.sources.size() : "null (fetch failed)");
+        }
+        catch (IOException e)
+        {
+            log.warn("[merge] Failed to fetch website snapshot: {}", e.getMessage());
+            // Non-fatal: continue with RuneLite data only.
+        }
+
         // Local cache, kept only so the panel has something to render between
         // syncs; it is never read as a merge input.
         LootStorageData localData = storageManager.getCurrentData();
@@ -172,7 +176,37 @@ public class LootSyncMergeService
         // ── 5. Item + kill-count merge ────────────────────────────────────────
         MergeContext ctx = new MergeContext(accountKey);
 
-        // Website leg
+        // RuneLite default tracker leg — merged first.
+        // RuneLite stores only item IDs, so names are resolved via ItemManager —
+        // which MUST run on the client thread. Resolve every needed name up front
+        // in a single client-thread hop rather than per-item inside this loop.
+        Set<Integer> rlItemIds = new HashSet<>();
+        for (DefaultRuneLiteLootTrackerReader.SourceTotals t : rlTotals.values()) rlItemIds.addAll(t.items.keySet());
+        Map<Integer, String> rlItemNames = resolveItemNames(rlItemIds);
+
+        for (Map.Entry<String, DefaultRuneLiteLootTrackerReader.SourceTotals> srcEntry : rlTotals.entrySet())
+        {
+            String sourceName = srcEntry.getKey();
+            String sourceKey  = normalizeBossKey(sourceName);
+            DefaultRuneLiteLootTrackerReader.SourceTotals totals = srcEntry.getValue();
+
+            ctx.mergeKillCount(sourceKey, sourceName, totals.killCount, "runelite_default_loot_tracker");
+
+            for (Map.Entry<Integer, Long> itemEntry : totals.items.entrySet())
+            {
+                int  itemId = itemEntry.getKey();
+                long qty    = itemEntry.getValue();
+                String itemName = rlItemNames.getOrDefault(itemId, "Item " + itemId);
+                ctx.mergeItem(sourceKey, sourceName, null,
+                        itemId, itemName, qty, "runelite_default_loot_tracker");
+            }
+        }
+
+        // Website leg — merged second, so it only raises values RuneLite's
+        // tracker didn't already have at least as high; anything RuneLite
+        // had that the website was missing is still in `ctx` and will be
+        // uploaded back to the website in step 7 below, keeping both sides
+        // in sync regardless of which one was behind.
         if (websiteSnapshot != null)
         {
             for (LootTrackerApiClient.LootSnapshot.SourceData srcData : websiteSnapshot.sources.values())
@@ -203,32 +237,6 @@ public class LootSyncMergeService
         // account's already-recorded kill count is preserved as a floor
         // directly in applyMergedToLocalStorage (it only ever raises KC, never
         // lowers it), so nothing is lost by not looping it back through here.
-
-        // RuneLite default tracker leg.
-        // RuneLite stores only item IDs, so names are resolved via ItemManager —
-        // which MUST run on the client thread. Resolve every needed name up front
-        // in a single client-thread hop rather than per-item inside this loop.
-        Set<Integer> rlItemIds = new HashSet<>();
-        for (DefaultRuneLiteLootTrackerReader.SourceTotals t : rlTotals.values()) rlItemIds.addAll(t.items.keySet());
-        Map<Integer, String> rlItemNames = resolveItemNames(rlItemIds);
-
-        for (Map.Entry<String, DefaultRuneLiteLootTrackerReader.SourceTotals> srcEntry : rlTotals.entrySet())
-        {
-            String sourceName = srcEntry.getKey();
-            String sourceKey  = normalizeBossKey(sourceName);
-            DefaultRuneLiteLootTrackerReader.SourceTotals totals = srcEntry.getValue();
-
-            ctx.mergeKillCount(sourceKey, sourceName, totals.killCount, "runelite_default_loot_tracker");
-
-            for (Map.Entry<Integer, Long> itemEntry : totals.items.entrySet())
-            {
-                int  itemId = itemEntry.getKey();
-                long qty    = itemEntry.getValue();
-                String itemName = rlItemNames.getOrDefault(itemId, "Item " + itemId);
-                ctx.mergeItem(sourceKey, sourceName, null,
-                        itemId, itemName, qty, "runelite_default_loot_tracker");
-            }
-        }
 
         List<MergedSource> merged = ctx.build();
         log.debug("[merge] Merge complete: {} sources, {} items total",
