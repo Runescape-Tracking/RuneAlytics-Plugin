@@ -334,6 +334,19 @@ public class RuneAlyticsPlugin extends Plugin
     /** Plugin-local game tick counter; incremented every {@link #onGameTick}. */
     private long gameTickCount = 0;
 
+    /**
+     * NPC index → wall-clock time a zero-loot kill was flushed for it. Under
+     * load (e.g. an AOE kill that drops several NPCs at once) NpcLootReceived
+     * can lag past {@link #ZERO_LOOT_FLUSH_TICKS}, so the zero-loot kill gets
+     * recorded first and the real loot event arrives afterwards — without this,
+     * that late event would record a SECOND kill instead of attaching its drops
+     * to the kill that's already counted, doubling the kill count.
+     */
+    private final Map<Integer, Long> recentZeroLootFlushes = new HashMap<>();
+
+    /** How long a {@link #recentZeroLootFlushes} entry stays eligible for upgrade. */
+    private static final long ZERO_LOOT_UPGRADE_WINDOW_MS = 8_000;
+
     private static final class PendingDeath
     {
         final NPC  npc;
@@ -490,6 +503,7 @@ public class RuneAlyticsPlugin extends Plugin
         // Clear zero-loot kill tracking (damage history is per-world)
         damagedNpcs.clear();
         pendingDeaths.clear();
+        recentZeroLootFlushes.clear();
     }
 
     @Provides
@@ -542,6 +556,19 @@ public class RuneAlyticsPlugin extends Plugin
         List<ItemStack> items = new ArrayList<>();
         for (net.runelite.client.game.ItemStack i : rlItems)
             items.add(new ItemStack(i.getId(), i.getQuantity()));
+
+        // If a zero-loot kill was already flushed for this NPC index because
+        // this loot event lagged past ZERO_LOOT_FLUSH_TICKS (e.g. server load
+        // during an AOE kill), attach these drops to that already-counted kill
+        // instead of recording a brand new one — otherwise the kill count
+        // doubles for every kill that races the zero-loot flush.
+        Long flushedAt = recentZeroLootFlushes.remove(npc.getIndex());
+        if (flushedAt != null
+                && System.currentTimeMillis() - flushedAt < ZERO_LOOT_UPGRADE_WINDOW_MS
+                && lootManager.upgradeRecentZeroLootKill(npc, items))
+        {
+            return;
+        }
 
         lootManager.processNpcLoot(npc, items);
     }
@@ -1216,9 +1243,16 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 if (now < e.getValue().flushAtTick) return false;
                 lootManager.processZeroLootKill(e.getValue().npc);
+                recentZeroLootFlushes.put(e.getKey(), System.currentTimeMillis());
                 damagedNpcs.remove(e.getKey());
                 return true;
             });
+        }
+
+        if (!recentZeroLootFlushes.isEmpty())
+        {
+            long nowMs = System.currentTimeMillis();
+            recentZeroLootFlushes.values().removeIf(t -> nowMs - t > ZERO_LOOT_UPGRADE_WINDOW_MS);
         }
 
         // ── Expire stale boss ground-item attribution ──────────────────────────

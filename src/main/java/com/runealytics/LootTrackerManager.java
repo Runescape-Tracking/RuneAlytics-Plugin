@@ -422,6 +422,41 @@ public class LootTrackerManager
         recordKill(name, npc.getId(), npc.getCombatLevel(), client.getWorld(), drops);
     }
 
+    /**
+     * Attaches a late-arriving {@code NpcLootReceived} to a kill that was
+     * already counted as zero-loot, instead of recording a new kill.
+     *
+     * <p>Under load (e.g. an AOE kill that drops several NPCs at once),
+     * {@code NpcLootReceived} can lag past the zero-loot grace window, so
+     * {@code RuneAlyticsPlugin} flushes the zero-loot kill first. If the real
+     * loot event then arrives, calling {@link #processNpcLoot} would record a
+     * second kill for the same death — doubling the kill count. The caller
+     * only invokes this when its own NPC-index-keyed bookkeeping confirms a
+     * zero-loot kill was just flushed for this exact NPC.</p>
+     *
+     * @return {@code true} if the drops were attached to the existing kill;
+     *         {@code false} if there was nothing eligible to upgrade, in
+     *         which case the caller should fall back to {@link #processNpcLoot}
+     */
+    public boolean upgradeRecentZeroLootKill(NPC npc, List<ItemStack> items)
+    {
+        if (!config.enableLootTracking() || npc == null || npc.getName() == null) return false;
+        if (items == null || items.isEmpty()) return false;
+
+        String name = normalizeBossName(npc.getName());
+        BossKillStats stats = bossKillStats.get(name);
+        if (stats == null || stats.getKillHistory().isEmpty()) return false;
+
+        LootStorageData.KillRecord lastKill =
+                stats.getKillHistory().get(stats.getKillHistory().size() - 1);
+        if (!lastKill.getDrops().isEmpty()) return false; // last kill wasn't zero-loot
+
+        appendDropsToLastKill(name, items);
+        log.debug("Upgraded zero-loot kill for '{}' with {} late drop(s) from a delayed NpcLootReceived",
+                name, items.size());
+        return true;
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT PATH 1b – ZERO-LOOT NPC KILLS
     //
