@@ -16,18 +16,21 @@ public class LootStorageManager
 {
     private static final String STORAGE_FILE_PREFIX = "runealytics-loot-";
     private static final String STORAGE_FILE_SUFFIX = ".json";
-    private String currentUsername;
     private final Gson gson;
     private final RuneAlyticsState state;
     private LootStorageData currentData;
 
-    private final java.util.concurrent.ScheduledExecutorService saveExecutor =
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "RuneAlytics-Save");
-                t.setDaemon(true);
-                return t;
-            });
+    private java.util.concurrent.ScheduledExecutorService saveExecutor = newSaveExecutor();
     private java.util.concurrent.ScheduledFuture<?> pendingSave = null;
+
+    private static java.util.concurrent.ScheduledExecutorService newSaveExecutor()
+    {
+        return java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "RuneAlytics-Save");
+            t.setDaemon(true);
+            return t;
+        });
+    }
 
     @Inject
     public LootStorageManager(RuneAlyticsState state, Gson gson)
@@ -41,12 +44,12 @@ public class LootStorageManager
     /**
      * Load loot data for current username
      */
-    public LootStorageData loadData()
+    public synchronized LootStorageData loadData()
     {
         String username = state.getVerifiedUsername();
         if (username == null || username.isEmpty())
         {
-            log.warn("No verified username, cannot load loot data");
+            log.debug("No verified username, cannot load loot data");
             currentData = new LootStorageData();
             return currentData;
         }
@@ -87,109 +90,25 @@ public class LootStorageManager
 
 
     /**
-     * Load loot data for a specific username
+     * Saves current loot data to disk.
+     *
+     * <p>Synchronized so serialisation never races a mutator
+     * ({@link #addKill}, {@link #appendDropsToLastKill}, {@link #mergeServerData})
+     * on another thread. The write is atomic (temp file + rename) so a crash
+     * mid-write leaves the previous file intact.</p>
      */
-    public LootStorageData loadLootData(String username)
-    {
-        if (username == null || username.isEmpty())
-        {
-            log.warn("Cannot load data: username is null or empty");
-            return null;
-        }
-
-        this.currentUsername = username;
-        return loadLootData();
-    }
-
-    public void setCurrentUsername(String username)
-    {
-        this.currentUsername = username;
-        log.debug("Set current username to: {}", username);
-    }
-
-    /**
-     * Load loot data for the current username
-     */
-    public LootStorageData loadLootData()
-    {
-        if (currentUsername == null || currentUsername.isEmpty())
-        {
-            log.warn("Cannot load data: no current username set");
-            return null;
-        }
-
-        File file = new File(getStorageDirectory(), currentUsername + ".json");
-
-        if (!file.exists())
-        {
-            log.debug("No stored loot data found for {}", currentUsername);
-            return new LootStorageData();
-        }
-
-        try
-        {
-            String json = new String(Files.readAllBytes(file.toPath()));
-            LootStorageData data = gson.fromJson(json, LootStorageData.class);
-
-            if (data == null)
-            {
-                log.warn("Failed to parse loot data for {}, returning empty data", currentUsername);
-                return new LootStorageData();
-            }
-
-            log.debug("Loaded loot data for {} - {} bosses, {} total kills",
-                    currentUsername,
-                    data.getBossKills().size(),
-                    data.getBossKills().values().stream()
-                            .mapToInt(bossData -> bossData.getKills().size())
-                            .sum());
-
-            return data;
-        }
-        catch (Exception e)
-        {
-            log.error("Failed to load loot data for {}", currentUsername, e);
-            return new LootStorageData();
-        }
-    }
-
-    /**
-     * Get the directory where loot data is stored
-     */
-    private File getStorageDirectory()
-    {
-        File dir = new File(RuneLite.RUNELITE_DIR, "runealytics-loot");
-
-        if (!dir.exists())
-        {
-            if (dir.mkdirs())
-            {
-                log.debug("Created loot storage directory: {}", dir.getAbsolutePath());
-            }
-            else
-            {
-                log.error("Failed to create loot storage directory: {}", dir.getAbsolutePath());
-            }
-        }
-
-        return dir;
-    }
-
-    /**
-     * Save current loot data
-     */
-    public void saveData()
+    public synchronized void saveData()
     {
         if (currentData == null)
         {
-            log.warn("No data to save");
+            log.debug("No data to save");
             return;
         }
 
         String username = state.getVerifiedUsername();
         if (username == null || username.isEmpty())
         {
-            log.warn("No verified username, cannot save loot data");
+            log.debug("No verified username, cannot save loot data");
             return;
         }
 
@@ -204,10 +123,26 @@ public class LootStorageManager
                 parentDir.mkdirs();
             }
 
-            // Write data
-            try (Writer writer = Files.newBufferedWriter(file.toPath()))
+            // Write to a temp file, then atomically swap it into place so a
+            // crash mid-write leaves the previous good file intact.
+            File tmp = new File(file.getParentFile(), file.getName() + ".tmp");
+            try (Writer writer = Files.newBufferedWriter(tmp.toPath()))
             {
                 gson.toJson(currentData, writer);
+            }
+
+            try
+            {
+                Files.move(tmp.toPath(), file.toPath(),
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            catch (java.nio.file.AtomicMoveNotSupportedException atomicEx)
+            {
+                // Some filesystems don't support atomic moves — fall back to a
+                // plain replace.
+                Files.move(tmp.toPath(), file.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
 
             log.debug("Saved loot data for {} - {} bosses", username, currentData.getBossKills().size());
@@ -218,18 +153,39 @@ public class LootStorageManager
         }
     }
 
-    private synchronized void scheduleSave()
+    /**
+     * Debounced save: coalesces rapid mutations into a single disk write 500ms
+     * later, off the calling thread.
+     */
+    public synchronized void scheduleSave()
     {
+        // Recreate the executor if it was shut down, since this @Singleton is
+        // reused across a disable→enable cycle.
+        if (saveExecutor.isShutdown())
+            saveExecutor = newSaveExecutor();
+
         if (pendingSave != null && !pendingSave.isDone())
             pendingSave.cancel(false);
         pendingSave = saveExecutor.schedule(this::saveData, 500, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     /**
-     * Add a kill to storage
+     * Add a kill to storage (no location — kept for callers that don't capture one).
      */
     public void addKill(String npcName, int npcId, int combatLevel, int killNumber, int world,
                         int prestige, List<LootStorageData.DropRecord> drops)
+    {
+        addKill(npcName, npcId, combatLevel, killNumber, world, prestige, drops, null);
+    }
+
+    /**
+     * Add a kill to storage, recording the player's location at kill time so it
+     * can be uploaded per-kill in the bulk-sync payload. {@code location} may be
+     * {@code null}, in which case the kill simply carries no location.
+     */
+    public synchronized void addKill(String npcName, int npcId, int combatLevel, int killNumber, int world,
+                        int prestige, List<LootStorageData.DropRecord> drops,
+                        PlayerLocationSnapshot location)
     {
         if (currentData == null)
         {
@@ -256,6 +212,7 @@ public class LootStorageManager
         killRecord.setCombatLevel(combatLevel);
         killRecord.setDrops(drops);
         killRecord.setSyncedToServer(false);
+        killRecord.setLocation(location);
 
         // Add kill to list
         bossData.getKills().add(killRecord);
@@ -286,6 +243,11 @@ public class LootStorageManager
             aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
             aggDrop.setDropCount(aggDrop.getDropCount() + 1);
             aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
+
+            // gePrice/highAlch are only seeded when the aggregate entry is
+            // created; refresh them here in case the first drop had a 0 value.
+            if (aggDrop.getGePrice() <= 0 && drop.getGePrice() > 0)  aggDrop.setGePrice(drop.getGePrice());
+            if (aggDrop.getHighAlch() <= 0 && drop.getHighAlch() > 0) aggDrop.setHighAlch(drop.getHighAlch());
         }
 
         bossData.setTotalLootValue(bossData.getTotalLootValue() + killValue);
@@ -299,13 +261,13 @@ public class LootStorageManager
     /**
      * Appends extra drops to the most recent kill record for {@code npcName}.
      *
-     * <p>Used exclusively for Ring of Wealth auto-collected coins that bypass
-     * {@code ItemSpawned} and would otherwise be silently lost.</p>
+     * <p>Used for Ring of Wealth auto-collected coins that bypass
+     * {@code ItemSpawned}.</p>
      *
      * @param npcName normalised boss name matching the existing storage key
      * @param drops   additional drops to merge into the last kill
      */
-    public void appendDropsToLastKill(String npcName, List<LootStorageData.DropRecord> drops)
+    public synchronized void appendDropsToLastKill(String npcName, List<LootStorageData.DropRecord> drops)
     {
         if (currentData == null || drops == null || drops.isEmpty()) return;
 
@@ -338,6 +300,9 @@ public class LootStorageManager
             agg.setDropCount(agg.getDropCount() + 1);
             agg.setTotalValue(agg.getTotalValue() + drop.getTotalValue());
             bossData.setTotalLootValue(bossData.getTotalLootValue() + drop.getTotalValue());
+
+            if (agg.getGePrice() <= 0 && drop.getGePrice() > 0)   agg.setGePrice(drop.getGePrice());
+            if (agg.getHighAlch() <= 0 && drop.getHighAlch() > 0) agg.setHighAlch(drop.getHighAlch());
         }
 
         scheduleSave();
@@ -347,7 +312,7 @@ public class LootStorageManager
     /**
      * Mark kills as synced to server
      */
-    public void markKillsSynced(String npcName, long fromTimestamp, long toTimestamp)
+    public synchronized void markKillsSynced(String npcName, long fromTimestamp, long toTimestamp)
     {
         if (currentData == null) return;
 
@@ -374,7 +339,7 @@ public class LootStorageManager
     /**
      * Get unsynced kills for upload
      */
-    public List<LootStorageData.KillRecord> getUnsyncedKills(String npcName)
+    public synchronized List<LootStorageData.KillRecord> getUnsyncedKills(String npcName)
     {
         if (currentData == null) return Collections.emptyList();
 
@@ -396,7 +361,7 @@ public class LootStorageManager
     /**
      * Get all unsynced kills across all bosses
      */
-    public Map<String, List<LootStorageData.KillRecord>> getAllUnsyncedKills()
+    public synchronized Map<String, List<LootStorageData.KillRecord>> getAllUnsyncedKills()
     {
         if (currentData == null) return Collections.emptyMap();
 
@@ -415,15 +380,20 @@ public class LootStorageManager
     }
 
     /**
-     * Merge server data with local data - NEVER overwrite client when client has equal or more kills
-     * CRITICAL: Should ONLY be called during manual sync operations
+     * Merges server data into the in-memory copy. Server kills for a boss are
+     * only added when the server has more kills than the client. Call only
+     * during manual sync operations.
      */
-    public void mergeServerData(Map<String, LootStorageData.BossKillData> serverData)
+    public synchronized void mergeServerData(Map<String, LootStorageData.BossKillData> serverData)
     {
         log.debug("mergeServerData() called during manual sync");
 
-        // CRITICAL: Always reload from disk to ensure we have the latest client data
-        currentData = loadData();
+        // Merge into the in-memory copy; load from disk only if nothing is
+        // loaded yet this session.
+        if (currentData == null)
+        {
+            currentData = loadData();
+        }
 
         if (currentData == null)
         {
@@ -434,6 +404,7 @@ public class LootStorageManager
         int killsAdded = 0;
         int dropsAdded = 0;
         int bossesSkipped = 0;
+        boolean killCountOnlyUpdated = false;
 
         for (Map.Entry<String, LootStorageData.BossKillData> entry : serverData.entrySet())
         {
@@ -446,7 +417,7 @@ public class LootStorageManager
             // If boss exists locally
             if (localBoss != null)
             {
-                // CRITICAL: Client has equal or MORE kills - DO NOT TOUCH CLIENT DATA
+                // Client has equal or more kills; keep client data.
                 if (localBoss.getKillCount() >= serverBoss.getKillCount())
                 {
                     log.debug("❌ SKIPPING SERVER DATA: {} - Client KC {} >= Server KC {}",
@@ -461,7 +432,23 @@ public class LootStorageManager
             }
             else
             {
-                // Boss doesn't exist locally - create new from server
+                // Boss doesn't exist locally yet. Only worth creating a row at
+                // all if the server actually reports kills/loot for it — don't
+                // create a 0-KC, no-drop placeholder that would just show as an
+                // empty container on the panel.
+                boolean serverHasRealData = serverBoss.getKillCount() > 0
+                        || (serverBoss.getKills() != null && !serverBoss.getKills().isEmpty())
+                        || (serverBoss.getAggregatedDrops() != null
+                                && serverBoss.getAggregatedDrops().values().stream()
+                                        .anyMatch(d -> d.getTotalQuantity() > 0));
+                if (!serverHasRealData)
+                {
+                    log.debug("❌ SKIPPING SERVER DATA: {} - no kills/loot reported, not creating placeholder",
+                            npcName);
+                    bossesSkipped++;
+                    continue;
+                }
+
                 log.debug("➕ NEW BOSS from server: {} with {} kills", npcName, serverBoss.getKillCount());
                 localBoss = new LootStorageData.BossKillData();
                 localBoss.setNpcName(npcName);
@@ -471,6 +458,9 @@ public class LootStorageManager
                 localBoss.setTotalLootValue(0);
                 currentData.getBossKills().put(npcName, localBoss);
             }
+
+            // Per-boss counter, separate from the running cross-boss killsAdded total.
+            int bossKillsAdded = 0;
 
             // Build set of existing kill timestamps and kill numbers (client data)
             Set<Long> existingTimestamps = new HashSet<>();
@@ -482,10 +472,12 @@ public class LootStorageManager
                 existingKillNumbers.add(kill.getKillNumber());
             }
 
-            // Add ONLY new kills from server that we don't have
+            // Add only server kills not already present. Dedup is by kill
+            // timestamp (±1s), the key the server uses. The kill number is only
+            // used as a dedup key when it is a real positive value, since
+            // history kills arrive with killNumber 0.
             for (LootStorageData.KillRecord serverKill : serverBoss.getKills())
             {
-                // Check by both timestamp (±1 second) AND kill number
                 boolean existsByTimestamp = false;
                 for (long existingTs : existingTimestamps)
                 {
@@ -496,7 +488,8 @@ public class LootStorageManager
                     }
                 }
 
-                boolean existsByKillNumber = existingKillNumbers.contains(serverKill.getKillNumber());
+                boolean existsByKillNumber = serverKill.getKillNumber() > 0
+                        && existingKillNumbers.contains(serverKill.getKillNumber());
 
                 // Skip if exists by either method
                 if (existsByTimestamp || existsByKillNumber)
@@ -508,6 +501,7 @@ public class LootStorageManager
                 serverKill.setSyncedToServer(true);
                 localBoss.getKills().add(serverKill);
                 killsAdded++;
+                bossKillsAdded++;
 
                 log.debug("Added missing kill #{} from server: {} at timestamp {}",
                         serverKill.getKillNumber(), npcName, serverKill.getTimestamp());
@@ -531,13 +525,20 @@ public class LootStorageManager
                     aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
                     aggDrop.setDropCount(aggDrop.getDropCount() + 1);
                     aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
+
+                    if (aggDrop.getGePrice() <= 0 && drop.getGePrice() > 0)   aggDrop.setGePrice(drop.getGePrice());
+                    if (aggDrop.getHighAlch() <= 0 && drop.getHighAlch() > 0) aggDrop.setHighAlch(drop.getHighAlch());
                     dropsAdded++;
                 }
             }
 
-            // Update kill count and prestige from server (only if we merged data)
-            if (killsAdded > 0)
+            // Update kill count and prestige from server when kills were merged
+            // for this boss, OR when the server simply reports a higher
+            // aggregate kill count than we have locally (max-wins, same rule
+            // applied to item quantities elsewhere).
+            if (bossKillsAdded > 0 || serverBoss.getKillCount() > localBoss.getKillCount())
             {
+                if (bossKillsAdded == 0) killCountOnlyUpdated = true;
                 int originalKillCount = localBoss.getKillCount();
                 int originalPrestige = localBoss.getPrestige();
                 long originalValue = localBoss.getTotalLootValue();
@@ -564,7 +565,7 @@ public class LootStorageManager
             }
         }
 
-        if (killsAdded > 0 || dropsAdded > 0)
+        if (killsAdded > 0 || dropsAdded > 0 || killCountOnlyUpdated)
         {
             currentData.setLastSyncTimestamp(System.currentTimeMillis());
             saveData();
@@ -581,7 +582,7 @@ public class LootStorageManager
     /**
      * Get current data
      */
-    public LootStorageData getCurrentData()
+    public synchronized LootStorageData getCurrentData()
     {
         if (currentData == null)
         {
@@ -591,9 +592,52 @@ public class LootStorageManager
     }
 
     /**
+     * Persists the current account's data to disk immediately (cancelling any
+     * pending debounced save). Call on logout, while
+     * {@link RuneAlyticsState#getVerifiedUsername()} still refers to the account
+     * whose data is in memory, so nothing is lost before {@link #dropCache()}.
+     */
+    public synchronized void flushNow()
+    {
+        if (pendingSave != null && !pendingSave.isDone())
+        {
+            pendingSave.cancel(false);
+            pendingSave = null;
+        }
+        saveData();
+    }
+
+    /**
+     * Drops the in-memory copy so the next {@link #getCurrentData()} reloads the
+     * file for whichever account is logged in now. Prevents one account's loot
+     * from being read/written under another account after a profile switch.
+     *
+     * <p>Does NOT write to disk — callers must {@link #flushNow()} first if the
+     * cached data still needs persisting.</p>
+     */
+    public synchronized void dropCache()
+    {
+        currentData = null;
+    }
+
+    /**
+     * Flushes any pending save and stops the background save executor.
+     */
+    public synchronized void shutdown()
+    {
+        if (pendingSave != null && !pendingSave.isDone())
+        {
+            pendingSave.cancel(false);
+            pendingSave = null;
+        }
+        saveData();
+        saveExecutor.shutdown();
+    }
+
+    /**
      * Clear all data for current user
      */
-    public void clearData()
+    public synchronized void clearData()
     {
         String username = state.getVerifiedUsername();
         if (username == null || username.isEmpty()) return;

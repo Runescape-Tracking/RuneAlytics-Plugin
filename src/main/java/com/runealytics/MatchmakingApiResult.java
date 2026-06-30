@@ -17,8 +17,10 @@ public class MatchmakingApiResult
     )
     {
         this.session = session;
-        this.message = message;
-        this.rawResponse = rawResponse;
+        // Normalise to empty strings so callers can call .length()/.isEmpty()
+        // without null-guarding.
+        this.message = message != null ? message : "";
+        this.rawResponse = rawResponse != null ? rawResponse : "";
         this.success = success;
         this.tokenRefresh = tokenRefresh;
     }

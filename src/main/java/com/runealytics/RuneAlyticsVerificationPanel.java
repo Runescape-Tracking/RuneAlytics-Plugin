@@ -29,7 +29,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
     private final RunealyticsConfig        config;
     private final ScheduledExecutorService executorService;
     private final ConfigManager            configManager;
-    private static final Logger log = LoggerFactory.getLogger(RunealyticsApiClient.class);
+    private static final Logger log = LoggerFactory.getLogger(RuneAlyticsVerificationPanel.class);
     private final JTextField codeField       = RuneAlyticsUi.inputField();
     private final JButton    verifyButton    = RuneAlyticsUi.primaryButton("Verify Account");
     private final JPanel     formRow         = RuneAlyticsUi.formRow(codeField, verifyButton);
@@ -144,16 +144,19 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
             return;
         }
 
-        // Auto-populate the code field with the stored token for this account
-        // so the user never has to re-enter it after their first verification.
+        // Sync the code field to whatever this account has stored — pulling in
+        // the saved token for a verified account, or clearing the field for an
+        // unverified one so a previous account's code can't linger after
+        // switching characters.
         String rsn = runeAlyticsState.getVerifiedUsername();
         if (rsn == null && client.getLocalPlayer() != null)
             rsn = client.getLocalPlayer().getName().trim().toLowerCase();
         if (rsn != null)
         {
             String stored = loadAccountToken(rsn);
-            if (stored != null && !stored.equals(codeField.getText().trim()))
-                codeField.setText(stored);
+            String wanted  = stored != null ? stored : "";
+            if (!wanted.equals(codeField.getText().trim()))
+                codeField.setText(wanted);
         }
 
         // Button is ALWAYS enabled when logged in — users can re-link at any time
@@ -225,7 +228,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                 String payloadJson = payload.toString();
                 String fullUrl     = config.apiUrl() + VERIFY_PATH;
 
-                log.info("[Verify] POST {} | payload={}", fullUrl, payloadJson);
+                log.debug("[Verify] POST {} | payload={}", fullUrl, payloadJson);
 
                 RequestBody body    = RequestBody.create(RuneAlyticsHttp.JSON, payloadJson);
                 Request     request = new Request.Builder()
@@ -241,7 +244,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                     rawResponse   = response.body() != null ? response.body().string() : "";
                     serverMessage = RuneAlyticsJson.extractMessage(rawResponse);
 
-                    log.info("[Verify] Response HTTP {} | body={}", code2, rawResponse);
+                    log.debug("[Verify] Response HTTP {} | body={}", code2, rawResponse);
 
                     // Only HTTP status matters — 2xx = success
                     success = response.isSuccessful();

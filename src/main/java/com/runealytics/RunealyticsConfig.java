@@ -105,18 +105,6 @@ public interface RunealyticsConfig extends Config
         return true;
     }
 
-    @ConfigItem(
-            keyName = "showSyncNotifications",
-            name = "Show Sync Notifications",
-            description = "Show in-game notifications when data is synced",
-            section = syncSection,
-            position = 3
-    )
-    default boolean showSyncNotifications()
-    {
-        return false;
-    }
-
     // ==================== LOOT TRACKING ====================
 
     @ConfigSection(
@@ -268,6 +256,18 @@ public interface RunealyticsConfig extends Config
     )
     void playerVisibility(PrivacySetting value);
 
+    @ConfigItem(
+            keyName = "showMapPlayers",
+            name = "Show Tracked Players",
+            description = "Draw players shared with you by RuneAlytics on the minimap and game scene",
+            section = privacySection,
+            position = 2
+    )
+    default boolean showMapPlayers()
+    {
+        return true;
+    }
+
     // ==================== ADVANCED ====================
 
     @ConfigItem(
@@ -280,53 +280,5 @@ public interface RunealyticsConfig extends Config
     default int syncTimeout()
     {
         return 30;
-    }
-
-    @ConfigItem(
-            keyName = "retryFailedSyncs",
-            name = "Retry Failed Syncs",
-            description = "Automatically retry failed syncs",
-            section = advancedSection,
-            position = 1
-    )
-    default boolean retryFailedSyncs()
-    {
-        return true;
-    }
-
-    @ConfigItem(
-            keyName = "maxRetryAttempts",
-            name = "Max Retry Attempts",
-            description = "Maximum number of retry attempts for failed syncs",
-            section = advancedSection,
-            position = 2
-    )
-    default int maxRetryAttempts()
-    {
-        return 3;
-    }
-
-    @ConfigItem(
-            keyName = "debugMode",
-            name = "Debug Mode",
-            description = "Enable detailed logging for troubleshooting",
-            section = advancedSection,
-            position = 3
-    )
-    default boolean debugMode()
-    {
-        return false;
-    }
-
-    @ConfigItem(
-            keyName = "enableAutoVerification",
-            name = "Auto Verification Check",
-            description = "Automatically check verification status on login",
-            section = advancedSection,
-            position = 4
-    )
-    default boolean enableAutoVerification()
-    {
-        return true;
     }
 }

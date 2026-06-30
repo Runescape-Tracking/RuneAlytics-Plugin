@@ -12,18 +12,16 @@ import java.util.Map;
  * — by canonicalising and (where necessary) decomposing into the tradeable
  * components a player would have to spend to re-create it.
  *
- * <p>Issue #5: items like Scythe of Vitur, Tumeken's Shadow, Sanguinesti
- * staff, and gear like Ferocious Gloves are <em>untradeable in their charged
- * / final form</em>. {@link ItemManager#getItemPrice} returns 0 for them, so
- * bank totals were silently undercounting tens of thousands of GP per stack.
- * This resolver looks each one up in a hand-curated decomposition table and
- * falls back to the canonical (uncharged / unnoted) form.</p>
+ * <p>Items like Scythe of Vitur, Tumeken's Shadow, Sanguinesti staff, and gear
+ * like Ferocious Gloves are <em>untradeable in their charged / final form</em>,
+ * so {@link ItemManager#getItemPrice} returns 0 for them. This resolver looks
+ * each one up in a hand-curated decomposition table and falls back to the
+ * canonical (uncharged / unnoted) form.</p>
  *
  * <p>Adding new items: append to {@link #DECOMPOSITION}. The "value" is a
  * {@code Map<itemId, quantity>} naming the tradeable components that compose
- * the untradeable item. Charges are intentionally not modelled — we report
- * the value of an <em>empty</em> charged item rather than guessing how full
- * the player has it.</p>
+ * the untradeable item. Charges are not modelled — the reported value is that
+ * of an <em>empty</em> charged item.</p>
  */
 public final class ItemValueResolver
 {

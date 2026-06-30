@@ -18,14 +18,18 @@ public class LootStorageData
     private Map<String, BossKillData> bossKills = new HashMap<>();
 
     /**
-     * RuneAlytics-specific per-boss "ignored item" list.
-     *
-     * <p>Independent of RuneLite's own ignore feature so that hiding a drop in
-     * RuneAlytics has no effect on any other plugin.  Keyed by normalised boss
-     * name; value is the set of item IDs the user has chosen to hide.</p>
+     * Per-boss set of item IDs the user has hidden in RuneAlytics, keyed by
+     * normalised boss name. Separate from RuneLite's own ignore list.
      */
     @SerializedName("hidden_drops_by_boss")
     private Map<String, Set<Integer>> hiddenDropsByBoss = new HashMap<>();
+
+    /**
+     * Normalised names of bosses the user has hidden from the panel entirely.
+     * Display-only; does not affect what gets synced to the server.
+     */
+    @SerializedName("hidden_bosses")
+    private Set<String> hiddenBosses = new HashSet<>();
 
     @Data
     public static class BossKillData
@@ -88,6 +92,15 @@ public class LootStorageData
          */
         @SerializedName("account_type")
         private String accountType = "normal";
+
+        /**
+         * Player location when this kill happened, captured on the client thread
+         * and uploaded per-kill in the {@code /loot/bulk-sync} payload.
+         * {@code null} when no location was captured, in which case the field is
+         * omitted from the request.
+         */
+        @SerializedName("location")
+        private PlayerLocationSnapshot location;
     }
 
     @Data
@@ -108,8 +121,10 @@ public class LootStorageData
         @SerializedName("high_alch")
         private int highAlch;
 
+        // long: a per-drop value can exceed Integer.MAX_VALUE for large stacks
+        // of high-value items.
         @SerializedName("total_value")
-        private int totalValue;
+        private long totalValue;
 
         @SerializedName("hidden")
         private boolean hidden;
