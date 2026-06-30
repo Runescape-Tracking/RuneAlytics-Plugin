@@ -228,7 +228,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                 String payloadJson = payload.toString();
                 String fullUrl     = config.apiUrl() + VERIFY_PATH;
 
-                log.info("[Verify] POST {} | payload={}", fullUrl, payloadJson);
+                log.debug("[Verify] POST {} | payload={}", fullUrl, payloadJson);
 
                 RequestBody body    = RequestBody.create(RuneAlyticsHttp.JSON, payloadJson);
                 Request     request = new Request.Builder()
@@ -244,7 +244,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
                     rawResponse   = response.body() != null ? response.body().string() : "";
                     serverMessage = RuneAlyticsJson.extractMessage(rawResponse);
 
-                    log.info("[Verify] Response HTTP {} | body={}", code2, rawResponse);
+                    log.debug("[Verify] Response HTTP {} | body={}", code2, rawResponse);
 
                     // Only HTTP status matters — 2xx = success
                     success = response.isSuccessful();

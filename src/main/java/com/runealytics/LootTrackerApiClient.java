@@ -15,6 +15,9 @@ import javax.inject.Singleton;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -24,20 +27,20 @@ import java.util.concurrent.TimeUnit;
 import static com.runealytics.RuneAlyticsHttp.JSON;
 
 /**
- * Thin HTTP client for the loot-related RuneAlytics endpoints.
- *
- * <p>This used to contain a half-dozen overlapping sync methods, each with
- * their own hand-rolled JSON layout. They have been consolidated into one
- * batch upload path ({@link #bulkSyncKills}) plus history download
+ * HTTP client for the loot-related RuneAlytics endpoints: batch upload
+ * ({@link #bulkSyncKills}) and history download
  * ({@link #fetchKillHistoryFromServer}). Payload construction is delegated to
- * {@link LootKillJsonBuilder} so there's a single schema in the codebase.</p>
+ * {@link LootKillJsonBuilder}.
  */
 @Slf4j
 @Singleton
 public class LootTrackerApiClient
 {
-    private static final String LOOT_BULK_SYNC_PATH = "/loot/bulk-sync";
-    private static final String LOOT_HISTORY_PATH   = "/loot/history/";
+    private static final String LOOT_BULK_SYNC_PATH    = "/loot/bulk-sync";
+    private static final String LOOT_HISTORY_PATH      = "/loot/history/";
+    private static final String LOOT_SNAPSHOT_PATH     = "/runelite/loot/snapshot";
+    private static final String LOOT_SYNC_ABSOLUTE_PATH = "/runelite/loot/sync-absolute";
+    private static final String PLAYER_DEATH_EVENT_PATH = "/runelite/player/death-event";
 
     private final OkHttpClient       httpClient;
     private final RunealyticsConfig  config;
@@ -58,7 +61,7 @@ public class LootTrackerApiClient
         this.itemManager  = itemManager;
         this.clientThread = clientThread;
         // Apply the configured timeout so loot uploads/downloads don't hang on
-        // RuneLite's shared-client defaults (mirrors RunealyticsApiClient).
+        // RuneLite's shared-client defaults.
         this.httpClient = httpClient.newBuilder()
                 .connectTimeout(config.syncTimeout(), TimeUnit.SECONDS)
                 .readTimeout(config.syncTimeout(),    TimeUnit.SECONDS)
@@ -76,9 +79,8 @@ public class LootTrackerApiClient
     /**
      * Uploads a batch of unsynced kills to {@code /loot/bulk-sync}.
      *
-     * <p>NPC id and prestige come from the per-boss {@link LootStorageData.BossKillData}
-     * (kills don't store these themselves), so callers should pass that map
-     * directly from storage rather than rebuilding it.</p>
+     * <p>NPC id and prestige come from the per-boss {@link LootStorageData.BossKillData},
+     * since kills don't store these themselves.</p>
      *
      * @param username    verified RSN
      * @param killsByBoss map of {npcName → kills to sync}
@@ -144,7 +146,262 @@ public class LootTrackerApiClient
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  DOWNLOAD – HISTORY
+    //  SNAPSHOT  –  GET /runelite/loot/snapshot
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Fetches the website's saved absolute loot totals for {@code username}.
+     *
+     * <p>Used by {@link LootSyncMergeService} to obtain the "website" leg of
+     * the three-source merge before computing the max-absolute totals.</p>
+     *
+     * @return a parsed snapshot, or {@code null} on any error/auth failure
+     */
+    public LootSnapshot fetchLootSnapshot(String username) throws IOException
+    {
+        String url = config.apiUrl() + LOOT_SNAPSHOT_PATH
+                + "?username=" + encodePathSegment(username)
+                + "&game=osrs";
+
+        Request.Builder rb = new Request.Builder()
+                .url(url)
+                .get()
+                .addHeader("Accept", "application/json");
+
+        String token = state.getVerificationCode();
+        if (token != null && !token.isEmpty())
+        {
+            rb.addHeader("Authorization", "Bearer " + token);
+        }
+
+        try (Response response = httpClient.newCall(rb.build()).execute())
+        {
+            if (response.code() == 401 || response.code() == 403)
+            {
+                log.warn("[snapshot] auth error: HTTP {}", response.code());
+                return null;
+            }
+            if (!response.isSuccessful() || response.body() == null)
+            {
+                log.warn("[snapshot] failed: HTTP {}", response.code());
+                return null;
+            }
+
+            String json = response.body().string();
+            log.debug("[snapshot] response: {}", json);
+            return parseSnapshot(gson.fromJson(json, JsonObject.class));
+        }
+        catch (IOException e)
+        {
+            log.error("[snapshot] network failure: {}", e.getMessage());
+            throw e;
+        }
+    }
+
+    /**
+     * Parses a {@code /runelite/loot/snapshot} response into a {@link LootSnapshot}.
+     */
+    private LootSnapshot parseSnapshot(JsonObject obj)
+    {
+        if (obj == null || !obj.has("success") || !obj.get("success").getAsBoolean())
+        {
+            return null;
+        }
+
+        LootSnapshot snapshot = new LootSnapshot();
+        snapshot.username = getString(obj, "username", "");
+
+        if (!obj.has("sources") || !obj.get("sources").isJsonArray())
+        {
+            return snapshot;
+        }
+
+        for (JsonElement sourceEl : obj.getAsJsonArray("sources"))
+        {
+            if (!sourceEl.isJsonObject()) continue;
+            JsonObject src = sourceEl.getAsJsonObject();
+
+            String sourceKey  = getString(src, "source_key",  "");
+            String sourceName = getString(src, "source_name", sourceKey);
+
+            if (!src.has("items") || !src.get("items").isJsonArray()) continue;
+
+            Map<String, Long> itemTotals = new HashMap<>();
+
+            for (JsonElement itemEl : src.getAsJsonArray("items"))
+            {
+                if (!itemEl.isJsonObject()) continue;
+                JsonObject item = itemEl.getAsJsonObject();
+
+                int    itemId  = getInt(item, "item_id", 0);
+                String name    = getString(item, "item_name", "");
+                long   qty     = getLong(item, "quantity", 0L);
+
+                // Use "id_{itemId}" as key when the ID is present, otherwise
+                // "name_{normalized}" — mirrors the server's item_key logic.
+                String key = itemId > 0
+                        ? "id_" + itemId
+                        : "name_" + name.toLowerCase().trim();
+
+                itemTotals.merge(key, qty, Math::max);
+                if (itemId > 0)
+                {
+                    snapshot.itemIdsByKey.put(key, itemId);
+                    snapshot.itemNamesByKey.put(key, name);
+                }
+            }
+
+            snapshot.sources.put(sourceKey, new LootSnapshot.SourceData(sourceKey, sourceName, itemTotals));
+        }
+
+        return snapshot;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  SYNC-ABSOLUTE  –  POST /runelite/loot/sync-absolute
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Submits merged absolute loot totals to the website.
+     *
+     * <p>This endpoint is idempotent: the server only updates stored quantities
+     * when the submitted value is ≥ the stored value (max-wins merge).  Repeated
+     * calls with the same data produce no changes.</p>
+     *
+     * @param  username  normalized RuneScape account name
+     * @param  sources   merged source/item totals from {@link LootSyncMergeService}
+     * @return true on HTTP 2xx
+     */
+    public boolean syncAbsolute(String username,
+            List<LootSyncMergeService.MergedSource> sources) throws IOException
+    {
+        if (sources == null || sources.isEmpty()) return true;
+
+        JsonObject envelope = new JsonObject();
+        envelope.addProperty("username",  username);
+        envelope.addProperty("game",      "osrs");
+        envelope.addProperty("sync_mode", "absolute_merge");
+        envelope.addProperty("force_resync", false);
+        envelope.addProperty("client_timestamp",
+                DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+
+        JsonArray sourcesArr = new JsonArray();
+        for (LootSyncMergeService.MergedSource src : sources)
+        {
+            JsonObject srcObj = new JsonObject();
+            srcObj.addProperty("source_key",  src.sourceKey);
+            srcObj.addProperty("source_name", src.sourceName);
+            if (src.sourceType != null) srcObj.addProperty("source_type", src.sourceType);
+            if (src.killCount > 0) srcObj.addProperty("kill_count", src.killCount);
+
+            JsonArray itemsArr = new JsonArray();
+            for (LootSyncMergeService.MergedItem item : src.items)
+            {
+                JsonObject itemObj = new JsonObject();
+                if (item.itemId > 0) itemObj.addProperty("item_id", item.itemId);
+                itemObj.addProperty("item_name",    item.itemName);
+                itemObj.addProperty("quantity",     item.quantity);
+                itemObj.addProperty("merge_reason", item.mergeReason);
+                itemsArr.add(itemObj);
+            }
+            srcObj.add("items", itemsArr);
+            sourcesArr.add(srcObj);
+        }
+        envelope.add("sources", sourcesArr);
+
+        return postJson(LOOT_SYNC_ABSOLUTE_PATH, envelope,
+                "sync-absolute " + sources.size() + " sources");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  DEATH EVENT  –  POST /runelite/player/death-event
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Notifies the website of a player death or item-recovery event.
+     *
+     * <p>Recovered items sent in this call are stored as metadata only and
+     * are never counted toward loot totals.</p>
+     *
+     * @return true on HTTP 2xx
+     */
+    public boolean sendDeathEvent(String username,
+            String eventType,
+            int world,
+            int regionId,
+            PlayerLocationSnapshot location,
+            List<LootStorageData.DropRecord> recoveredItems) throws IOException
+    {
+        JsonObject envelope = new JsonObject();
+        envelope.addProperty("username",          username);
+        envelope.addProperty("game",              "osrs");
+        envelope.addProperty("event_type",        eventType);
+        envelope.addProperty("client_timestamp",
+                DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+        envelope.addProperty("world",             world);
+        envelope.addProperty("region_id",         regionId);
+
+        if (location != null)
+        {
+            JsonObject loc = new JsonObject();
+            loc.addProperty("x",     location.getWorldX());
+            loc.addProperty("y",     location.getWorldY());
+            loc.addProperty("plane", location.getPlane());
+            envelope.add("location", loc);
+        }
+
+        if (recoveredItems != null && !recoveredItems.isEmpty())
+        {
+            JsonArray reclaimed = new JsonArray();
+            for (LootStorageData.DropRecord dr : recoveredItems)
+            {
+                JsonObject r = new JsonObject();
+                r.addProperty("item_id",   dr.getItemId());
+                r.addProperty("item_name", dr.getItemName());
+                r.addProperty("quantity",  dr.getQuantity());
+                reclaimed.add(r);
+            }
+            JsonObject ctx = new JsonObject();
+            ctx.add("items_recovered", reclaimed);
+            envelope.add("death_context", ctx);
+        }
+
+        return postJson(PLAYER_DEATH_EVENT_PATH, envelope, "death-event " + eventType);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  SNAPSHOT DATA CLASSES
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Parsed representation of a {@code /runelite/loot/snapshot} response.
+     */
+    public static class LootSnapshot
+    {
+        public String username = "";
+        /** Map from normalized sourceKey to {@link SourceData}. */
+        public final Map<String, SourceData>  sources        = new HashMap<>();
+        public final Map<String, Integer>     itemIdsByKey   = new HashMap<>();
+        public final Map<String, String>      itemNamesByKey = new HashMap<>();
+
+        public static class SourceData
+        {
+            public final String              sourceKey;
+            public final String              sourceName;
+            /** Map from item_key ("id_536" / "name_dragon bones") to absolute quantity. */
+            public final Map<String, Long>   itemTotals;
+
+            SourceData(String sourceKey, String sourceName, Map<String, Long> itemTotals)
+            {
+                this.sourceKey  = sourceKey;
+                this.sourceName = sourceName;
+                this.itemTotals = itemTotals;
+            }
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  DOWNLOAD – HISTORY (existing, unchanged)
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
@@ -274,14 +531,10 @@ public class LootTrackerApiClient
         if (skipped > 0)
             log.warn("Skipped {} malformed kill record(s) in history response", skipped);
 
-        // Older uploads (before the price-resolution fix) stored 0 for
-        // noted/charged/untradeable items. Re-resolve locally here, in a
-        // single client-thread hop for the whole history, so historical
-        // server data displays correctly without a server-side backfill.
-        // ItemManager reads through to the client's item cache and must run
-        // on the client thread — this method runs on a background sync
-        // thread, so calling it directly would throw "must be called on
-        // client thread".
+        // Re-resolve GE price / high alch for drops stored as 0 (noted, charged,
+        // or untradeable items). ItemManager reads the client's item cache and
+        // must run on the client thread; this method runs on a background sync
+        // thread, so the whole history is resolved in a single client-thread hop.
         clientThread.invoke(() ->
         {
             for (LootStorageData.BossKillData bossData : result.values())
@@ -312,7 +565,7 @@ public class LootTrackerApiClient
             }
         });
 
-        log.info("Fetched {} bosses with total {} kills from server",
+        log.debug("Fetched {} bosses with total {} kills from server",
                 result.size(),
                 result.values().stream().mapToInt(b -> b.getKills().size()).sum());
 
@@ -401,7 +654,7 @@ public class LootTrackerApiClient
                 log.error("[{}] failed: HTTP {} — {}", contextForLog, response.code(), responseBody);
                 return false;
             }
-            log.info("[{}] ok", contextForLog);
+            log.debug("[{}] ok", contextForLog);
             return true;
         }
         catch (IOException e)

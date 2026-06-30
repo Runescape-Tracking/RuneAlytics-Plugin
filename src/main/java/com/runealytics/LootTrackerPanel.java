@@ -69,6 +69,18 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private JButton           syncButton;
     private JLabel            syncStatusLabel;
     private javax.swing.Timer syncResetTimer;
+    private javax.swing.Timer cooldownTickTimer;
+    /** Shown when RuneLite tracker history can't be tied to the current account. */
+    private JPanel            rlHistoryWarningPanel;
+    /** Status panel for account sync / death recovery guard. */
+    private JPanel            syncStatusPanel;
+    /** Label showing the current RuneScape account key and RuneAlytics link status. */
+    private JLabel            accountStatusLabel;
+    /** Banner shown while death recovery suppression is active. */
+    private JPanel            deathRecoveryBanner;
+    private JLabel            deathRecoveryLabel;
+    /** Reference to the plugin — set after construction via {@link #setPlugin}. */
+    private RuneAlyticsPlugin plugin;
     private JButton           filterAllButton;
     private JButton           filterCombatButton;
     private JComboBox<String> skillsCombo;
@@ -88,6 +100,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private final Map<String, JPanel>  bossCardMap       = new ConcurrentHashMap<>();
     private final Map<String, JLabel>  bossValueLabelMap = new ConcurrentHashMap<>();
     private final Map<String, JLabel>  bossNameLabelMap  = new ConcurrentHashMap<>();
+    /** The collapsible grid wrapper for each boss card. Stored so an incremental
+     *  rebuild can swap only the inner item grid and preserve the header row and
+     *  its expand/collapse listener (which captures this exact wrapper). */
+    private final Map<String, JPanel>  bossGridWrapperMap = new ConcurrentHashMap<>();
 
     private final Map<String, javax.swing.Timer> lootDebounceMap = new ConcurrentHashMap<>();
 
@@ -150,8 +166,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         scrollContent.setBackground(ColorScheme.DARK_GRAY_COLOR);
         scrollContent.add(bossListPanel, BorderLayout.NORTH);
 
-        // Preferred-size inflation is now suppressed at the JTabbedPane level in
-        // RuneAlyticsPanel (the parent PluginPanel), so no override is needed here.
+        // Preferred-size inflation is handled at the JTabbedPane level in RuneAlyticsPanel.
         scrollPane = new JScrollPane(scrollContent);
         scrollPane.setBorder(null);
         scrollPane.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -277,20 +292,22 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         header.add(filterRow);
         header.add(Box.createVerticalStrut(6));
 
-        // ── Action buttons row ───────────────────────────────────────────────
+        // ── Action row: [👁 ⇅ 🗑 ⬇]  ……………………………  [Sync] ─────────────────
+        // Icon buttons on the left, the Sync button on the right (sitting under
+        // the Skills dropdown of the filter row above).
         JPanel btnRow = new JPanel(new BorderLayout(4, 0));
         btnRow.setOpaque(false);
         btnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         btnRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        JPanel leftBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
-        leftBtns.setOpaque(false);
+        JPanel iconBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
+        iconBtns.setOpaque(false);
 
         eyeButton   = makeIconButton("👁",  "Toggle hidden drops");
         sortButton  = makeIconButton("⇅",  currentSort.getLabel());
         clearButton = makeIconButton("🗑", "Clear all loot data");
         sortButton.setBackground(new Color(45, 70, 45));
-        applyEyeButtonState();   // start with the correct red/green colour
+        applyEyeButtonState();
 
         eyeButton  .addActionListener(e -> toggleHiddenItems());
         sortButton .addActionListener(e -> cycleSortMode());
@@ -299,11 +316,13 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         JButton importBtn = makeIconButton("⬇", "Import from RuneLite Loot Tracker");
         importBtn.addActionListener(e -> onImportFromRuneLiteClicked());
 
-        leftBtns.add(eyeButton);
-        leftBtns.add(sortButton);
-        leftBtns.add(clearButton);
-        leftBtns.add(importBtn);
+        iconBtns.add(eyeButton);
+        iconBtns.add(sortButton);
+        iconBtns.add(clearButton);
+        iconBtns.add(importBtn);
 
+        // Sync now performs the complete reconcile (website + plugin + RuneLite
+        // tracker → max-absolute) and upload in a single action.
         syncButton = new JButton("Sync");
         syncButton.setPreferredSize(new Dimension(52, 24));
         syncButton.setBackground(new Color(40, 60, 90));
@@ -312,11 +331,18 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         syncButton.setBorder(BorderFactory.createLineBorder(new Color(60, 90, 130), 1));
         syncButton.setFont(FILTER_FONT);
         syncButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        syncButton.setToolTipText("Sync with RuneAlytics server");
+        syncButton.setToolTipText(
+                "<html>Sync &amp; reconcile loot: merges RuneAlytics website totals, plugin local<br>"
+                + "totals, and RuneLite Loot Tracker totals into the highest known values,<br>"
+                + "then uploads them for the account you're logged into.</html>");
         syncButton.addActionListener(e -> onSyncClicked());
 
-        btnRow.add(leftBtns,   BorderLayout.WEST);
-        btnRow.add(syncButton, BorderLayout.EAST);
+        JPanel syncWrap = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        syncWrap.setOpaque(false);
+        syncWrap.add(syncButton);
+
+        btnRow.add(iconBtns, BorderLayout.WEST);
+        btnRow.add(syncWrap, BorderLayout.EAST);
         header.add(btnRow);
 
         // ── Sync status line (hidden until a sync completes / fails) ─────────
@@ -400,7 +426,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         return btn;
     }
 
-    // ── Eye-icon colours (issue #6 — clear ON / OFF indication) ─────────────
+    // ── Eye-icon colours ─────────────
     /** Green: all drops are shown (ignored ones included). */
     private static final Color EYE_BG_ALL_SHOWN  = new Color( 30, 110,  40);
     private static final Color EYE_BORDER_SHOWN  = new Color( 70, 180,  90);
@@ -550,6 +576,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             return;
         }
 
+        if (plugin == null)
+        {
+            log.warn("onSyncClicked: plugin reference not set, cannot sync");
+            return;
+        }
+
         lastSyncTime = System.currentTimeMillis();
         syncButton.setEnabled(false);
         syncButton.setText("⟳ Sync…");
@@ -557,7 +589,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         syncButton.setBorder(BorderFactory.createLineBorder(new Color(80, 120, 180), 1));
         syncStatusLabel.setText("Syncing…");
         syncStatusLabel.setForeground(new Color(100, 160, 220));
-        lootManager.performManualSync(username);
+        plugin.performLootSync(true);
     }
 
     public void showSyncCompleted()
@@ -592,12 +624,31 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             if (syncButton == null) return;
             syncButton.setEnabled(enabled);
             syncButton.setToolTipText(enabled
-                    ? "Sync with RuneAlytics server"
-                    : "Loot syncing is disabled — enable Loot Tracker on RuneAlytics.com");
+                    ? "Sync with RuneLite Loot Tracker & RuneAlytics server"
+                    : "Loot syncing is turned off for this account — enable Loot Tracker on RuneAlytics.com");
             syncButton.setBackground(enabled ? new Color(40, 60, 90) : new Color(35, 35, 35));
             syncButton.setForeground(enabled ? Color.WHITE : new Color(100, 100, 100));
             syncButton.setBorder(BorderFactory.createLineBorder(
                     enabled ? new Color(60, 90, 130) : new Color(55, 55, 55), 1));
+        });
+    }
+
+    /**
+     * Neutral pre-load state for the Sync button: disabled and greyed out, but
+     * without claiming loot sync is turned off. Used before the server feature
+     * flags have been fetched (startup / pre-verification) so the tooltip never
+     * misleads users into thinking they must go enable a feature that is on by
+     * default.
+     */
+    public void setSyncChecking()
+    {
+        SwingUtilities.invokeLater(() -> {
+            if (syncButton == null) return;
+            syncButton.setEnabled(false);
+            syncButton.setToolTipText("Checking loot sync availability…");
+            syncButton.setBackground(new Color(35, 35, 35));
+            syncButton.setForeground(new Color(100, 100, 100));
+            syncButton.setBorder(BorderFactory.createLineBorder(new Color(55, 55, 55), 1));
         });
     }
 
@@ -630,13 +681,103 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         syncResetTimer.start();
     }
 
+    /**
+     * Called after the post-sync flash (or an immediate block) fades. Enters
+     * the grey cooldown state with a live countdown if a cooldown is still in
+     * effect, otherwise returns the button to its ready (blue) state.
+     */
     private void resetSyncButton()
     {
+        long remaining = SYNC_COOLDOWN_MS - (System.currentTimeMillis() - lastSyncTime);
+        if (remaining > 0) startCooldownCountdown();
+        else                setSyncReady();
+    }
+
+    /** Idle, clickable state: blue button, no countdown running. */
+    private void setSyncReady()
+    {
+        if (cooldownTickTimer != null) { cooldownTickTimer.stop(); cooldownTickTimer = null; }
+        syncButton.setEnabled(true);
         syncButton.setText("Sync");
+        syncButton.setForeground(Color.WHITE);
         syncButton.setBackground(new Color(40, 60, 90));
         syncButton.setBorder(BorderFactory.createLineBorder(new Color(60, 90, 130), 1));
         syncStatusLabel.setText(" ");
         syncStatusLabel.setForeground(new Color(0, 0, 0, 0));
+    }
+
+    /** Grey, disabled state with a 1s-ticking countdown until the cooldown ends. */
+    private void startCooldownCountdown()
+    {
+        syncButton.setEnabled(false);
+        syncButton.setForeground(new Color(100, 100, 100));
+        syncButton.setBackground(new Color(35, 35, 35));
+        syncButton.setBorder(BorderFactory.createLineBorder(new Color(55, 55, 55), 1));
+
+        if (cooldownTickTimer != null) cooldownTickTimer.stop();
+        cooldownTickTimer = new javax.swing.Timer(1_000, e -> tickCooldown());
+        cooldownTickTimer.setRepeats(true);
+        tickCooldown();
+        cooldownTickTimer.start();
+    }
+
+    private void tickCooldown()
+    {
+        long remaining = SYNC_COOLDOWN_MS - (System.currentTimeMillis() - lastSyncTime);
+        if (remaining <= 0)
+        {
+            setSyncReady();
+            return;
+        }
+        long mins = remaining / 60_000;
+        long secs = (remaining % 60_000) / 1_000;
+        syncButton.setText(String.format("⏳ %d:%02d", mins, secs));
+        syncStatusLabel.setText("Next sync available soon");
+        syncStatusLabel.setForeground(new Color(140, 140, 140));
+    }
+
+    /**
+     * Updates the small status line under the Sync button to reflect which
+     * phase of the (multi-step) sync pipeline is currently running.
+     */
+    public void showSyncPhase(String phase)
+    {
+        if (!SwingUtilities.isEventDispatchThread())
+        {
+            SwingUtilities.invokeLater(() -> showSyncPhase(phase));
+            return;
+        }
+        if (syncStatusLabel == null) return;
+        syncStatusLabel.setText(phase);
+        syncStatusLabel.setForeground(new Color(100, 160, 220));
+    }
+
+    /**
+     * Resets the Sync button to its idle state and shows a transient info
+     * message. Used when a manual sync can't start because another sync is
+     * already running, so the button never gets stuck on "Syncing…".
+     */
+    public void showSyncBusy(String message)
+    {
+        if (!SwingUtilities.isEventDispatchThread())
+        {
+            SwingUtilities.invokeLater(() -> showSyncBusy(message));
+            return;
+        }
+        if (syncResetTimer != null) syncResetTimer.stop();
+        if (syncButton != null)
+        {
+            syncButton.setEnabled(true);
+            resetSyncButton();
+        }
+        if (syncStatusLabel != null)
+        {
+            syncStatusLabel.setText(message);
+            syncStatusLabel.setForeground(new Color(200, 160, 60));
+        }
+        syncResetTimer = new javax.swing.Timer(2_500, e -> resetSyncButton());
+        syncResetTimer.setRepeats(false);
+        syncResetTimer.start();
     }
 
     @Override
@@ -727,20 +868,19 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private void rebuildBossCardGrid(String npcName, List<BossKillStats.AggregatedDrop> drops)
     {
-        JPanel card = bossCardMap.get(npcName);
-        if (card == null) { invalidateFingerprint(); refreshDisplay(); return; }
+        // Swap only the inner item grid inside the existing wrapper, preserving the
+        // header row and its collapse listener (which captures this wrapper instance).
+        JPanel gridWrapper = bossGridWrapperMap.get(npcName);
+        if (gridWrapper == null) { invalidateFingerprint(); refreshDisplay(); return; }
 
         itemSlotMap.keySet().removeIf(k -> k.startsWith(npcName + "_"));
 
         JPanel newGrid = buildItemGrid(drops, npcName);
-        JPanel gridWrapper = new JPanel(new BorderLayout());
-        gridWrapper.setBackground(new Color(28, 28, 28));
+        gridWrapper.removeAll();
         gridWrapper.add(newGrid, BorderLayout.NORTH);
-        gridWrapper.setVisible(bossExpandedState.getOrDefault(npcName, true));
 
-        card.add(gridWrapper, BorderLayout.CENTER);
-        card.revalidate();
-        card.repaint();
+        gridWrapper.revalidate();
+        gridWrapper.repaint();
         bossListPanel.revalidate();
         bossListPanel.repaint();
     }
@@ -795,6 +935,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         bossCardMap.clear();
                         bossValueLabelMap.clear();
                         bossNameLabelMap.clear();
+                        bossGridWrapperMap.clear();
                         lootDebounceMap.values().forEach(javax.swing.Timer::stop);
                         lootDebounceMap.clear();
 
@@ -820,9 +961,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     }
                     catch (Throwable ex)
                     {
-                        // Catch Throwable (not just Exception) so AssertionError
-                        // and other Errors from deep RuneLite APIs are handled
-                        // rather than escaping and leaving refreshing=true forever.
+                        // Catch Throwable so Errors from RuneLite APIs don't leave refreshing=true.
                         log.error("Refresh EDT rebuild failed", ex);
                     }
                     finally
@@ -955,6 +1094,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         gridWrapper.setBackground(new Color(28, 28, 28));
         gridWrapper.add(grid, BorderLayout.NORTH);
         gridWrapper.setVisible(bossExpandedState.getOrDefault(npcName, true));
+        bossGridWrapperMap.put(npcName, gridWrapper);
 
         boolean bossHidden = lootManager.isBossHidden(npcName);
         String  bossDisplayName = displayNameFor(npcName);
@@ -1204,5 +1344,135 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 + "Total: <b>" + formatGp(drop.getTotalValue()) + "</b><br>"
                 + "Alch: "     + formatGp(drop.getHighAlchValue()) + " ea"
                 + "</html>";
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  NEW: ACCOUNT SYNC STATUS & DEATH RECOVERY GUARD UI
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Injects the plugin reference so the Sync button can call
+     * {@link RuneAlyticsPlugin#performLootSync(boolean)}.
+     *
+     * <p>Must be called on the EDT before the panel is first shown.</p>
+     */
+    public void setPlugin(RuneAlyticsPlugin plugin)
+    {
+        this.plugin = plugin;
+    }
+
+    /**
+     * Shows the result of a completed absolute-merge sync in the status area.
+     *
+     * <p>Must be called on the EDT.</p>
+     */
+    public void showAbsoluteMergeResult(LootSyncMergeService.MergeResult result)
+    {
+        if (!SwingUtilities.isEventDispatchThread())
+        {
+            SwingUtilities.invokeLater(() -> showAbsoluteMergeResult(result));
+            return;
+        }
+
+        if (result.isRuneliteHistorySkipped())
+        {
+            showRuneLiteHistoryWarning();
+        }
+
+        if (result.isSuccess())
+        {
+            String summary = String.format("Merged: %d sources, %d items%s",
+                    result.getSourcesCount(), result.getItemsCount(),
+                    result.isUploadedToWebsite() ? " ✓ uploaded" : " (offline)");
+            syncStatusLabel.setText(summary);
+            syncStatusLabel.setForeground(new Color(100, 200, 120));
+            flashSyncButton(true);
+        }
+        else
+        {
+            showSyncFailed(result.getBlockedReason());
+        }
+    }
+
+    /**
+     * Shows an inline warning that RuneLite Loot Tracker history could not be
+     * safely matched to the current account.
+     */
+    public void showRuneLiteHistoryWarning()
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            if (syncStatusLabel != null)
+            {
+                syncStatusLabel.setText(
+                    "<html><font color='#FFA040'>RuneLite Loot Tracker history could not be safely matched "
+                    + "to this account. Live events only.</font></html>");
+                syncStatusLabel.setForeground(new Color(255, 160, 64));
+            }
+        });
+    }
+
+    /**
+     * Shows a prominent banner when death-recovery suppression is active.
+     *
+     * <p>Must be called on the EDT.</p>
+     *
+     * @param suppressedCount  number of item-gain events suppressed so far
+     */
+    public void showDeathRecoveryActive(int suppressedCount)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            if (syncStatusLabel != null)
+            {
+                syncStatusLabel.setText(
+                    "<html><b><font color='#FF6060'>⚠ Death recovery detected.</font></b> "
+                    + "Item pickups are temporarily ignored ("
+                    + suppressedCount + " suppressed).</html>");
+                syncStatusLabel.setForeground(new Color(255, 100, 100));
+            }
+        });
+    }
+
+    /** Clears the death-recovery banner once recovery mode ends. */
+    public void clearDeathRecoveryBanner()
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            if (syncStatusLabel != null)
+            {
+                syncStatusLabel.setText(" ");
+                syncStatusLabel.setForeground(new Color(0, 0, 0, 0));
+            }
+        });
+    }
+
+    /**
+     * Shows an account-mismatch warning in the sync status area.
+     *
+     * <p>Called by the plugin when {@link CurrentPlayerIdentityService#canSync()}
+     * returns {@code false}.</p>
+     */
+    public void showAccountMismatch(String mismatchMessage)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            if (syncStatusLabel != null)
+            {
+                syncStatusLabel.setText(
+                    "<html><font color='#FF8040'>" + mismatchMessage + "</font></html>");
+                syncStatusLabel.setForeground(new Color(255, 128, 64));
+            }
+            if (syncResetTimer != null) syncResetTimer.stop();
+            if (syncButton != null)
+            {
+                // Restore the label/colour but leave it disabled — the feature
+                // flag poll re-enables it once the accounts match again.
+                syncButton.setText("Sync");
+                syncButton.setBackground(new Color(40, 60, 90));
+                syncButton.setBorder(BorderFactory.createLineBorder(new Color(60, 90, 130), 1));
+                syncButton.setEnabled(false);
+            }
+        });
     }
 }

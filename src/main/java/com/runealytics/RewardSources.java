@@ -8,12 +8,8 @@ import java.util.Map;
 /**
  * Single source of truth for every chest / reward interface the plugin reads.
  *
- * <p>Replaces the scattered {@code WIDGET_*} + {@code CONTAINER_*} constants
- * that used to live in both {@link RuneAlyticsPlugin} and
- * {@link LootTrackerManager}.  Several of the old container constants were
- * wrong (CoX read container {@code 122} instead of {@code 581}, ToA read
- * {@code 801} instead of {@code 811}), which silently dropped raid loot.
- * All known-good values are now defined here in one place.</p>
+ * <p>Defines the widget-group and inventory-container IDs for every reward
+ * source in one place.</p>
  *
  * <h2>How a reward gets read</h2>
  * <ol>
@@ -50,8 +46,7 @@ public final class RewardSources
 
     // ── Container IDs ─────────────────────────────────────────────────────────
     //
-    // Pulled from the official RuneLite InventoryID enum where possible so
-    // there's no chance of the wrong number sneaking in again.
+    // Pulled from the official RuneLite InventoryID enum where possible.
 
     public static final int CONTAINER_BARROWS   = InventoryID.BARROWS_REWARD.getId();
     public static final int CONTAINER_COX       = InventoryID.CHAMBERS_OF_XERIC_CHEST.getId();
@@ -84,9 +79,9 @@ public final class RewardSources
     /**
      * Static widget-group → {@link Source} map.
      *
-     * <p>NOTE: a few sources don't appear here because they need extra logic
+     * <p>A few sources are not listed here because they need extra logic
      * (Nightmare-vs-Phosani name decision, Whisperer ground-item flow,
-     * Wintertodt inventory diff). Those are still handled inline in
+     * Wintertodt inventory diff) and are handled inline in
      * {@link RuneAlyticsPlugin#onWidgetLoaded}.</p>
      */
     public static final Map<Integer, Source> BY_WIDGET = ImmutableMap.<Integer, Source>builder()

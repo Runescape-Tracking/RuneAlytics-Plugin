@@ -98,7 +98,6 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     //   green ✓  — fully compliant
     //   yellow ⚠ — warnings only (honor rules)
     //   red ✗    — one or more errors (e.g. insufficient risk)
-    // The text comes directly from the server so the plugin has zero rule logic.
     private final JLabel  p1Validation     = validationLabel();
     private final JLabel  p2Validation     = validationLabel();
 
@@ -143,14 +142,10 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     private void buildUi()
     {
-        // ── Structural width fix ──────────────────────────────────────────────
-        // The cards live inside a vertical-only JScrollPane.  This is critical:
-        // a JViewport reports a tiny minimum size, so however wide a card's
-        // content becomes it can NEVER bubble its width up through the
-        // JTabbedPane → RuneAlyticsPanel → sidebar and force the RuneLite client
-        // to grow (which previously pushed the inventory bar out and blocked
-        // resizing).  The content tracks the viewport width so cards fill the
-        // panel instead of being clipped, and any overflow scrolls vertically.
+        // Cards live inside a vertical-only JScrollPane. The content tracks the
+        // viewport width so cards fill the panel instead of being clipped, and
+        // any overflow scrolls vertically. A JViewport's tiny minimum size keeps
+        // a wide card from forcing the sidebar (and the RuneLite client) to grow.
         setLayout(new BorderLayout());
         setBorder(new EmptyBorder(0, 0, 0, 0));
 
@@ -276,11 +271,9 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     private JPanel buildPlayerRow(AvatarLabel avatar, JLabel name, JLabel tag,
                                   JLabel status, JLabel validation)
     {
-        // Top sub-row: avatar | name + tag | status
-        // The status label now sits to the RIGHT of the name/tag block on the
-        // same line, so it does NOT steal horizontal space from the validation
-        // label.  Previously the validation lived inside the constrained centre
-        // column and was clipped by the EAST status panel.
+        // Top sub-row: avatar | name + tag | status. The status label sits to
+        // the right of the name/tag block so it doesn't steal horizontal space
+        // from the validation label.
         JPanel topRow = new JPanel(new BorderLayout(8, 0));
         topRow.setOpaque(false);
         topRow.setAlignmentX(LEFT_ALIGNMENT);
@@ -375,9 +368,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     {
         if (!state.isLoggedIn())
         {
-            // On logout the match session is reset by the plugin before this
-            // runs; make sure no stale "loading" state or active match cards are
-            // left on screen.
+            // On logout, clear any stale loading state or active match cards.
             loading = false;
             hideActiveCards();
             setEntryEnabled(false);
@@ -432,9 +423,8 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         hideActiveCards();
         updateEntryCard();
 
-        // If the manager couldn't start the load (e.g. a request is already in
-        // flight), it won't fire a listener callback — clear the loading state
-        // here so the UI doesn't get stuck on "Loading match…".
+        // If the load couldn't start (e.g. a request is already in flight), no
+        // callback fires — clear the loading state here.
         if (!matchmakingManager.loadMatch(code))
         {
             loading = false;
@@ -465,10 +455,8 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             String msg = update.getMessage();
             if (msg == null) msg = "";
 
-            // If a match is already active, a transient poll or background-call
-            // failure should be shown in the entry status bar but MUST NOT hide
-            // the active match cards — that would make the whole UI disappear on
-            // every blip (the root cause of the "death not reported" UX problem).
+            // While a match is active, show transient failures in the entry
+            // status bar without hiding the active match cards.
             if (matchmakingManager.hasActiveMatch())
             {
                 if (!msg.isEmpty())
@@ -478,10 +466,8 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
                 return;
             }
 
-            // No active match — this is an explicit load failure; reset to idle.
-            // updateEntryCard() is called first so it restores the enabled state
-            // and sets "Ready." — then we immediately override the status label
-            // with the actual error so it is the last thing written and stays visible.
+            // No active match — explicit load failure. Reset to idle, then
+            // override the status label with the error so it stays visible.
             hideActiveCards();
             updateEntryCard();
             setEntryStatus(msg.isEmpty() ? "Failed to load match." : msg, COL_RED);
@@ -549,7 +535,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         applyPlayerStatus(p1Status, myJoined,  myReady,  status);
         applyPlayerStatus(p2Status, oppJoined, oppReady, status);
 
-        // ── validation badges (server-driven — zero rule logic here) ─────────
+        // ── validation badges (server-driven) ────────────────────────────────
         MatchmakingSession.PlayerValidation myVal  = localIsP1
                 ? s.getPlayer1Validation() : s.getPlayer2Validation();
         MatchmakingSession.PlayerValidation oppVal = localIsP1
@@ -618,8 +604,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     /**
      * Updates the validation label for one player from the server's compliance
-     * result.  The plugin contains zero rule logic — it simply renders what
-     * the server returns.
+     * result.
      *
      * <ul>
      *   <li>Green  ✓  — no issues (or only warnings)  → valid</li>
@@ -635,10 +620,9 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
             return;
         }
 
-        // ── Violation grace countdown — shown with high-urgency orange ────────
-        // The server injects a "violation_grace" issue at the front of the list
-        // when a countdown is active.  We render it before other error checks so
-        // it's always the most prominent message while the timer is running.
+        // Violation grace countdown, shown in orange. The server injects a
+        // "violation_grace" issue when a countdown is active; render it before
+        // other error checks so it stays the most prominent message.
         MatchmakingSession.ValidationIssue graceIssue =
                 validation.firstIssueByCode("violation_grace");
         if (graceIssue != null)
@@ -651,8 +635,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         String firstError   = validation.firstErrorMessage();
         String firstWarning = validation.firstWarningMessage();
 
-        // Validation now sits below the player row (full-panel width) so we
-        // can use a wider div — 220px fits the standard plugin panel width.
+        // Validation sits below the player row at full panel width.
         if (firstError != null)
         {
             lbl.setText("<html><div width=\"185\">\u2717 " + escapeHtml(firstError) + "</div></html>");
@@ -715,12 +698,10 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Risk-value card rendering (server-computed — informational only)
+    //  Risk-value card rendering
     //
-    //  The plugin performs ZERO valuation logic.  Every number, label and item
-    //  list is computed on the server (MatchItemValuationService) and rendered
-    //  verbatim here.  This lets the website change valuation / retention rules
-    //  on the fly without shipping a new plugin build.
+    //  Every number, label and item list is computed on the server and rendered
+    //  verbatim here.
     // ═════════════════════════════════════════════════════════════════════════
 
     /** Max item tiles shown inline before collapsing the rest behind a "+N" tile. */
@@ -952,7 +933,7 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
     /**
      * Builds a wrapping grid of item tiles.  When there are more items than
      * {@link #RISK_TILE_SLOTS} the overflow collapses behind a clickable "+N"
-     * tile that expands a second grid below (per the user's requested UX).
+     * tile that expands a second grid below.
      */
     private JPanel itemGrid(List<MatchmakingSession.RiskItem> items)
     {

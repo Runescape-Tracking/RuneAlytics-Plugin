@@ -17,8 +17,8 @@ public class MatchmakingApiResult
     )
     {
         this.session = session;
-        // Normalise to empty strings so callers can safely call .length()/.isEmpty()
-        // without null-guarding every failure-logging path.
+        // Normalise to empty strings so callers can call .length()/.isEmpty()
+        // without null-guarding.
         this.message = message != null ? message : "";
         this.rawResponse = rawResponse != null ? rawResponse : "";
         this.success = success;

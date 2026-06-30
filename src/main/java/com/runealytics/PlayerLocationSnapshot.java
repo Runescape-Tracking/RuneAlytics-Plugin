@@ -79,30 +79,12 @@ public final class PlayerLocationSnapshot
     public static final int PRIVACY_DECOY_WORLD = 1337;
 
     /**
-     * <b>READ BEFORE TOUCHING THIS METHOD OR ITS CALL SITE.</b>
-     *
-     * <p>This is a deliberate, hard-coded privacy control, not a placeholder.
-     * When a player has set their location visibility to {@code private}, the
-     * plugin MUST NOT send their real coordinates to the server at all — not
-     * even "for internal use," not even behind a flag the server is trusted to
-     * respect. The whole point of a client-side decoy is that it removes the
-     * server (and every future bug, refactor, log line, cache, or admin tool
-     * downstream of it) from the trust boundary entirely. A server-side privacy
-     * check is one regression away from leaking real coordinates; a decoy that
-     * never leaves the client can't leak what it was never given.</p>
-     *
-     * <p>This always resolves to the Grand Exchange, tagged with
-     * {@link #PRIVACY_DECOY_WORLD} (a world number that can never be real) so
-     * it is unambiguous in logs/storage and trivially distinguishable from a
-     * genuine location. {@code instanced} is {@code false} and
-     * {@code area_name}/{@code map_region} are both {@code "Grand Exchange"} —
-     * i.e. obviously fake, not almost-real.</p>
-     *
-     * <p>Any change to this method, or to the {@code visibility == PRIVATE}
-     * branch that calls it, is a privacy-sensitive change and needs explicit
-     * sign-off before merging — the intent of the live map is to share
-     * location with friends who are allowed to see it, never to let the
-     * website (or anyone scraping it) track a player who opted out.</p>
+     * Returns a fixed decoy location used in place of the real location when a
+     * player's location visibility is {@code private}, so real coordinates never
+     * leave the client. Always resolves to the Grand Exchange, tagged with
+     * {@link #PRIVACY_DECOY_WORLD} so it is distinguishable from a genuine
+     * location in logs/storage. {@code instanced} is {@code false} and
+     * {@code area_name}/{@code map_region} are both {@code "Grand Exchange"}.
      */
     public static PlayerLocationSnapshot privacyDecoy()
     {
@@ -116,18 +98,15 @@ public final class PlayerLocationSnapshot
     }
 
     /**
-     * <b>The sanctioned entry point for every location-sending event</b> (live
-     * map heartbeat, XP-batch location, loot kill-record location, and any
-     * future one). Callers MUST go through this method — never call
-     * {@link #capture(Client)} directly from a code path that ends up in an
-     * outbound payload — so that {@code visibility == PRIVATE} is honored
-     * uniformly everywhere, instead of relying on each call site to remember
-     * to check it.
+     * Entry point for location-sending events (live map heartbeat, XP-batch
+     * location, loot kill-record location). Returns the privacy decoy when
+     * {@code visibility} is {@code PRIVATE} so the decoy substitution is applied
+     * uniformly at every call site rather than per-caller.
      *
      * @param client     the RuneLite client (read on the client thread)
      * @param visibility the player's current location-visibility {@link PrivacySetting}
      * @return {@link #privacyDecoy()} when {@code visibility} is {@code PRIVATE};
-     *         otherwise the real {@link #capture(Client)} result (which may be
+     *         otherwise the {@link #capture(Client)} result (which may be
      *         {@code null} if the player isn't renderable right now)
      */
     public static PlayerLocationSnapshot captureRespectingPrivacy(Client client, PrivacySetting visibility)
@@ -142,10 +121,8 @@ public final class PlayerLocationSnapshot
      * client or local player / world location is unavailable so callers can
      * simply omit the {@code location} field.</p>
      *
-     * <p><b>Do not call this directly for anything that gets uploaded.</b> Use
-     * {@link #captureRespectingPrivacy} instead so the {@code private}
-     * visibility decoy substitution in {@link #privacyDecoy()} can never be
-     * accidentally bypassed by a new call site.</p>
+     * <p>For uploads use {@link #captureRespectingPrivacy} so the {@code private}
+     * visibility decoy substitution is applied.</p>
      */
     public static PlayerLocationSnapshot capture(Client client)
     {

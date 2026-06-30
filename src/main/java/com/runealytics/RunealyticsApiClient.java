@@ -61,12 +61,12 @@ public class RunealyticsApiClient
 
         if (token == null || token.isEmpty())
         {
-            log.warn("[XP Batch] Skipping — no verification token in state");
+            log.debug("[XP Batch] Skipping — no verification token in state");
             return;
         }
         if (username == null || username.isEmpty())
         {
-            log.warn("[XP Batch] Skipping — no username in state");
+            log.debug("[XP Batch] Skipping — no username in state");
             return;
         }
         if (xpGains.isEmpty())
@@ -85,9 +85,7 @@ public class RunealyticsApiClient
         payload.addProperty("game_mode",    state.getCurrentGameMode()    != null ? state.getCurrentGameMode()    : "regular");
         payload.addProperty("account_type", state.getCurrentAccountSubtype() != null ? state.getCurrentAccountSubtype() : "normal");
 
-        // Optional shared location object (top-level for the batch). Omitted
-        // entirely when unavailable so the server's nullable handling and older
-        // website code keep working.
+        // Optional shared location object for the batch; omitted when unavailable.
         PlayerLocationSnapshot location = state.getCurrentLocation();
         if (location != null)
         {
@@ -103,7 +101,7 @@ public class RunealyticsApiClient
         String payloadJson = gson.toJson(payload);
         String url         = config.apiUrl() + "/xp/batch";
 
-        log.info("[XP Batch] POST {} | skills={} payload={}", url, xpGains.size(), payloadJson);
+        log.debug("[XP Batch] POST {} | skills={} payload={}", url, xpGains.size(), payloadJson);
 
         RequestBody body    = RequestBody.create(JSON, payloadJson);
         Request     request = new Request.Builder()
@@ -131,7 +129,7 @@ public class RunealyticsApiClient
                 {
                     String body = response.body() != null ? response.body().string() : "";
                     if (response.isSuccessful())
-                        log.info("[XP Batch] OK HTTP {} — {}", response.code(), body);
+                        log.debug("[XP Batch] OK HTTP {} — {}", response.code(), body);
                     else
                         log.warn("[XP Batch] FAILED HTTP {} — {}", response.code(), body);
                 }
@@ -185,7 +183,7 @@ public class RunealyticsApiClient
         String payloadJson = gson.toJson(payload);
         String url         = config.apiUrl() + "/plugin/privacy";
 
-        log.info("[Privacy] POST {} | bank={} player={}", url,
+        log.debug("[Privacy] POST {} | bank={} player={}", url,
                 wireValue(bankPrivacy), wireValue(playerVisibility));
 
         RequestBody body    = RequestBody.create(JSON, payloadJson);
@@ -236,43 +234,26 @@ public class RunealyticsApiClient
 
     /**
      * Sends a periodic heartbeat to {@code /plugin/heartbeat} while the player is
-     * logged in. Carries the live map location plus the player's friends and
-     * ignore lists (as reported by OSRS) so the website can render the player on
-     * the live map and enforce who may see them:
+     * logged in, carrying the live map location plus the player's friends and
+     * ignore lists so the website can render the player and enforce visibility:
      *
      * <ul>
      *   <li>{@code public}  — anyone can see the location.</li>
-     *   <li>{@code friends} — only players on {@code friends} and/or players who
-     *       are mutually tracking each other may see the location.</li>
-     *   <li>{@code private} — nobody, including the server's own database/logs,
-     *       ever sees the real location. See note below.</li>
+     *   <li>{@code friends} — only friends and mutually-tracking players.</li>
+     *   <li>{@code private} — nobody.</li>
      * </ul>
      *
-     * <p>The {@code ignores} list lets the server hide the player from anyone the
-     * player has ignored regardless of the chosen visibility. {@code public}/
-     * {@code friends} access control is enforced server-side — this client only
-     * reports the raw inputs for those two cases.</p>
+     * <p>The {@code ignores} list hides the player from anyone they have ignored.
+     * {@code public}/{@code friends} access is enforced server-side from the raw
+     * inputs. For {@code private}, the caller substitutes
+     * {@link PlayerLocationSnapshot#privacyDecoy()} before calling this method, so
+     * {@code location} is already a fake Grand Exchange position on world
+     * {@link PlayerLocationSnapshot#PRIVACY_DECOY_WORLD} when it arrives.</p>
      *
-     * <p><b>{@code private} is the one case NOT left to the server.</b> The
-     * caller ({@code RuneAlyticsPlugin.sendHeartbeatTick}) substitutes
-     * {@link PlayerLocationSnapshot#privacyDecoy()} for the real location
-     * <i>before</i> this method is ever invoked, so by the time {@code location}
-     * reaches here it is already a harmless, obviously-fake Grand Exchange
-     * position on world {@link PlayerLocationSnapshot#PRIVACY_DECOY_WORLD}. Do
-     * not "optimize" this method to special-case {@code visibility == PRIVATE}
-     * and skip sending {@code location} — that would require trusting that no
-     * future change to this method ever re-introduces a real-location path. The
-     * decoy already prevents the real coordinates from existing in this call's
-     * scope at all, which is the stronger guarantee.</p>
-     *
-     * <p>Also carries the player's current worn equipment and inventory so the
-     * website can show "what they're wearing / holding" alongside the map dot.
-     * {@code gear_visibility} mirrors {@code bank_privacy} from
-     * {@link #syncPrivacySettings} — the same setting that gates bank/wealth
-     * visibility also gates who may see equipment/inventory, since both are
-     * "what gear/items does this account have" data. The plugin always
-     * uploads; the server is responsible for honoring the privacy flag when
-     * deciding who else may see the fields.</p>
+     * <p>Also carries worn equipment and inventory. {@code gear_visibility}
+     * mirrors {@code bank_privacy} from {@link #syncPrivacySettings} and gates who
+     * may see equipment/inventory; the plugin always uploads and the server
+     * honors the flag.</p>
      *
      * @param location      current world location (omitted when {@code null})
      * @param friends       in-game friends list names
@@ -281,16 +262,11 @@ public class RunealyticsApiClient
      * @param equipment     worn equipment as {@code [{slot, id, qty}, ...]}
      * @param inventory     inventory contents as {@code [{id, qty}, ...]}
      * @param gearVisibility the player's bank/gear {@link PrivacySetting}, reused to gate equipment/inventory
-     * @param xpPreview     <b>non-authoritative</b> snapshot of XP gained so far in the
-     *                      in-progress 30s batch window (skill name → XP), from
-     *                      {@link XpTrackerManager#peekPendingGains()}. May be empty/null
-     *                      when no window is open. This is a live preview only — the
-     *                      authoritative XP totals come exclusively from
-     *                      {@link #syncXpBatch}'s {@code /xp/batch} POST, which is
-     *                      unaffected by this field. The server MUST NOT add
-     *                      {@code xp_preview} values to a player's XP totals, or XP will
-     *                      be double-counted once the same gains are flushed via
-     *                      {@code /xp/batch} moments later.
+     * @param xpPreview     non-authoritative snapshot of XP gained so far in the open
+     *                      30s batch window (skill name → XP), from
+     *                      {@link XpTrackerManager#peekPendingGains()}; may be empty/null.
+     *                      The authoritative totals come from {@link #syncXpBatch}; the
+     *                      server must not add these values to a player's XP totals.
      */
     public void sendHeartbeat(PlayerLocationSnapshot location, List<String> friends,
                               List<String> ignores, PrivacySetting visibility,
@@ -320,8 +296,7 @@ public class RunealyticsApiClient
         payload.add("equipment",               equipment != null ? equipment : new JsonArray());
         payload.add("inventory",               inventory != null ? inventory : new JsonArray());
 
-        // Non-authoritative — see javadoc above. Omitted entirely when empty so
-        // older server versions that don't expect this field see nothing new.
+        // Non-authoritative preview; omitted entirely when empty.
         if (xpPreview != null && !xpPreview.isEmpty())
         {
             JsonObject xpPreviewJson = new JsonObject();
@@ -334,8 +309,7 @@ public class RunealyticsApiClient
 
         payload.addProperty("timestamp",       System.currentTimeMillis() / 1000);
 
-        // Location is optional — omit entirely when unavailable so the server's
-        // nullable handling keeps working.
+        // Location is optional; omitted when unavailable.
         if (location != null)
         {
             payload.add("location", location.toJson());
@@ -478,21 +452,28 @@ public class RunealyticsApiClient
             String     body = response.body() != null ? response.body().string() : "";
             JsonObject json = gson.fromJson(body, JsonObject.class);
 
-            if (json == null || !json.has("flags"))
+            if (json == null || !json.has("flags") || !json.get("flags").isJsonObject())
             {
-                log.warn("Feature-flag response missing 'flags' field");
+                log.warn("Feature-flag response missing or invalid 'flags' object");
                 return new HashMap<>();
             }
 
             Type                 mapType = new TypeToken<Map<String, Boolean>>() {}.getType();
             Map<String, Boolean> flags   = gson.fromJson(json.get("flags"), mapType);
 
-            log.info("Feature flags received for {}: {}", username, flags);
+            log.debug("Feature flags received for {}: {}", username, flags);
             return flags != null ? flags : new HashMap<>();
         }
         catch (IOException e)
         {
             log.error("Failed to fetch feature flags for {}: {}", username, e.getMessage());
+            return new HashMap<>();
+        }
+        catch (com.google.gson.JsonSyntaxException e)
+        {
+            // Malformed body / unexpected JSON shape must not bubble out of the
+            // 60s feature-flag poll or the login executor task.
+            log.warn("Feature-flag response was not valid JSON for {}: {}", username, e.getMessage());
             return new HashMap<>();
         }
     }
@@ -534,7 +515,7 @@ public class RunealyticsApiClient
         if (!normRsn.isEmpty())
             payload.addProperty("osrs_rsn", normRsn);
 
-        log.info("[VerifyCheck] POST /verify-runelite rsn={}", normRsn);
+        log.debug("[VerifyCheck] POST /verify-runelite rsn={}", normRsn);
 
         RequestBody body    = RequestBody.create(JSON, gson.toJson(payload));
         Request     request = new Request.Builder()
@@ -547,7 +528,7 @@ public class RunealyticsApiClient
         try (Response response = httpClient.newCall(request).execute())
         {
             String responseBody = response.body() != null ? response.body().string() : "";
-            log.info("[VerifyCheck] HTTP {} body={}", response.code(), responseBody);
+            log.debug("[VerifyCheck] HTTP {} body={}", response.code(), responseBody);
             if (response.isSuccessful()) return null;
 
             // Surface the server's own message so the user sees the real reason.
