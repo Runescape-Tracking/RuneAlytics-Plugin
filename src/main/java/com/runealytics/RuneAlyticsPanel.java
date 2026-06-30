@@ -108,11 +108,9 @@ public class RuneAlyticsPanel extends PluginPanel
         setLayout(new BorderLayout());
         setBackground(ColorScheme.DARK_GRAY_COLOR);
 
-        // Override getPreferredSize() on the JTabbedPane so it never bubbles a
-        // huge preferred height (max-of-all-tabs) up to RuneAlyticsPanel.
-        // This is what prevents the sidebar from inflating the client window to
-        // fit every boss card in the LootTrackerPanel.
-        // SCROLL_TAB_LAYOUT keeps all tabs on a single row (no second row).
+        // getPreferredSize() returns the parent height so the tab pane never
+        // bubbles a max-of-all-tabs preferred height up and inflates the window.
+        // SCROLL_TAB_LAYOUT keeps all tabs on a single row.
         // Calibri 10 pt fits three tabs within PluginPanel.PANEL_WIDTH (220 px).
         tabbedPane = new JTabbedPane(JTabbedPane.TOP, JTabbedPane.SCROLL_TAB_LAYOUT)
         {
@@ -135,24 +133,10 @@ public class RuneAlyticsPanel extends PluginPanel
     }
 
     /**
-     * Returns the parent container's current height as our preferred height.
-     *
-     * <p>Why this matters on macOS (Retina):
-     * <ul>
-     *   <li>A fixed small value (e.g. 10) differs from the actual rendered height.
-     *       When {@code revalidate()} cascades to the root frame (e.g. during
-     *       verification), RuneLite briefly resizes the window to match the small
-     *       preferred height.  On a Retina display the 2× scale factor makes even
-     *       a 1-pixel resize look like a full-screen zoom flash.</li>
-     *   <li>When the plugin is popped out to a floating window, RuneLite calls
-     *       {@code pack()} which uses the preferred size.  A 10-pixel height
-     *       collapses the window onto whatever UI sits below it (nav toolbar).</li>
-     * </ul>
-     *
-     * <p>By mirroring the parent's current height, the preferred size is always
-     * equal to the actual rendered size, so revalidation never produces a size
-     * delta and therefore never triggers a resize flash.  For floating windows
-     * (no parent or parent not yet laid out) we fall back to 400 px.
+     * Returns the parent container's current height as the preferred height, or
+     * 400 px when there is no laid-out parent (e.g. a floating window). Mirroring
+     * the parent height keeps the preferred size equal to the rendered size so
+     * revalidation does not resize the frame.
      */
     @Override
     public Dimension getPreferredSize()
@@ -250,7 +234,7 @@ public class RuneAlyticsPanel extends PluginPanel
             return;
         }
 
-        log.info("Applying feature flags: {}", flags);
+        log.debug("Applying feature flags: {}", flags);
         lastAppliedFlags = new HashMap<>(flags); // snapshot for late-registering tabs
 
         for (TabEntry entry : tabRegistry)
@@ -267,7 +251,7 @@ public class RuneAlyticsPanel extends PluginPanel
             {
                 insertTabAtLogicalPosition(entry);
                 entry.visible = true;
-                log.info("Tab '{}' enabled (flag '{}')", entry.title, entry.featureKey);
+                log.debug("Tab '{}' enabled (flag '{}')", entry.title, entry.featureKey);
 
                 // Fire reload callback so the panel gets fresh data
                 Runnable cb = onTabShownCallbacks.get(entry.featureKey);
@@ -283,7 +267,7 @@ public class RuneAlyticsPanel extends PluginPanel
                 {
                     tabbedPane.removeTabAt(idx);
                     entry.visible = false;
-                    log.info("Tab '{}' disabled (flag '{}')", entry.title, entry.featureKey);
+                    log.debug("Tab '{}' disabled (flag '{}')", entry.title, entry.featureKey);
                 }
             }
         }
@@ -293,31 +277,12 @@ public class RuneAlyticsPanel extends PluginPanel
         if (count > 0 && tabbedPane.getSelectedIndex() >= count)
             tabbedPane.setSelectedIndex(count - 1);
 
-        // Use validate() rather than revalidate().  revalidate() marks this
-        // component invalid and schedules layout from the JFrame root — on
-        // macOS Retina that root-level resize produces a visible zoom flash.
-        // validate() runs layout only within this component's subtree.
+        // validate() lays out only this subtree, avoiding a full-frame relayout flash.
         tabbedPane.validate();
         tabbedPane.repaint();
     }
 
     // ── Convenience helpers — all route through applyFeatureFlags ─────────────
-
-    /**
-     * Called when a <b>verified</b> player reaches the login screen or logs out.
-     *
-     * <p>Keeps the Loot Tracker visible so the player can still browse their
-     * drops while logged out.  Match Finder and Settings are hidden because
-     * both require an active session.
-     */
-    public void showLoggedOutVerified()
-    {
-        Map<String, Boolean> flags = new HashMap<>();
-        flags.put(FEATURE_VERIFICATION, true);   // always accessible
-        flags.put(FEATURE_LOOT,         true);
-        flags.put(FEATURE_MATCHES,      true);
-        applyFeatureFlags(flags);
-    }
 
     /**
      * Called when an <b>unverified</b> player reaches the login screen or logs out.
@@ -370,8 +335,10 @@ public class RuneAlyticsPanel extends PluginPanel
         int idx = tabbedPane.getSelectedIndex();
         if (idx >= 0)
         {
-            configManager.setConfiguration(CONFIG_GROUP, CONFIG_LAST_TAB, String.valueOf(idx));
-            log.debug("Saved last tab index: {}", idx);
+            // Persist the selected tab's title (indices shift as tabs are added/removed).
+            String title = tabbedPane.getTitleAt(idx);
+            configManager.setConfiguration(CONFIG_GROUP, CONFIG_LAST_TAB, title);
+            log.debug("Saved last tab: {}", title);
         }
     }
 
@@ -383,21 +350,14 @@ public class RuneAlyticsPanel extends PluginPanel
     {
         SwingUtilities.invokeLater(() -> {
             String saved = configManager.getConfiguration(CONFIG_GROUP, CONFIG_LAST_TAB);
-            if (saved == null) return;
+            if (saved == null || saved.trim().isEmpty()) return;
 
-            try
+            // Look up by title; an unknown or hidden tab resolves to -1 and is ignored.
+            int idx = tabbedPane.indexOfTab(saved.trim());
+            if (idx >= 0)
             {
-                int idx   = Integer.parseInt(saved.trim());
-                int count = tabbedPane.getTabCount();
-                if (idx >= 0 && idx < count)
-                {
-                    tabbedPane.setSelectedIndex(idx);
-                    log.debug("Restored last tab index: {}", idx);
-                }
-            }
-            catch (NumberFormatException ex)
-            {
-                log.warn("Invalid saved tab index: '{}'", saved);
+                tabbedPane.setSelectedIndex(idx);
+                log.debug("Restored last tab: {}", saved.trim());
             }
         });
     }

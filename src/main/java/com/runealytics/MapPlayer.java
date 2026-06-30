@@ -22,6 +22,9 @@ public final class MapPlayer
     @SerializedName("plane")    private int    plane;
     @SerializedName("world")    private int    world;
 
+    /** Lazily-built, cached WorldPoint (read on the single render/client thread). */
+    private transient WorldPoint cachedWorldPoint;
+
     /** Required by Gson. */
     public MapPlayer() {}
 
@@ -37,7 +40,13 @@ public final class MapPlayer
     /** Convenience accessor for rendering on the scene/minimap. */
     public WorldPoint toWorldPoint()
     {
-        return new WorldPoint(worldX, worldY, plane);
+        WorldPoint wp = cachedWorldPoint;
+        if (wp == null)
+        {
+            wp = new WorldPoint(worldX, worldY, plane);
+            cachedWorldPoint = wp;
+        }
+        return wp;
     }
 
     @Override

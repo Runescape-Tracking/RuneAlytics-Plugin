@@ -24,7 +24,11 @@ public class MatchmakingMinimapOverlay extends Overlay
 
     private final Client client;
     private final MatchmakingManager matchmakingManager;
-    private final Color arrowColor = ColorScheme.BRAND_ORANGE;
+    private final Color arrowColor       = ColorScheme.BRAND_ORANGE;
+    private final Color arrowOutlineColor = ColorScheme.BRAND_ORANGE.darker();
+
+    // Reused across frames (render() is single-threaded) to avoid per-frame allocation.
+    private final Polygon arrow = new Polygon();
 
     @Inject
     public MatchmakingMinimapOverlay(
@@ -66,14 +70,14 @@ public class MatchmakingMinimapOverlay extends Overlay
 
     private void drawArrow(Graphics2D graphics, int x, int y)
     {
-        Polygon arrow = new Polygon();
+        arrow.reset();
         arrow.addPoint(x, y - ARROW_SIZE);
         arrow.addPoint(x - ARROW_SIZE, y + ARROW_SIZE);
         arrow.addPoint(x + ARROW_SIZE, y + ARROW_SIZE);
 
         graphics.setColor(arrowColor);
         graphics.fill(arrow);
-        graphics.setColor(arrowColor.darker());
+        graphics.setColor(arrowOutlineColor);
         graphics.draw(arrow);
     }
 }

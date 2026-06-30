@@ -37,6 +37,7 @@ public class BankDataManager
      * thread for the actual HTTP call.</p>
      *
      * @param username           verified RSN (added to the JSON payload)
+     * @param world              the current world (captured on the client thread)
      * @param bankContainer      InventoryID.BANK container (required)
      * @param inventoryContainer InventoryID.INVENTORY container (may be null)
      * @param equipmentContainer InventoryID.EQUIPMENT container (may be null)
@@ -44,6 +45,7 @@ public class BankDataManager
      */
     public JsonObject buildBankSnapshot(
             String username,
+            int world,
             ItemContainer bankContainer,
             ItemContainer inventoryContainer,
             ItemContainer equipmentContainer)
@@ -51,7 +53,7 @@ public class BankDataManager
         JsonObject data = new JsonObject();
         data.addProperty("username",  username);
         data.addProperty("timestamp", Instant.now().getEpochSecond());
-        data.addProperty("world",     0);
+        data.addProperty("world",     world);
 
         // fromContainerWithValues / containerTotalValue both call
         // ItemManager.getItemComposition which requires the client thread.
@@ -73,7 +75,7 @@ public class BankDataManager
         data.addProperty("equipment_value", equipValue);
         data.addProperty("total_wealth",    total);
 
-        log.info("Wealth snapshot built: bank={} ({}gp) inv={} ({}gp) equip={} ({}gp) total={}gp",
+        log.debug("Wealth snapshot built: bank={} ({}gp) inv={} ({}gp) equip={} ({}gp) total={}gp",
                 bankItems.size(),      bankValue,
                 inventoryItems.size(), invValue,
                 equipmentItems.size(), equipValue,
@@ -97,13 +99,13 @@ public class BankDataManager
 
         if (username == null || username.isEmpty())
         {
-            log.warn("Username is null/empty, skipping bank sync");
+            log.debug("Username is null/empty, skipping bank sync");
             return;
         }
 
         if (snapshot == null)
         {
-            log.warn("Bank snapshot is null, skipping bank sync");
+            log.debug("Bank snapshot is null, skipping bank sync");
             return;
         }
 
@@ -112,7 +114,7 @@ public class BankDataManager
             boolean success = apiClient.syncBankData(token, snapshot);
             if (success)
             {
-                log.info("Wealth snapshot synced successfully for {}", username);
+                log.debug("Wealth snapshot synced successfully for {}", username);
             }
             else
             {
@@ -125,35 +127,4 @@ public class BankDataManager
         }
     }
 
-    /**
-     * Convenience wrapper kept for backward-compatible callers that have
-     * already captured containers on the client thread.
-     *
-     * <p><strong>IMPORTANT</strong> – this overload calls
-     * {@link #buildBankSnapshot} internally, which requires the client thread.
-     * Call it only from a handler that runs on the client thread, then pass
-     * the built snapshot to a background executor via
-     * {@link #syncBankData(String, String, JsonObject)}.</p>
-     */
-    public void syncBankData(
-            String token,
-            String username,
-            ItemContainer bankContainer,
-            ItemContainer inventoryContainer,
-            ItemContainer equipmentContainer)
-    {
-        if (bankContainer == null)
-        {
-            log.warn("Bank container is null, skipping bank sync");
-            return;
-        }
-
-        JsonObject snapshot = buildBankSnapshot(username, bankContainer, inventoryContainer, equipmentContainer);
-        syncBankData(token, username, snapshot);
-    }
-
-    /** Backward-compatible overload for callers that only have the bank container. */
-    public void syncBankData(String token, String username, ItemContainer bankContainer)
-    {
-        syncBankData(token, username, bankContainer, null, null);
-    }}
+}

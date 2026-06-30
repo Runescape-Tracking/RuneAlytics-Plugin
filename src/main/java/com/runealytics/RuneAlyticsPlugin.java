@@ -1,6 +1,7 @@
 package com.runealytics;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.inject.Provides;
 import lombok.Getter;
@@ -8,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.*;
+import net.runelite.api.vars.AccountType;
 import java.util.EnumSet;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -43,15 +45,14 @@ import static com.runealytics.RuneAlyticsPanel.*;
         name = "RuneAlytics",
         description = "Advanced loot tracking and analytics",
         tags = {"loot", "tracking", "analytics"},
-        enabledByDefault = true
+        enabledByDefault = false
 )
 public class RuneAlyticsPlugin extends Plugin
 {
     // ═════════════════════════════════════════════════════════════════════════
     //  WIDGET GROUP-IDs
-    //  All canonical values live in {@link RewardSources}.  The two widgets
-    //  that need bespoke handling (Whisperer, Wintertodt) are aliased here for
-    //  readability inside {@link #onWidgetLoaded}.
+    //  Aliases for the widgets that need bespoke handling in onWidgetLoaded.
+    //  Canonical values live in RewardSources.
     // ═════════════════════════════════════════════════════════════════════════
     static final int WIDGET_WHISPERER  = RewardSources.WIDGET_WHISPERER;
     static final int WIDGET_WINTERTODT = RewardSources.WIDGET_WINTERTODT;
@@ -61,7 +62,7 @@ public class RuneAlyticsPlugin extends Plugin
     // ── Timing ────────────────────────────────────────────────────────────────
     /** ms after a kill during which spawning ground items are attributed to it */
     private static final long GROUND_ITEM_WINDOW_MS      = 3_000;
-    /** seconds before we clear lastKilledBoss to avoid stale attributions */
+    /** Seconds before lastKilledBoss is cleared. */
     private static final long BOSS_CLEAR_TIMEOUT_SECONDS = 30;
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -69,54 +70,52 @@ public class RuneAlyticsPlugin extends Plugin
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * How long (ms) after the most recent "Pickpocket" click we continue treating
-     * inventory changes as belonging to that pickpocket action.
+     * Window (ms) after a "Pickpocket" click during which inventory changes are
+     * attributed to that pickpocket action.
      */
     private static final long PICKPOCKET_WINDOW_MS = 1_800;
     /**
-     * How long an open skilling-snapshot window stays "live" for inventory
-     * diffs to be attributed to the skill that opened it.
-     *
-     * <p>Was 8 s, which was wide enough that <em>any</em> equipment swap,
-     * bank withdrawal, or shop transaction within 8 s of a lamp / book / quest
-     * XP reward would be falsely attributed to the rewarded skill (issue #3).</p>
-     *
-     * <p>1.5 s ≈ 2½ game ticks — wide enough to catch the inventory tick that
-     * follows a real skilling action (logs/fish/ores arrive on the same or
-     * next tick as the XP), but narrow enough that the player can't realistically
-     * change gear in time after using a lamp.</p>
+     * Window (ms) an open skilling-snapshot stays live for inventory diffs to be
+     * attributed to the skill that opened it.
      */
     private static final long SKILLING_SESSION_MS  = 1_500;
 
     /**
-     * Tick window after a known "Rub" / "Read" / "Use" lamp/book menu click
-     * during which any XP gain skips the skilling-snapshot path entirely.
-     * Game ticks rather than ms because the click → XP delay is tick-bound.
+     * Tick window after a lamp/book menu click during which XP gains skip the
+     * skilling-snapshot path.
      */
     private static final int  LAMP_XP_SUPPRESS_TICKS = 5;
 
     /** Plugin tick at which the lamp-XP suppression window expires (0 = none). */
     private long lampXpSuppressUntilTick = 0L;
 
+    // AGILITY is excluded: its XP never produces an item drop, so tracking it
+    // would misattribute incidental inventory changes during the session window.
     private static final Set<Skill> SKILLING_TRACKED = java.util.EnumSet.of(
             Skill.WOODCUTTING, Skill.FISHING,  Skill.MINING,    Skill.FARMING,
             Skill.HUNTER,      Skill.HERBLORE, Skill.RUNECRAFT, Skill.FLETCHING,
-            Skill.COOKING,     Skill.SMITHING, Skill.CRAFTING,  Skill.AGILITY
+            Skill.COOKING,     Skill.SMITHING, Skill.CRAFTING
     );
 
-    /**
-     * Menu options that grant XP without producing a skilling drop. When any
-     * of these click on a target whose name contains "lamp", "book", "scroll",
-     * "tome", or "genie", we suppress the skilling snapshot for
-     * {@link #LAMP_XP_SUPPRESS_TICKS} ticks so the subsequent XP gain doesn't
-     * open a window that catches an equipment swap.
-     */
+    /** Menu options that grant XP without producing a skilling drop. */
     private static final Set<String> LAMP_XP_MENU_OPTIONS = java.util.Set.of(
             "rub", "read", "open", "use", "claim", "activate", "tear"
     );
 
+    /** Every menu option onMenuOptionClicked acts on; used as a fast pre-filter. */
+    private static final Set<String> RELEVANT_MENU_OPTIONS = java.util.Set.of(
+            "rub", "read", "open", "use", "claim", "activate", "tear",
+            "loot-jar", "loot", "pickpocket", "pick-pocket"
+    );
+
     private final Map<String, List<ItemStack>> skillingSnapshot = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Long>            skillingExpiry   = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Last-known equipment loadout, refreshed on every ItemContainerChanged.
+     * Used to recognise equip/unequip swaps so they aren't mistaken for loot.
+     */
+    private List<ItemStack> equipmentSnapshot = Collections.emptyList();
 
     // ═════════════════════════════════════════════════════════════════════════
     //  INJECTED FIELDS
@@ -140,23 +139,39 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private MatchmakingMinimapOverlay matchmakingOverlay;
     @Inject private LiveMapMinimapOverlay     liveMapOverlay;
     @Inject private OverlayManager           overlayManager;
+    @Inject private CurrentPlayerIdentityService currentPlayerIdentity;
+    @Inject private LootSyncMergeService     lootSyncMergeService;
+    @Inject private DeathRecoveryGuard       deathRecoveryGuard;
 
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
     private NavigationButton         navButton;
-    private LootTrackerPanel         lootTrackerPanel;
+    // Assigned on the EDT during startUp, read from background executor threads.
+    private volatile LootTrackerPanel lootTrackerPanel;
 
     // ── Live-map heartbeat ─────────────────────────────────────────────────────
-    /** Heartbeat period — how often the live map location is pushed to the site. */
-    private static final long HEARTBEAT_PERIOD_MS        = 60_000;
+    /** Heartbeat period (ms): how often live-map location, gear and inventory are pushed to the site. */
+    private static final long HEARTBEAT_PERIOD_MS        = 20_000;
     /** Delay before the first heartbeat after login so player/RSN state settles. */
     private static final long HEARTBEAT_INITIAL_DELAY_MS = 5_000;
-    /**
-     * Repeating heartbeat task, alive only while the player is logged in. Started
-     * on the {@code LOGGED_IN} game-state transition and cancelled on
-     * {@code LOGIN_SCREEN} so no heartbeats fire while idle at the login screen.
-     */
+    /** Delay before the automatic post-login loot reconcile, so login isn't slowed. */
+    private static final long LOGIN_AUTO_SYNC_DELAY_MS   = 6_000;
+    /** Repeating heartbeat task; non-null only while the player is logged in. */
     private ScheduledFuture<?> heartbeatTask;
+
+    // ── Bank sync debounce ─────────────────────────────────────────────────────
+    /**
+     * Quiet-period (ms) after the last bank container change before a wealth
+     * snapshot is built and uploaded.
+     */
+    private static final long BANK_SYNC_DEBOUNCE_MS = 1_500;
+    /** True while a debounced bank-sync task is already queued. */
+    private final AtomicBoolean bankSyncScheduled = new AtomicBoolean(false);
+
+    // ── Feature-flag change tracking ────────────────────────────────────────────
+    /** Last loot-sync / match-enabled flags pushed to the UI. Null = not yet fetched. */
+    private Boolean lastLootSyncFlag    = null;
+    private Boolean lastMatchEnabledFlag = null;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT TRACKING STATE
@@ -165,11 +180,13 @@ public class RuneAlyticsPlugin extends Plugin
     private List<ItemStack> inventorySnapshot        = null;
     private boolean         waitingForTemporossLoot  = false;
     private boolean         waitingForWintertodtLoot = false;
+    /** Expiry time (ms) for the Tempoross/Wintertodt crate-loot wait window. */
+    private long            crateLootWaitExpiry      = 0L;
+    private static final long CRATE_LOOT_WINDOW_MS   = 60_000L;
 
     /**
-     * True for {@value #WHISPERER_GROUND_ITEM_WINDOW_MS} ms after the Whisperer
-     * KC chat message fires. During this window every {@code ItemSpawned} event
-     * near the player is collected and attributed to the Whisperer kill.
+     * True after the Whisperer KC chat message fires. While open, every
+     * ItemSpawned near the player is collected and attributed to the kill.
      */
     private boolean         whispererGroundItemWindow = false;
     /** Timestamp when {@link #whispererGroundItemWindow} was opened. */
@@ -190,7 +207,7 @@ public class RuneAlyticsPlugin extends Plugin
     // ── Ring of Wealth coin auto-pickup detection ─────────────────────────────
     /** Item ID for coins — used to identify RoW auto-collected drops. */
     private static final int ITEM_ID_COINS = 995;
-    /** How long (ms) we keep the RoW inventory snapshot after an NPC kill. */
+    /** How long (ms) the RoW inventory snapshot is kept after an NPC kill. */
     private static final long ROW_WINDOW_MS = 4_000;
     /** Inventory snapshot taken at NPC kill to diff against after RoW message. */
     private List<ItemStack> rowInventorySnapshot = null;
@@ -199,8 +216,32 @@ public class RuneAlyticsPlugin extends Plugin
     /** Absolute expiry time (ms) for the RoW snapshot window. */
     private long            rowSnapshotExpiry    = 0L;
 
-    private final List<ItemStack>  groundItemBuffer         = new ArrayList<>();
-    private final AtomicBoolean    groundItemFlushScheduled = new AtomicBoolean(false);
+    /**
+     * One open "ground loot attribution window" for a single NPC kill. Kept as
+     * a list (rather than a single shared field) so that when an AOE attack
+     * kills several NPCs — same type or not — within {@link #GROUND_ITEM_WINDOW_MS}
+     * of each other, each kill gets its own buffer and location, and ground
+     * items spawning nearby are matched to whichever kill they're actually
+     * closest to instead of all being pooled onto the single most recent kill.
+     */
+    private static final class GroundLootSession
+    {
+        final NPC            npc;
+        final WorldPoint     loc;
+        final long           killTimeMs;
+        final List<ItemStack> buffer         = new ArrayList<>();
+        boolean              flushScheduled  = false;
+
+        GroundLootSession(NPC npc, WorldPoint loc, long killTimeMs)
+        {
+            this.npc = npc;
+            this.loc = loc;
+            this.killTimeMs = killTimeMs;
+        }
+    }
+
+    /** All mutations happen on the client thread (event handlers / invokeLater), so a plain list is safe. */
+    private final List<GroundLootSession> groundLootSessions = new ArrayList<>();
 
     private String lastChestSource = null;
 
@@ -245,11 +286,9 @@ public class RuneAlyticsPlugin extends Plugin
     // ─────────────────────────────────────────────────────────────────────────
     //  IMPLING JAR STATE
     //
-    //  Imp catches give the player an "* impling jar" inventory item which
-    //  itself doesn't have the loot — the loot only materialises when the
-    //  player picks the "Loot-jar" option on the jar.  That action gives no
-    //  XP, so the generic Hunter skilling diff misses it entirely (which is
-    //  the user-reported "if you catch an imp - will that work?" bug).
+    //  Imp catches give an "* impling jar" inventory item; the loot only
+    //  materialises when the "Loot-jar" option is used on the jar. That action
+    //  gives no XP, so the generic Hunter skilling diff misses it.
     // ─────────────────────────────────────────────────────────────────────────
 
     /** ms after a Loot-jar click during which inventory diffs are credited to the jar. */
@@ -263,27 +302,22 @@ public class RuneAlyticsPlugin extends Plugin
     // ─────────────────────────────────────────────────────────────────────────
     //  ZERO-LOOT KILL TRACKING
     //
-    //  RuneLite's NpcLootReceived fires only when the kill produced loot, so
-    //  every dry kill on a low-level monster (and many bosses on RNG zero
-    //  drops) was being lost.  We close that gap by:
+    //  NpcLootReceived fires only when a kill produced loot, so dry kills are
+    //  captured here:
     //
-    //    1. Tracking every NPC the local player damaged (HitsplatApplied
-    //       with hitsplat.isMine())
-    //    2. On ActorDeath for an NPC we damaged, queue a pending zero-loot
-    //       kill that flushes ZERO_LOOT_FLUSH_TICKS game ticks later
-    //    3. If NpcLootReceived arrives for that NPC in the meantime the
-    //       pending entry is cancelled (the normal loot path handles it)
+    //    1. Track every NPC the local player damaged (HitsplatApplied with
+    //       hitsplat.isMine())
+    //    2. On ActorDeath for a damaged NPC, queue a pending zero-loot kill
+    //       that flushes ZERO_LOOT_FLUSH_TICKS game ticks later
+    //    3. If NpcLootReceived arrives first, the pending entry is cancelled
     //
     //  Chest-only bosses (raids, Nightmare, Yama, Royal Titans, etc.) are
-    //  excluded inside LootTrackerManager#processZeroLootKill so the chest
-    //  read path stays the single source of truth for them.
+    //  excluded inside LootTrackerManager#processZeroLootKill.
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Game ticks to wait after {@link ActorDeath} before flushing a pending
-     * zero-loot kill.  Long enough for {@code NpcLootReceived} (which usually
-     * arrives on the same tick or the very next one) to cancel the entry, but
-     * short enough that the kill counter feels live.  3 ticks ≈ 1.8 s.
+     * Game ticks to wait after ActorDeath before flushing a pending zero-loot
+     * kill, allowing NpcLootReceived time to cancel it. 3 ticks ≈ 1.8 s.
      */
     private static final int ZERO_LOOT_FLUSH_TICKS = 3;
 
@@ -299,6 +333,19 @@ public class RuneAlyticsPlugin extends Plugin
 
     /** Plugin-local game tick counter; incremented every {@link #onGameTick}. */
     private long gameTickCount = 0;
+
+    /**
+     * NPC index → wall-clock time a zero-loot kill was flushed for it. Under
+     * load (e.g. an AOE kill that drops several NPCs at once) NpcLootReceived
+     * can lag past {@link #ZERO_LOOT_FLUSH_TICKS}, so the zero-loot kill gets
+     * recorded first and the real loot event arrives afterwards — without this,
+     * that late event would record a SECOND kill instead of attaching its drops
+     * to the kill that's already counted, doubling the kill count.
+     */
+    private final Map<Integer, Long> recentZeroLootFlushes = new HashMap<>();
+
+    /** How long a {@link #recentZeroLootFlushes} entry stays eligible for upgrade. */
+    private static final long ZERO_LOOT_UPGRADE_WINDOW_MS = 8_000;
 
     private static final class PendingDeath
     {
@@ -319,17 +366,10 @@ public class RuneAlyticsPlugin extends Plugin
     @Override
     protected void startUp() throws Exception
     {
-        log.info("RuneAlytics starting");
+        log.debug("RuneAlytics starting");
 
-        // Build the navigation button SYNCHRONOUSLY so it is registered with the
-        // toolbar before startUp() returns.  Previously this happened inside an
-        // executor callback, which meant:
-        //   - A rapid disable→enable cycle could leave a stale navButton orphaned
-        //     in the toolbar (issue #1 — UI disappearing).
-        //   - If shutDown() ran before the executor task fired, the button would
-        //     be added AFTER shutDown nulled it, never to be removed.
-        // The button now exists by the time shutDown() can possibly be called.
-        mainPanel = injector.getInstance(RuneAlyticsPanel.class);
+        // Build the root panel on the EDT, then register the nav button.
+        buildOnEdt(() -> mainPanel = injector.getInstance(RuneAlyticsPanel.class));
 
         navButton = NavigationButton.builder()
                 .tooltip("RuneAlytics")
@@ -340,66 +380,81 @@ public class RuneAlyticsPlugin extends Plugin
         clientToolbar.addNavigation(navButton);
         overlayManager.add(matchmakingOverlay);
         overlayManager.add(liveMapOverlay);
-        log.info("RuneAlytics nav button registered");
+        log.debug("RuneAlytics nav button registered");
 
-        // Heavy panel construction stays async — it can take a few ms and we
-        // don't want it on the startup-critical path.  Tabs are appended via
-        // SwingUtilities.invokeLater so they show up the moment they're ready.
-        executorService.execute(() ->
+        // Construct the heavy sub-panels on the EDT.
+        SwingUtilities.invokeLater(() ->
         {
             try
             {
                 LootTrackerPanel        lootPanel        = injector.getInstance(LootTrackerPanel.class);
                 MatchmakingPanel        matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
                 RuneAlyticsSettingsPanel settingsPanel   = injector.getInstance(RuneAlyticsSettingsPanel.class);
+                // Create the verification panel singleton on the EDT.
+                injector.getInstance(RuneAlyticsVerificationPanel.class);
 
                 lootTrackerPanel = lootPanel;
-                // Sync starts disabled until feature flags confirm it is active
-                lootPanel.setSyncEnabled(false);
+                // Give the panel a reference to this plugin for the new buttons.
+                lootPanel.setPlugin(this);
+                // Sync starts in a neutral "checking…" state until feature flags
+                // confirm whether it is active — never assert it's turned off
+                // before we actually know (it defaults ON for verified players).
+                lootPanel.setSyncChecking();
 
-                SwingUtilities.invokeLater(() ->
-                {
-                    try
-                    {
-                        // Loot Tracker has no feature gate — local tracking is always available.
-                        // Sync availability is controlled separately via setSyncEnabled().
-                        mainPanel.addTab("Loot Tracker", null,             lootPanel);
-                        mainPanel.addTab("Matches",      FEATURE_MATCHES,  matchmakingPanel);
-                        mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
-                        log.info("RuneAlytics tabs populated");
-                    }
-                    catch (Exception ex)
-                    {
-                        log.error("Failed to populate RuneAlytics tabs", ex);
-                    }
-                });
+                // Loot Tracker has no feature gate — local tracking is always available.
+                // Sync availability is controlled separately via setSyncEnabled().
+                mainPanel.addTab("Loot Tracker", null,             lootPanel);
+                mainPanel.addTab("Matches",      FEATURE_MATCHES,  matchmakingPanel);
+                mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
+                log.debug("RuneAlytics tabs populated");
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                log.error("Failed to instantiate RuneAlytics panels", e);
+                log.error("Failed to populate RuneAlytics tabs", ex);
             }
         });
+    }
+
+    /**
+     * Runs {@code r} on the Swing EDT and waits for it to finish. Runs inline if
+     * already on the EDT, otherwise blocks via {@link SwingUtilities#invokeAndWait}.
+     * Used so panel (Swing) construction never happens off the EDT.
+     */
+    private static void buildOnEdt(Runnable r) throws Exception
+    {
+        if (SwingUtilities.isEventDispatchThread())
+        {
+            r.run();
+        }
+        else
+        {
+            SwingUtilities.invokeAndWait(r);
+        }
     }
 
     @Override
     protected void shutDown()
     {
-        log.info("RuneAlytics shutting down");
+        log.debug("RuneAlytics shutting down");
 
         // Stop the live-map heartbeat so no pings fire after the plugin is gone.
         stopHeartbeat();
 
-        // Flush any XP that accumulated in the current 30-second window before
-        // the executor shuts down, so the player's last session gains are not lost.
+        // Cancel the pending whisperer loot flush.
+        if (whispererFlushTask != null)
+        {
+            whispererFlushTask.cancel(false);
+            whispererFlushTask = null;
+        }
+
+        // Flush accumulated XP before the executor shuts down.
         try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.warn("XP flush on shutdown failed: {}", e.getMessage()); }
         try { lootManager.shutdown();             } catch (Exception e) { log.warn("Loot manager shutdown failed: {}", e.getMessage()); }
         try { matchmakingManager.reset();         } catch (Exception e) { log.warn("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
         try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.warn("Matchmaking overlay removal failed: {}", e.getMessage()); }
         try { overlayManager.remove(liveMapOverlay);     } catch (Exception e) { log.warn("Live-map overlay removal failed: {}", e.getMessage()); }
 
-        // Always attempt to remove the nav button — even if some other code
-        // path nulled the reference, leaving an orphan would mean the next
-        // startUp adds a duplicate (and the user sees no button).
+        // Remove the nav button.
         if (navButton != null)
         {
             try { clientToolbar.removeNavigation(navButton); }
@@ -418,11 +473,17 @@ public class RuneAlyticsPlugin extends Plugin
         inventorySnapshot         = null;
         waitingForTemporossLoot   = false;
         waitingForWintertodtLoot  = false;
+        crateLootWaitExpiry       = 0L;
         whispererGroundItemWindow = false;
         whispererKillTime         = null;
         whispererGroundItems.clear();
-        groundItemBuffer.clear();
-        groundItemFlushScheduled.set(false);
+        // Cancel the pending Whisperer flush.
+        if (whispererFlushTask != null)
+        {
+            whispererFlushTask.cancel(false);
+            whispererFlushTask = null;
+        }
+        groundLootSessions.clear();
 
         // Clear Ring of Wealth snapshot
         rowInventorySnapshot = null;
@@ -442,6 +503,7 @@ public class RuneAlyticsPlugin extends Plugin
         // Clear zero-loot kill tracking (damage history is per-world)
         damagedNpcs.clear();
         pendingDeaths.clear();
+        recentZeroLootFlushes.clear();
     }
 
     @Provides
@@ -462,19 +524,26 @@ public class RuneAlyticsPlugin extends Plugin
         NPC npc = event.getNpc();
         if (npc == null) return;
 
-        // Capture game mode at kill time so the record reflects the world in use now
+        // Capture game mode at kill time so the record reflects the current world.
         updateCurrentGameMode();
 
-        // Loot arrived → cancel any pending zero-loot kill for this NPC so
-        // we don't double-count.
+        // Cancel any pending zero-loot kill for this NPC.
         pendingDeaths.remove(npc.getIndex());
         damagedNpcs.remove(npc.getIndex());
 
         lastKilledBoss = npc;
         lastKillTime   = Instant.now();
 
-        // Snapshot inventory immediately so we can diff it if Ring of Wealth
-        // auto-collects coins (those never fire ItemSpawned).
+        // Open a dedicated ground-loot attribution window for THIS kill, so an
+        // AOE kill of several NPCs at once doesn't pool everyone's drops onto
+        // whichever NPC happens to die last.
+        WorldPoint killLoc = npc.getWorldLocation();
+        if (killLoc != null)
+        {
+            groundLootSessions.add(new GroundLootSession(npc, killLoc, Instant.now().toEpochMilli()));
+        }
+
+        // Snapshot inventory to diff against if Ring of Wealth auto-collects coins.
         clientThread.invokeLater(() -> {
             rowInventorySnapshot = getCurrentInventory();
             rowSnapshotBoss      = npc;
@@ -488,15 +557,26 @@ public class RuneAlyticsPlugin extends Plugin
         for (net.runelite.client.game.ItemStack i : rlItems)
             items.add(new ItemStack(i.getId(), i.getQuantity()));
 
+        // If a zero-loot kill was already flushed for this NPC index because
+        // this loot event lagged past ZERO_LOOT_FLUSH_TICKS (e.g. server load
+        // during an AOE kill), attach these drops to that already-counted kill
+        // instead of recording a brand new one — otherwise the kill count
+        // doubles for every kill that races the zero-loot flush.
+        Long flushedAt = recentZeroLootFlushes.remove(npc.getIndex());
+        if (flushedAt != null
+                && System.currentTimeMillis() - flushedAt < ZERO_LOOT_UPGRADE_WINDOW_MS
+                && lootManager.upgradeRecentZeroLootKill(npc, items))
+        {
+            return;
+        }
+
         lootManager.processNpcLoot(npc, items);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT PATH 1b – ZERO-LOOT NPC KILLS
     //
-    //  See the comment block on the ZERO_LOOT_FLUSH_TICKS constant for the
-    //  full design.  These three handlers feed the pendingDeaths map which
-    //  onGameTick drains.
+    //  These three handlers feed the pendingDeaths map, which onGameTick drains.
     // ═════════════════════════════════════════════════════════════════════════
 
     @Subscribe
@@ -506,9 +586,7 @@ public class RuneAlyticsPlugin extends Plugin
         Hitsplat hs   = event.getHitsplat();
 
         // ── Matchmaking: a hit between the two participants starts the fight ──
-        // Runs independently of loot tracking — combat detection must work
-        // even when loot tracking is disabled.  The manager scopes the splat
-        // strictly to the opponent before reporting Ready → Fighting.
+        // Runs independently of loot tracking.
         if (target instanceof Player)
         {
             matchmakingManager.onCombatHitsplat(target, hs);
@@ -528,6 +606,9 @@ public class RuneAlyticsPlugin extends Plugin
     {
         Actor actor = event.getActor();
 
+        // ── Death recovery guard: detect local player death ───────────────────
+        deathRecoveryGuard.onActorDeath(event);
+
         // ── Matchmaking: report player deaths to server ───────────────────────
         if (actor instanceof Player)
         {
@@ -541,10 +622,9 @@ public class RuneAlyticsPlugin extends Plugin
         NPC npc = (NPC) actor;
         if (!damagedNpcs.containsKey(npc.getIndex())) return;
 
-        // ActorDeath fires at the *start* of the death animation, but
-        // NpcLootReceived can lag by 1–2 ticks (loot table rolls server-side,
-        // ground items take a tick to spawn).  Wait ZERO_LOOT_FLUSH_TICKS
-        // before deciding this kill produced nothing.
+        // ActorDeath fires at the start of the death animation, but
+        // NpcLootReceived can lag 1–2 ticks. Wait ZERO_LOOT_FLUSH_TICKS before
+        // treating the kill as zero-loot.
         pendingDeaths.put(
                 npc.getIndex(),
                 new PendingDeath(npc, gameTickCount + ZERO_LOOT_FLUSH_TICKS));
@@ -556,10 +636,8 @@ public class RuneAlyticsPlugin extends Plugin
         NPC npc = event.getNpc();
         if (npc == null) return;
 
-        // Drop the damage-tracking entry once the NPC is gone.  We deliberately
-        // leave any pendingDeaths entry in place: a despawn often happens after
-        // ActorDeath but before the flush window closes, and we still want to
-        // record the zero-loot kill.
+        // Drop the damage-tracking entry once the NPC is gone. Any pendingDeaths
+        // entry is left in place so the zero-loot kill is still recorded.
         damagedNpcs.remove(npc.getIndex());
     }
 
@@ -597,15 +675,18 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onWidgetLoaded(WidgetLoaded event)
     {
+        // ── Death recovery guard: detect gravestone / Death's Office UI ───────
+        deathRecoveryGuard.onWidgetLoaded(event);
+
         if (!config.enableLootTracking()) return;
 
         int gid = event.getGroupId();
-        log.info("WidgetLoaded: groupId={}", gid);
+        log.debug("WidgetLoaded: groupId={}", gid);
 
         // ── Special cases that can't use the generic registry ────────────────
         if (gid == WIDGET_WHISPERER)
         {
-            log.info("Whisperer widget 834 detected — waiting for drops (KC={})", whispererParsedKC);
+            log.debug("Whisperer widget 834 detected — waiting for drops (KC={})", whispererParsedKC);
             whispererGroundItemWindow = true;
             if (whispererFlushTask != null) whispererFlushTask.cancel(false);
             whispererFlushTask = executorService.schedule(
@@ -659,7 +740,7 @@ public class RuneAlyticsPlugin extends Plugin
      *
      * <p>Serves two purposes:</p>
      * <ol>
-     *   <li><b>Tempoross / Wintertodt</b> – existing fallback diff logic.</li>
+     *   <li><b>Tempoross / Wintertodt</b> – fallback diff logic.</li>
      *   <li><b>Pickpocket / Thieving</b> – when {@link #pendingPickpocketNpc} is set
      *       and the pickpocket window has not expired, diffs the inventory against
      *       {@link #pickpocketInventorySnapshot} to find the items gained from the
@@ -671,36 +752,23 @@ public class RuneAlyticsPlugin extends Plugin
     public void onItemContainerChanged(ItemContainerChanged event)
     {
         // ── Matchmaking: refresh gear snapshot and report on change ──────────
-        // Runs on the client thread, so ItemContainer reads inside the manager
-        // are safe.  The manager only acts if a match is active.
+        // Runs on the client thread, so ItemContainer reads are safe.
         matchmakingManager.onItemContainerChanged(event);
 
-        // ── Bank sync ─────────────────────────────────────────────────────────
+        // ── Bank sync (debounced) ───────────────────────────────────────────
         if (event.getContainerId() == InventoryID.BANK.getId()
                 && config.enableBankSync()
                 && state.isLoggedIn()
                 && state.isVerified())
         {
-            final String token          = state.getVerificationCode();
-            final String username       = state.getVerifiedUsername();
-            // Build the complete JSON snapshot HERE on the client thread because
-            // fromContainerWithValues calls ItemManager.getItemComposition which
-            // requires client.getItemDefinition — a client-thread-only API.
-            // Only the HTTP call is handed off to the background executor.
-            final JsonObject bankSnapshot = bankDataManager.buildBankSnapshot(
-                    username,
-                    event.getItemContainer(),
-                    client.getItemContainer(InventoryID.INVENTORY),
-                    client.getItemContainer(InventoryID.EQUIPMENT));
-            executorService.execute(() -> bankDataManager.syncBankData(token, username, bankSnapshot));
+            scheduleBankSync();
             return;
         }
 
         if (!config.enableLootTracking()) return;
 
         // ── Wilderness Loot Chest & Lunar (Moons of Peril) Chest ─────────────
-        // These chests don't fire WidgetLoaded with a usable group for us, but
-        // the inventory container itself can be read directly when it fills.
+        // These chests fire no usable WidgetLoaded; read the container directly.
         int containerId = event.getContainerId();
         if (containerId == RewardSources.CONTAINER_WILDY_LOOT_CHEST)
         {
@@ -717,6 +785,22 @@ public class RuneAlyticsPlugin extends Plugin
 
         clientThread.invokeLater(() ->
         {
+            // ── Death recovery guard: suppressed inventory changes are ignored ─
+            // NpcLootReceived/PlayerLootReceived paths don't need this guard
+            // because they are confirmed kill attributions from RuneLite.
+            if (deathRecoveryGuard.shouldSuppressLootEvent())
+            {
+                log.debug("[death-guard] Inventory diff suppressed during recovery mode");
+                return;
+            }
+
+            // ── Equip/unequip detection (must run first) ──────────────────────
+            // Find items that just left equipment; their ids are subtracted from
+            // every inventory gain below so an unequip isn't mistaken for a drop.
+            List<ItemStack> currentEquipment = getCurrentEquipment();
+            List<ItemStack> justUnequipped   = diffInventory(currentEquipment, equipmentSnapshot);
+            equipmentSnapshot = currentEquipment;
+
             // ── Impling jar loot (no XP, so the skilling diff misses it) ──────
             if (pendingImpJarName != null && impJarInventorySnapshot != null)
             {
@@ -728,7 +812,8 @@ public class RuneAlyticsPlugin extends Plugin
                 else
                 {
                     List<ItemStack> currentInv = getCurrentInventory();
-                    List<ItemStack> gained     = diffInventory(impJarInventorySnapshot, currentInv);
+                    List<ItemStack> gained     = excludeEquipmentMovement(
+                            diffInventory(impJarInventorySnapshot, currentInv), justUnequipped);
                     if (!gained.isEmpty())
                     {
                         String jarName = pendingImpJarName;
@@ -743,7 +828,8 @@ public class RuneAlyticsPlugin extends Plugin
             if ((waitingForTemporossLoot || waitingForWintertodtLoot) && inventorySnapshot != null)
             {
                 List<ItemStack> current = getCurrentInventory();
-                List<ItemStack> gained  = diffInventory(inventorySnapshot, current);
+                List<ItemStack> gained  = excludeEquipmentMovement(
+                        diffInventory(inventorySnapshot, current), justUnequipped);
 
                 if (!gained.isEmpty())
                 {
@@ -778,7 +864,7 @@ public class RuneAlyticsPlugin extends Plugin
                     }
                     List<ItemStack> snap = skillingSnapshot.get(skill);
                     if (snap == null) continue;
-                    List<ItemStack> items = diffInventory(snap, inv);
+                    List<ItemStack> items = excludeEquipmentMovement(diffInventory(snap, inv), justUnequipped);
                     if (!items.isEmpty())
                     {
                         lootManager.processSkillLoot(skill, new ArrayList<>(items));
@@ -799,7 +885,8 @@ public class RuneAlyticsPlugin extends Plugin
             }
 
             List<ItemStack> current = getCurrentInventory();
-            List<ItemStack> gained  = diffInventory(pickpocketInventorySnapshot, current);
+            List<ItemStack> gained  = excludeEquipmentMovement(
+                    diffInventory(pickpocketInventorySnapshot, current), justUnequipped);
 
             if (!gained.isEmpty())
             {
@@ -836,6 +923,10 @@ public class RuneAlyticsPlugin extends Plugin
         String option = event.getMenuOption();
         if (option == null) return;
 
+        // Fast pre-filter: ignore irrelevant clicks before any string work.
+        String lowerOption = option.toLowerCase();
+        if (!RELEVANT_MENU_OPTIONS.contains(lowerOption)) return;
+
         String rawTarget = event.getMenuTarget();
         if (rawTarget == null || rawTarget.isEmpty()) return;
 
@@ -843,11 +934,10 @@ public class RuneAlyticsPlugin extends Plugin
         if (targetName.isEmpty()) return;
 
         // ── Lamp / book / genie / scroll XP suppression ──────────────────────
-        // These give XP without an inventory drop, but the XP gain still opens
-        // a skilling snapshot window. Pre-emptively close that window so the
-        // next inventory change (e.g. unequip) isn't falsely attributed.
+        // These grant XP without a drop; suppress the skilling snapshot window
+        // so the next inventory change isn't attributed to the skill.
         String lowerTarget = targetName.toLowerCase();
-        if (LAMP_XP_MENU_OPTIONS.contains(option.toLowerCase())
+        if (LAMP_XP_MENU_OPTIONS.contains(lowerOption)
                 && (lowerTarget.contains("lamp")
                 || lowerTarget.contains("book")
                 || lowerTarget.contains("tome")
@@ -928,33 +1018,49 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         // ── Normal ground item logic ──────────────────────────────────────────
-        if (lastKilledBoss == null || lastKillTime == null) return;
+        if (itemLoc == null || groundLootSessions.isEmpty()) return;
 
-        long elapsedMs = Instant.now().toEpochMilli() - lastKillTime.toEpochMilli();
-        if (elapsedMs > GROUND_ITEM_WINDOW_MS) return;
+        long now = Instant.now().toEpochMilli();
+        groundLootSessions.removeIf(s -> now - s.killTimeMs > GROUND_ITEM_WINDOW_MS);
+        if (groundLootSessions.isEmpty()) return;
 
-        WorldPoint bossLoc = lastKilledBoss.getWorldLocation();
-        if (itemLoc == null || bossLoc == null || itemLoc.distanceTo(bossLoc) > 5) return;
-
-        groundItemBuffer.add(new ItemStack(tile.getId(), tile.getQuantity()));
-
-        if (groundItemFlushScheduled.compareAndSet(false, true))
+        // Multiple kills (same or different NPC types) can have open, overlapping
+        // attribution windows at once — e.g. an AOE attack that kills several
+        // NPCs together. Attribute this item to whichever recent kill happened
+        // closest to it, rather than to "the last kill" unconditionally.
+        GroundLootSession best = null;
+        int bestDist = Integer.MAX_VALUE;
+        for (GroundLootSession s : groundLootSessions)
         {
-            final NPC boss = lastKilledBoss;
+            int dist = itemLoc.distanceTo(s.loc);
+            if (dist <= 5 && dist < bestDist)
+            {
+                best = s;
+                bestDist = dist;
+            }
+        }
+        if (best == null) return;
+
+        final GroundLootSession session = best;
+        session.buffer.add(new ItemStack(tile.getId(), tile.getQuantity()));
+
+        if (!session.flushScheduled)
+        {
+            session.flushScheduled = true;
 
             executorService.schedule(() ->
                             clientThread.invokeLater(() ->
                             {
-                                if (!groundItemBuffer.isEmpty())
+                                if (!session.buffer.isEmpty())
                                 {
-                                    List<ItemStack> batch = new ArrayList<>(groundItemBuffer);
-                                    groundItemBuffer.clear();
-                                    groundItemFlushScheduled.set(false);
-                                    lootManager.processGroundItemBatch(boss, batch);
+                                    List<ItemStack> batch = new ArrayList<>(session.buffer);
+                                    session.buffer.clear();
+                                    session.flushScheduled = false;
+                                    lootManager.processGroundItemBatch(session.npc, batch);
                                 }
                                 else
                                 {
-                                    groundItemFlushScheduled.set(false);
+                                    session.flushScheduled = false;
                                 }
                             }),
                     500, TimeUnit.MILLISECONDS);
@@ -968,6 +1074,9 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onChatMessage(ChatMessage event)
     {
+        // ── Death recovery guard: detect death messages ───────────────────────
+        deathRecoveryGuard.onChatMessage(event);
+
         if (!config.enableLootTracking()) return;
 
         ChatMessageType type = event.getType();
@@ -982,7 +1091,8 @@ public class RuneAlyticsPlugin extends Plugin
             clientThread.invokeLater(() -> {
                 inventorySnapshot       = getCurrentInventory();
                 waitingForTemporossLoot = true;
-                log.info("Tempoross: inventory snapshot taken ({} items)", inventorySnapshot.size());
+                crateLootWaitExpiry     = System.currentTimeMillis() + CRATE_LOOT_WINDOW_MS;
+                log.debug("Tempoross: inventory snapshot taken ({} items)", inventorySnapshot.size());
             });
             lastChestSource = "Tempoross";
             return;
@@ -994,6 +1104,7 @@ public class RuneAlyticsPlugin extends Plugin
             clientThread.invokeLater(() -> {
                 inventorySnapshot        = getCurrentInventory();
                 waitingForWintertodtLoot = true;
+                crateLootWaitExpiry      = System.currentTimeMillis() + CRATE_LOOT_WINDOW_MS;
             });
             lastChestSource = "Wintertodt";
             return;
@@ -1014,7 +1125,7 @@ public class RuneAlyticsPlugin extends Plugin
             whispererKillTime         = Instant.now();
             whispererGroundItems.clear();
 
-            log.info("The Whisperer: KC detected (game KC={}) – ground-item collection window opened",
+            log.debug("The Whisperer: KC detected (game KC={}) – ground-item collection window opened",
                     whispererParsedKC);
             return;
         }
@@ -1053,7 +1164,7 @@ public class RuneAlyticsPlugin extends Plugin
                         }
                         String bossName = lootManager.normalizeBossName(boss.getName());
                         lootManager.appendPetDrop(bossName, petItem);
-                        log.info("[Pet] drop detected for '{}' (wentToBank={})", bossName, wentToBank);
+                        log.debug("[Pet] drop detected for '{}' (wentToBank={})", bossName, wentToBank);
                     });
                 }
             }
@@ -1064,10 +1175,9 @@ public class RuneAlyticsPlugin extends Plugin
         // Game messages (imbued RoW):
         //   "Your ring of wealth has automatically picked up the coins."
         //   "Your ring of wealth has automatically alched the <item>."
-        // Auto-picked items bypass ItemSpawned, so we diff inventory vs the
-        // snapshot taken at the NPC kill and append the gain to the last
-        // kill record. We now capture ALL gained items (issue #7 — previously
-        // only coins were captured, so RoW-alched items were silently lost).
+        // Auto-picked items bypass ItemSpawned; diff inventory against the
+        // snapshot taken at the NPC kill and append all gained items to the
+        // last kill record.
         if (lower.contains("ring of wealth") &&
                 (lower.contains("automatically picked up") || lower.contains("automatically alched")))
         {
@@ -1086,7 +1196,7 @@ public class RuneAlyticsPlugin extends Plugin
                     {
                         String bossName = lootManager.normalizeBossName(boss.getName());
                         lootManager.appendDropsToLastKill(bossName, gained);
-                        log.info("Ring of Wealth: {} item type(s) appended to '{}'",
+                        log.debug("Ring of Wealth: {} item type(s) appended to '{}'",
                                 gained.size(), bossName);
                     }
                 });
@@ -1103,7 +1213,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (detected != null && lastChestSource == null)
         {
             lastChestSource = detected;
-            log.info("Chat: chest source set to '{}'", detected);
+            log.debug("Chat: chest source set to '{}'", detected);
         }
     }
 
@@ -1116,9 +1226,11 @@ public class RuneAlyticsPlugin extends Plugin
     {
         gameTickCount++;
 
+        // ── Death recovery guard: update region tracking ──────────────────────
+        deathRecoveryGuard.onGameTick();
+
         // ── Matchmaking polling / automation ─────────────────────────────────
-        // Runs on the client thread, so inventory/gear reads inside the manager
-        // are safe (no AssertionError from ItemContainer access off-thread).
+        // Runs on the client thread, so inventory/gear reads are safe.
         matchmakingManager.onGameTick();
 
         // ── Flush zero-loot kills ──────────────────────────────────────────────
@@ -1131,9 +1243,16 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 if (now < e.getValue().flushAtTick) return false;
                 lootManager.processZeroLootKill(e.getValue().npc);
+                recentZeroLootFlushes.put(e.getKey(), System.currentTimeMillis());
                 damagedNpcs.remove(e.getKey());
                 return true;
             });
+        }
+
+        if (!recentZeroLootFlushes.isEmpty())
+        {
+            long nowMs = System.currentTimeMillis();
+            recentZeroLootFlushes.values().removeIf(t -> nowMs - t > ZERO_LOOT_UPGRADE_WINDOW_MS);
         }
 
         // ── Expire stale boss ground-item attribution ──────────────────────────
@@ -1157,6 +1276,18 @@ public class RuneAlyticsPlugin extends Plugin
                 whispererGroundItems.clear();
                 whispererKillTime = null;
             }
+        }
+
+        // ── Expire stale Tempoross/Wintertodt crate-loot wait windows ─────────
+        if ((waitingForTemporossLoot || waitingForWintertodtLoot)
+                && System.currentTimeMillis() > crateLootWaitExpiry)
+        {
+            log.debug("Crate-loot wait window expired (Tempoross={}, Wintertodt={})",
+                    waitingForTemporossLoot, waitingForWintertodtLoot);
+            waitingForTemporossLoot  = false;
+            waitingForWintertodtLoot = false;
+            inventorySnapshot        = null;
+            crateLootWaitExpiry      = 0L;
         }
 
         // ── Expire pickpocket attribution window ──────────────────────────────
@@ -1187,11 +1318,6 @@ public class RuneAlyticsPlugin extends Plugin
             }
             return false;
         });
-
-        // NOTE: The per-tick XP flush that was previously here has been removed.
-        // XP is now batched by XpTrackerManager and sent once every 30 seconds.
-        // Sending on every game tick (≈600 ms) was causing ~100 API calls/minute,
-        // which silently prevented XP from appearing on the website.
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1202,16 +1328,37 @@ public class RuneAlyticsPlugin extends Plugin
     public void onGameStateChanged(GameStateChanged event)
     {
         GameState gs = event.getGameState();
-        log.info("GameState: {}", gs);
+        log.debug("GameState: {}", gs);
+
+        // ── Death recovery guard: reset on logout/hop ─────────────────────────
+        deathRecoveryGuard.onGameStateChanged(event);
 
         if (gs == GameState.LOGIN_SCREEN)
         {
+            // Flush this account's loot to the server BEFORE marking logged-out,
+            // so the sync slot can still be claimed and the live-sync path can't
+            // double-upload. Upload-only; runs async so logout isn't delayed.
+            performLogoutSyncFlush();
+
+            // Clear the in-memory + on-screen loot so the panel resets to empty
+            // and a different account logging in next can't inherit this
+            // account's loot (which would then sync under the wrong account).
+            lootManager.resetForLogout();
+
             state.setLoggedIn(false);
-            // Stop the live-map heartbeat: while idle at the login screen there is
-            // no player to locate, so we must not keep pinging the server.
+            // Stop the live-map heartbeat while at the login screen.
             stopHeartbeat();
+
+            // Reset per-account tracking state so nothing leaks across an account switch.
+            clearTransientLootState();
+            previousXp.clear();
+            lastLootSyncFlag     = null;
+            lastMatchEnabledFlag = null;
+
             matchmakingManager.reset(); // clear any active match on logout
-            if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(false);
+            // Back to the neutral "unknown" state — the next login re-fetches the
+            // flag rather than leaving a stale "turned off" message behind.
+            if (lootTrackerPanel != null) lootTrackerPanel.setSyncChecking();
             SwingUtilities.invokeLater(() -> {
                 mainPanel.showLoggedOutState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
@@ -1227,15 +1374,11 @@ public class RuneAlyticsPlugin extends Plugin
             state.setLoggedIn(true);
 
             // (Re)start the live-map heartbeat now that the player is in-game.
-            // Idempotent — a no-op if one is already running (e.g. world hop).
-            // The heartbeat itself waits until the account is verified before
-            // sending, so it is safe to start before verification completes.
+            // Idempotent; the heartbeat waits until the account is verified.
             startHeartbeat();
 
-            // Resolve the player's RSN.  getLocalPlayer() can briefly return null
-            // during the early LOGGED_IN transition (before the character fully
-            // spawns), so fall back to the stored verified username so we never
-            // bail out and leave tabs in their logged-out (hidden) state.
+            // Resolve the player's RSN, falling back to the stored verified
+            // username (getLocalPlayer() can briefly be null during early LOGGED_IN).
             String username = client.getLocalPlayer() != null
                     ? client.getLocalPlayer().getName()
                     : null;
@@ -1244,9 +1387,7 @@ public class RuneAlyticsPlugin extends Plugin
                 username = state.getVerifiedUsername();
             }
 
-            // Refresh all sidebar panels that show login-state-dependent controls.
-            // MatchmakingPanel is included here so its input/button enable correctly
-            // as soon as the player is recognised as logged-in + verified.
+            // Refresh sidebar panels that show login-state-dependent controls.
             SwingUtilities.invokeLater(() -> {
                 injector.getInstance(RuneAlyticsVerificationPanel.class).refreshLoginState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
@@ -1271,35 +1412,21 @@ public class RuneAlyticsPlugin extends Plugin
                 if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
                 SwingUtilities.invokeLater(() ->
                         mainPanel.showMainFeatures(true, matchEnabled));
+
+                // Auto-reconcile loot on login. Delayed so the login itself
+                // isn't slowed and the client has settled (local player + item
+                // cache ready); runs on the background executor.
+                if (lootSync && config.syncLootToServer())
+                {
+                    executorService.schedule(
+                            () -> performLootSync(false),
+                            LOGIN_AUTO_SYNC_DELAY_MS,
+                            java.util.concurrent.TimeUnit.MILLISECONDS);
+                }
             });
         }
     }
 
-
-    private void handlePostLogin()
-    {
-        String username = client.getLocalPlayer() != null
-                ? client.getLocalPlayer().getName()
-                : null;
-
-        if (username == null || username.isEmpty()) return;
-
-        if (!state.isVerified())
-        {
-            SwingUtilities.invokeLater(() -> mainPanel.showVerificationOnly());
-            return;
-        }
-
-        executorService.submit(() -> {
-            Map<String, Boolean> flags = apiClient.fetchFeatureFlags(username.toLowerCase());
-            boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
-            if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
-            // Loot Tracker tab is always visible; only Match Finder is flag-controlled
-            Map<String, Boolean> tabFlags = new java.util.HashMap<>(flags);
-            tabFlags.put(FEATURE_LOOT, true);
-            SwingUtilities.invokeLater(() -> mainPanel.applyFeatureFlags(tabFlags));
-        });
-    }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  PLAYER SPAWNED
@@ -1310,14 +1437,18 @@ public class RuneAlyticsPlugin extends Plugin
     {
         if (event.getPlayer() != client.getLocalPlayer()) return;
 
-        log.info("Local player spawned");
+        log.debug("Local player spawned");
+
+        // Cache the account name now (client thread) so a logout flush can scope
+        // the sync after the local player is gone.
+        currentPlayerIdentity.rememberCurrentPlayer();
 
         // Always check per-account token and refresh the verification UI on login
         checkVerificationStatus();
 
         executorService.schedule(() -> {
             // Load local loot data regardless of verification — tracking always works locally.
-            log.info("Post-login: loading local loot data (verified={})", state.isVerified());
+            log.debug("Post-login: loading local loot data (verified={})", state.isVerified());
             lootManager.loadFromStorage();
         }, 2, TimeUnit.SECONDS);
 
@@ -1336,8 +1467,7 @@ public class RuneAlyticsPlugin extends Plugin
             SwingUtilities.invokeLater(() ->
                     injector.getInstance(RuneAlyticsSettingsPanel.class).refreshPrivacySettings());
 
-            // Push the new preference to the site so it immediately knows whether
-            // the player wants to be seen (visibility is enforced server-side).
+            // Push the new visibility preference to the site.
             syncPrivacySettings();
         }
     }
@@ -1357,6 +1487,39 @@ public class RuneAlyticsPlugin extends Plugin
         final PrivacySetting bank   = config.bankPrivacy();
         final PrivacySetting player = config.playerVisibility();
         executorService.execute(() -> apiClient.syncPrivacySettings(bank, player));
+    }
+
+    /**
+     * Coalesces a burst of bank container changes into a single wealth snapshot
+     * + upload {@value #BANK_SYNC_DEBOUNCE_MS} ms after the last change. The
+     * snapshot is built on the client thread (ItemManager reads are
+     * client-thread-only) and only the HTTP call is handed to the executor.
+     */
+    private void scheduleBankSync()
+    {
+        if (!bankSyncScheduled.compareAndSet(false, true)) return;
+
+        executorService.schedule(() -> clientThread.invokeLater(() ->
+        {
+            // Cleared first so changes that arrive while we build the snapshot
+            // schedule a fresh follow-up sync.
+            bankSyncScheduled.set(false);
+
+            if (!config.enableBankSync() || !state.isLoggedIn() || !state.isVerified()) return;
+
+            ItemContainer bank = client.getItemContainer(InventoryID.BANK);
+            if (bank == null) return;
+
+            final String token    = state.getVerificationCode();
+            final String username = state.getVerifiedUsername();
+            final JsonObject snapshot = bankDataManager.buildBankSnapshot(
+                    username,
+                    client.getWorld(),
+                    bank,
+                    client.getItemContainer(InventoryID.INVENTORY),
+                    client.getItemContainer(InventoryID.EQUIPMENT));
+            executorService.execute(() -> bankDataManager.syncBankData(token, username, snapshot));
+        }), BANK_SYNC_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1398,9 +1561,12 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     /**
-     * One heartbeat iteration: captures the live location, friends list and
-     * ignore list on the client thread (those reads are client-thread-only) and
-     * then hands the payload off to the API client on the executor.
+     * One heartbeat iteration: captures location, friends and ignore lists on
+     * the client thread, then hands the payload to the API client on the executor.
+     *
+     * <p>When location visibility is private, the real coordinates are replaced
+     * with a decoy here (client-side) before the payload is built; the real
+     * location is never serialized or sent.</p>
      */
     private void sendHeartbeatTick()
     {
@@ -1410,13 +1576,28 @@ public class RuneAlyticsPlugin extends Plugin
         {
             if (client.getGameState() != GameState.LOGGED_IN) return;
 
-            final PlayerLocationSnapshot location = PlayerLocationSnapshot.capture(client);
+            final PrivacySetting visibility    = config.playerVisibility();
+            final PrivacySetting gearVisibility = config.bankPrivacy();
+
+            // Private players' real coordinates are replaced with a decoy here,
+            // before the payload leaves the client thread.
+            final PlayerLocationSnapshot location =
+                    PlayerLocationSnapshot.captureRespectingPrivacy(client, visibility);
+
             final List<String> friends = readNames(client.getFriendContainer());
             final List<String> ignores = readNames(client.getIgnoreContainer());
-            final PrivacySetting visibility = config.playerVisibility();
+
+            // Read equipment/inventory on the client thread and convert to JSON
+            // immediately so the executor never touches live ItemContainers.
+            final JsonArray equipment = RuneAlyticsItemJson.fromEquipment(client.getItemContainer(InventoryID.EQUIPMENT));
+            final JsonArray inventory = RuneAlyticsItemJson.fromContainer(client.getItemContainer(InventoryID.INVENTORY));
+
+            // Non-authoritative preview of the in-progress 30s XP batch window.
+            final Map<String, Integer> xpPreview = xpTrackerManager.peekPendingGains();
 
             executorService.execute(() ->
-                    apiClient.sendHeartbeat(location, friends, ignores, visibility));
+                    apiClient.sendHeartbeat(location, friends, ignores, visibility,
+                            equipment, inventory, gearVisibility, xpPreview));
         });
     }
 
@@ -1484,9 +1665,11 @@ public class RuneAlyticsPlugin extends Plugin
         updateCurrentGameMode();
 
         // Snapshot the player's location at XP-gain time (client thread) so the
-        // batched /xp/batch POST can report where the XP was earned. Captured
-        // here because the batch flushes off-thread where client reads are unsafe.
-        state.setCurrentLocation(PlayerLocationSnapshot.capture(client));
+        // batched /xp/batch POST can report where the XP was earned.
+        // captureRespectingPrivacy keeps a private player's real coordinates out
+        // of state.currentLocation.
+        state.setCurrentLocation(
+                PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility()));
 
         // ── Delegate XP batching to XpTrackerManager ──────────────────────────
         // The manager opens a 30-second window on the first call and accumulates
@@ -1495,8 +1678,7 @@ public class RuneAlyticsPlugin extends Plugin
         xpTrackerManager.onXpGained(skill, gained);
 
         // ── Skilling loot snapshot ────────────────────────────────────────────
-        // Skipped when the lamp/book suppression window is active (issue #3 —
-        // prevents equipment swaps after lamp XP from being attributed).
+        // Skipped while the lamp/book suppression window is active.
         if (SKILLING_TRACKED.contains(skill) && gameTickCount >= lampXpSuppressUntilTick)
         {
             String key = skill.getName();
@@ -1524,10 +1706,165 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     /**
-     * Polls feature flags from the server every 60 seconds while the player is
-     * logged in and verified. This keeps the UI consistent without relying solely
-     * on the one-time fetch that happens on each game-state change.
+     * Unified loot sync triggered by the single "Sync" button and by the
+     * automatic login sync.
+     *
+     * <p>Runs the full pipeline for the <em>currently logged-in</em> account:
+     * pull server history → import RuneLite tracker → upload unsynced kills →
+     * three-source absolute-merge reconcile → upload. All scoped to the live
+     * account so no other profile's data can leak in.</p>
+     *
+     * <p>Blocked (with a UI message when {@code userInitiated}) if no account is
+     * logged in or the logged-in account doesn't match the linked RuneAlytics
+     * account. Always runs off the client thread.</p>
      */
+    public void performLootSync(boolean userInitiated)
+    {
+        if (!currentPlayerIdentity.canSync())
+        {
+            if (userInitiated && lootTrackerPanel != null)
+            {
+                String msg = currentPlayerIdentity.getMismatchMessage();
+                if (msg != null) lootTrackerPanel.showAccountMismatch(msg);
+                // getMismatchMessage() should never be null when canSync() is
+                // false, but guard against a TOCTOU race so the button (already
+                // showing "Syncing…") is never left stuck.
+                else                lootTrackerPanel.showSyncBusy("Log in to sync loot…");
+            }
+            return;
+        }
+
+        final String accountKey = currentPlayerIdentity.getAccountKey();
+        if (accountKey == null)
+        {
+            // canSync() was true a moment ago but the player just logged out.
+            if (userInitiated && lootTrackerPanel != null)
+            {
+                lootTrackerPanel.showSyncBusy("Log in to sync loot…");
+            }
+            return;
+        }
+
+        executorService.submit(() ->
+        {
+            if (!state.tryStartSync())
+            {
+                // A sync (live/auto/manual) is already running. Reset the button
+                // so a manual click doesn't get stuck on "Syncing…".
+                if (userInitiated && lootTrackerPanel != null)
+                {
+                    SwingUtilities.invokeLater(() ->
+                            lootTrackerPanel.showSyncBusy("A sync is already running…"));
+                }
+                return;
+            }
+            try     { runSyncPipeline(accountKey, true, userInitiated); }
+            finally { state.endSync(); }
+        });
+    }
+
+    /**
+     * Flushes the current account's loot to the server on logout.
+     *
+     * <p>Must be called on the client thread <em>before</em> {@code loggedIn} is
+     * flipped to {@code false}, so the sync slot can be claimed while the
+     * session is still valid. Upload-only (no pull) to keep logout snappy.</p>
+     */
+    private void performLogoutSyncFlush()
+    {
+        final String accountKey = currentPlayerIdentity.getLastKnownAccountKey();
+        if (accountKey == null) return;
+        if (!currentPlayerIdentity.isLinkedAccount(accountKey)) return;
+
+        // Claim the slot synchronously while still logged in; the live-sync
+        // path therefore cannot also upload and double-count.
+        if (!state.tryStartSync()) return;
+
+        executorService.submit(() ->
+        {
+            try     { runSyncPipeline(accountKey, false, false); }
+            finally { state.endSync(); }
+        });
+    }
+
+    /**
+     * Shared sync body. The caller MUST already hold the sync slot.
+     *
+     * @param accountKey    normalized account to scope every step to
+     * @param pull          when {@code true}, also pull server history + import
+     *                      RuneLite tracker before uploading; {@code false} for
+     *                      an upload-only logout flush
+     * @param userInitiated when {@code true}, surface failures in the UI
+     */
+    private void runSyncPipeline(String accountKey, boolean pull, boolean userInitiated)
+    {
+        try
+        {
+            log.debug("[plugin] Loot sync start (account='{}', pull={})", accountKey, pull);
+
+            if (userInitiated && lootTrackerPanel != null)
+            {
+                SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Syncing with server…"));
+            }
+
+            // 1. Legacy per-kill website history pull + upload.
+            lootManager.syncLegacyBlocking(accountKey, pull);
+
+            if (userInitiated && lootTrackerPanel != null)
+            {
+                SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Syncing RuneLite tracker…"));
+            }
+
+            // 2. Absolute-merge reconcile: website + RuneLite's own rsprofile
+            //    loot tracker file, read fresh every sync and scoped to this
+            //    account's OSRS username.
+            LootSyncMergeService.MergeResult result =
+                    lootSyncMergeService.performMergeForAccount(accountKey);
+
+            // The merge writes straight to LootStorageData, bypassing the
+            // in-memory display cache — rebuild it now so the panel reflects
+            // the merged KCs/drops (and any newly-empty placeholders get
+            // purged) instead of showing a stale pre-merge snapshot.
+            lootManager.refreshFromStorage();
+
+            SwingUtilities.invokeLater(() ->
+            {
+                if (lootTrackerPanel == null) return;
+                if (result.isSuccess())          lootTrackerPanel.showAbsoluteMergeResult(result);
+                else if (userInitiated)          lootTrackerPanel.showSyncFailed(result.getBlockedReason());
+            });
+        }
+        catch (Throwable t)
+        {
+            // Catch Throwable (not just Exception) so an Error — e.g. an
+            // ItemManager "must be called on client thread" assertion — still
+            // resets the Sync button instead of leaving it stuck on "Syncing…".
+            log.error("[plugin] Loot sync failed", t);
+            if (userInitiated)
+            {
+                SwingUtilities.invokeLater(() -> {
+                    if (lootTrackerPanel != null) lootTrackerPanel.showSyncFailed(t.getMessage());
+                });
+            }
+        }
+    }
+
+    /**
+     * Exposes the DeathRecoveryGuard to the panel UI so the "End Recovery Mode"
+     * button can call it.
+     */
+    public DeathRecoveryGuard getDeathRecoveryGuard()
+    {
+        return deathRecoveryGuard;
+    }
+
+    /**
+     * Exposes the CurrentPlayerIdentityService for panel account-status display.
+     */
+    public CurrentPlayerIdentityService getCurrentPlayerIdentity()
+    {
+        return currentPlayerIdentity;
+    }
     @net.runelite.client.task.Schedule(
             period = 60000,
             unit   = ChronoUnit.MILLIS,
@@ -1543,8 +1880,18 @@ public class RuneAlyticsPlugin extends Plugin
         boolean lootSync    = flags.getOrDefault(FEATURE_LOOT,    false);
         boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
 
-        if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
-        SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, matchEnabled));
+        // Only touch the UI when a flag actually changed.
+        if (lastLootSyncFlag == null || lastLootSyncFlag != lootSync)
+        {
+            lastLootSyncFlag = lootSync;
+            if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
+        }
+        if (lastMatchEnabledFlag == null || lastMatchEnabledFlag != matchEnabled)
+        {
+            lastMatchEnabledFlag = matchEnabled;
+            final boolean me = matchEnabled;
+            SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, me));
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1569,7 +1916,7 @@ public class RuneAlyticsPlugin extends Plugin
             final List<ItemStack> loot = mergeItemStacks(whispererGroundItems);
             whispererGroundItems.clear();
 
-            log.info("The Whisperer: merged into {} item types, KC={}", loot.size(), kc);
+            log.debug("The Whisperer: merged into {} item types, KC={}", loot.size(), kc);
             lootManager.processPlayerLootWithGameKC("The Whisperer", loot, kc);
         });
     }
@@ -1606,6 +1953,47 @@ public class RuneAlyticsPlugin extends Plugin
         return items;
     }
 
+    private List<ItemStack> getCurrentEquipment()
+    {
+        ItemContainer eq = client.getItemContainer(InventoryID.EQUIPMENT);
+        if (eq == null) return Collections.emptyList();
+
+        List<ItemStack> items = new ArrayList<>();
+        for (Item item : eq.getItems())
+            if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+                items.add(new ItemStack(item.getId(), item.getQuantity()));
+        return items;
+    }
+
+    /**
+     * Strips equip/unequip noise out of an inventory-gain list.
+     *
+     * <p>Unequipping an item makes it appear in the inventory exactly like a
+     * drop would, so any "gained" item that just disappeared from the
+     * equipment container in the same tick is removed here before the
+     * remainder is handed to the loot manager.</p>
+     *
+     * @param gained        items the caller believes were gained
+     * @param justUnequipped items that disappeared from equipment this tick
+     *                       (see {@link #onItemContainerChanged})
+     */
+    private List<ItemStack> excludeEquipmentMovement(List<ItemStack> gained, List<ItemStack> justUnequipped)
+    {
+        if (gained.isEmpty() || justUnequipped.isEmpty()) return gained;
+
+        Map<Integer, Integer> unequippedMap = new HashMap<>();
+        for (ItemStack i : justUnequipped) unequippedMap.merge(i.getId(), i.getQuantity(), Integer::sum);
+
+        List<ItemStack> filtered = new ArrayList<>();
+        for (ItemStack i : gained)
+        {
+            int unequippedQty = unequippedMap.getOrDefault(i.getId(), 0);
+            int remaining     = i.getQuantity() - unequippedQty;
+            if (remaining > 0) filtered.add(new ItemStack(i.getId(), remaining));
+        }
+        return filtered;
+    }
+
     /**
      * Reads a freshly-filled reward container and dispatches the items as
      * {@code source} loot.  Used for chests that don't surface a usable
@@ -1625,7 +2013,7 @@ public class RuneAlyticsPlugin extends Plugin
         }
         if (items.isEmpty()) return;
 
-        log.info("Reward container '{}': {} items", source, items.size());
+        log.debug("Reward container '{}': {} items", source, items.size());
         lootManager.processPlayerLoot(source, items);
     }
 
@@ -1690,7 +2078,7 @@ public class RuneAlyticsPlugin extends Plugin
             final boolean verified = serverConfirmed;
             if (!verified)
             {
-                log.info("Stored token for '{}' rejected by server — clearing", rsn);
+                log.debug("Stored token for '{}' rejected by server — clearing", rsn);
                 vp.clearAccountToken(rsn);
             }
 
@@ -1708,7 +2096,7 @@ public class RuneAlyticsPlugin extends Plugin
             state.setVerificationCode(token);
             // Mirror into the config field so it always reflects the active account
             config.authToken(token);
-            log.info("Account '{}' is linked (server confirmed)", rsn);
+            log.debug("Account '{}' is linked (server confirmed)", rsn);
         }
         else
         {
@@ -1716,7 +2104,7 @@ public class RuneAlyticsPlugin extends Plugin
             state.setVerifiedUsername(null);
             state.setVerificationCode(null);
             config.authToken("");
-            log.info("Account '{}' is not linked", rsn);
+            log.debug("Account '{}' is not linked", rsn);
         }
 
         SwingUtilities.invokeLater(() -> {
@@ -1726,43 +2114,39 @@ public class RuneAlyticsPlugin extends Plugin
             injector.getInstance(MatchmakingPanel.class).refreshLoginState();
         });
 
-        // If the account is now verified, fetch feature flags and show the full
-        // UI.  This path is needed because onGameStateChanged(LOGGED_IN) fires
-        // before checkVerificationStatus() completes — at that point
-        // state.isVerified() is still false, so the flag fetch and showMainFeatures
-        // call are skipped.  Once verification is confirmed here we replay that
-        // logic so every tab (including Match Finder) appears correctly.
+        // Fetch feature flags and show the full UI once verification is
+        // confirmed (onGameStateChanged(LOGGED_IN) runs before this completes).
         if (verified)
         {
-            // Push current privacy preferences so the site's stored visibility
-            // mirrors the in-client setting the moment the account links.
+            // Push current privacy preferences so the site mirrors the in-client setting.
             syncPrivacySettings();
 
             executorService.submit(() ->
             {
+                // Now that the verified account is known, (re)load that account's
+                // own loot. No-op if the post-spawn load already loaded it; forces
+                // a reload if it had loaded a stale/previous account.
+                lootManager.loadFromStorage();
+
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
+                boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
+
+                // LOGGED_IN fired before verification completed, so its
+                // setSyncEnabled() call was skipped. Apply the loot flag here so
+                // the Sync button reflects reality immediately instead of staying
+                // in its "checking…" state until the next 60s feature poll.
+                lastLootSyncFlag = lootSync;
+                if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
+
                 SwingUtilities.invokeLater(() ->
                 {
                     mainPanel.showMainFeatures(
-                            flags.getOrDefault(FEATURE_LOOT, false),
+                            lootSync,
                             flags.getOrDefault(FEATURE_MATCHES, false));
                     injector.getInstance(MatchmakingPanel.class).refreshLoginState();
                 });
             });
         }
-    }
-
-    private void logConfiguration()
-    {
-        log.info("=== RUNEALYTICS CONFIG ===");
-        log.info("Loot tracking     : {}", config.enableLootTracking());
-        log.info("Track all NPCs    : {}", config.trackAllNpcs());
-        log.info("Track pickpockets : {}", config.enablePickpocketTracking());
-        log.info("Min loot value    : {}", config.minimumLootValue());
-        log.info("Sync to server    : {}", config.syncLootToServer());
-        log.info("Auto-verify       : {}", config.enableAutoVerification());
-        log.info("API URL           : {}", config.apiUrl());
-        log.info("=========================");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1790,15 +2174,9 @@ public class RuneAlyticsPlugin extends Plugin
         EnumSet<WorldType> worldTypes = client.getWorldType();
         if (worldTypes != null)
         {
-            if (worldTypes.contains(WorldType.DEADMAN))  return "deadman";
-            if (worldTypes.contains(WorldType.SEASONAL)) return "leagues";
-            // FRESH_START_WORLD was added in a later RuneLite version; guard with valueOf.
-            try
-            {
-                WorldType fsr = WorldType.valueOf("FRESH_START_WORLD");
-                if (worldTypes.contains(fsr)) return "fresh_start";
-            }
-            catch (IllegalArgumentException ignored) {}
+            if (worldTypes.contains(WorldType.DEADMAN))           return "deadman";
+            if (worldTypes.contains(WorldType.SEASONAL))          return "leagues";
+            if (worldTypes.contains(WorldType.FRESH_START_WORLD)) return "fresh_start";
         }
 
         String subtype = determineAccountSubtype();
@@ -1809,36 +2187,21 @@ public class RuneAlyticsPlugin extends Plugin
      * Returns the specific OSRS account subtype for fine-grained server-side
      * filtering, independent of the current world mode.
      *
-     * <p>Uses reflection so the plugin compiles against any RuneLite version —
-     * {@code AccountType} was added to {@code net.runelite.api} in a later
-     * release and may not be present in all cached JARs.</p>
-     *
      * @return one of "normal", "ironman", "hardcore_ironman",
-     *         "ultimate_ironman", "group_ironman",
-     *         "hardcore_group_ironman", "unranked_group_ironman"
+     *         "ultimate_ironman", "group_ironman", "hardcore_group_ironman"
      */
     private String determineAccountSubtype()
     {
-        try
+        AccountType accountType = client.getAccountType();
+        if (accountType == null) return "normal";
+        switch (accountType)
         {
-            Object accountType = client.getClass()
-                    .getMethod("getAccountType")
-                    .invoke(client);
-            if (accountType == null) return "normal";
-            switch (accountType.toString())
-            {
-                case "IRONMAN":                return "ironman";
-                case "HARDCORE_IRONMAN":       return "hardcore_ironman";
-                case "ULTIMATE_IRONMAN":       return "ultimate_ironman";
-                case "GROUP_IRONMAN":          return "group_ironman";
-                case "HARDCORE_GROUP_IRONMAN": return "hardcore_group_ironman";
-                case "UNRANKED_GROUP_IRONMAN": return "unranked_group_ironman";
-                default:                       return "normal";
-            }
-        }
-        catch (Exception e)
-        {
-            return "normal";
+            case IRONMAN:                return "ironman";
+            case HARDCORE_IRONMAN:       return "hardcore_ironman";
+            case ULTIMATE_IRONMAN:       return "ultimate_ironman";
+            case GROUP_IRONMAN:          return "group_ironman";
+            case HARDCORE_GROUP_IRONMAN: return "hardcore_group_ironman";
+            default:                     return "normal";
         }
     }
 
@@ -1859,7 +2222,7 @@ public class RuneAlyticsPlugin extends Plugin
     {
         try
         {
-            BufferedImage img = ImageUtil.loadImageResource(getClass(), "/runealytics_icon.png");
+            BufferedImage img = ImageUtil.loadImageResource(getClass(), "/runealytics_logo.png");
             if (img != null) return img;
         }
         catch (Exception e)

@@ -42,7 +42,7 @@ public class BossKillStats
         this.highestDrop    = 0;
         this.killHistory.clear();
         this.preloadedDrops.clear();
-        log.info("Boss {} prestiged to level {}", npcName, prestige);
+        log.debug("Boss {} prestiged to level {}", npcName, prestige);
     }
 
     public long getLastKillTimestamp()
@@ -131,8 +131,8 @@ public class BossKillStats
         private boolean pet;
         /**
          * True for non-tradeable items (quest rewards, untradeable cosmetics,
-         * pets). Used by the panel sort (issue #9) to put untradeables on the
-         * first row regardless of their GE value (which is often 0).
+         * pets). Used by the panel sort to place untradeables first regardless
+         * of their GE value, which is often 0.
          */
         private boolean untradeable;
 

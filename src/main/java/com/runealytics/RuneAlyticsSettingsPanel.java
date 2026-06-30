@@ -623,7 +623,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
                     state.setVerifiedUsername(rsn);
                     state.setVerificationCode(code);
 
-                    log.info("Verification succeeded for '{}'", rsn);
+                    log.debug("Verification succeeded for '{}'", rsn);
 
                     rebuild();
                 }
@@ -860,11 +860,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
                 updateConnectionStatus(false, "Your account is not linked.");
             }
         });
-    }
-
-    public void updateLastSyncTime()
-    {
-        // display removed
     }
 
     public void refreshPrivacySettings()

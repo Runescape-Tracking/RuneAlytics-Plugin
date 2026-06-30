@@ -70,11 +70,59 @@ public final class PlayerLocationSnapshot
     }
 
     /**
+     * World number that NEVER exists in real OSRS (live worlds top out in the
+     * 500s). Used exclusively as the tag on {@link #privacyDecoy()} so any
+     * downstream consumer — server code, dashboards, logs — can recognize at a
+     * glance that a record is a decoy and must never be rendered as a real
+     * player position.
+     */
+    public static final int PRIVACY_DECOY_WORLD = 1337;
+
+    /**
+     * Returns a fixed decoy location used in place of the real location when a
+     * player's location visibility is {@code private}, so real coordinates never
+     * leave the client. Always resolves to the Grand Exchange, tagged with
+     * {@link #PRIVACY_DECOY_WORLD} so it is distinguishable from a genuine
+     * location in logs/storage. {@code instanced} is {@code false} and
+     * {@code area_name}/{@code map_region} are both {@code "Grand Exchange"}.
+     */
+    public static PlayerLocationSnapshot privacyDecoy()
+    {
+        return new PlayerLocationSnapshot(
+                0, 3164, 3477,
+                12598, 28, 21,
+                395, 434,
+                "Grand Exchange", "Grand Exchange",
+                false, PRIVACY_DECOY_WORLD,
+                System.currentTimeMillis() / 1000L);
+    }
+
+    /**
+     * Entry point for location-sending events (live map heartbeat, XP-batch
+     * location, loot kill-record location). Returns the privacy decoy when
+     * {@code visibility} is {@code PRIVATE} so the decoy substitution is applied
+     * uniformly at every call site rather than per-caller.
+     *
+     * @param client     the RuneLite client (read on the client thread)
+     * @param visibility the player's current location-visibility {@link PrivacySetting}
+     * @return {@link #privacyDecoy()} when {@code visibility} is {@code PRIVATE};
+     *         otherwise the {@link #capture(Client)} result (which may be
+     *         {@code null} if the player isn't renderable right now)
+     */
+    public static PlayerLocationSnapshot captureRespectingPrivacy(Client client, PrivacySetting visibility)
+    {
+        return (visibility == PrivacySetting.PRIVATE) ? privacyDecoy() : capture(client);
+    }
+
+    /**
      * Captures the local player's current location.
      *
      * <p>MUST be called on the client thread. Returns {@code null} when the
      * client or local player / world location is unavailable so callers can
      * simply omit the {@code location} field.</p>
+     *
+     * <p>For uploads use {@link #captureRespectingPrivacy} so the {@code private}
+     * visibility decoy substitution is applied.</p>
      */
     public static PlayerLocationSnapshot capture(Client client)
     {

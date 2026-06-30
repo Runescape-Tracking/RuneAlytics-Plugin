@@ -77,15 +77,18 @@ public class LiveMapMinimapOverlay extends Overlay
 
         final int localWorld = client.getWorld();
         final int localPlane = client.getPlane();
-        final String localName = local.getName();
+        final String localName = normalizeRsn(local.getName());
 
         for (MapPlayer p : players)
         {
             if (p == null) continue;
 
             // Don't draw on ourselves, and only show same-world/plane peers.
-            if (localName != null && localName.equalsIgnoreCase(p.getUsername())) continue;
-            if (p.getWorld() != 0 && p.getWorld() != localWorld) continue;
+            // Names are normalized because RuneLite uses NBSP (U+00A0) while the
+            // server uses regular spaces/underscores. World must match exactly:
+            // a player on another world rendered at our scene coords is a ghost.
+            if (localName != null && localName.equalsIgnoreCase(normalizeRsn(p.getUsername()))) continue;
+            if (p.getWorld() != localWorld) continue;
             if (p.getPlane() != localPlane) continue;
 
             WorldPoint wp = p.toWorldPoint();
@@ -93,13 +96,19 @@ public class LiveMapMinimapOverlay extends Overlay
             if (lp == null) continue; // outside the loaded scene
 
             drawSceneMarker(graphics, lp, p.getUsername());
-            drawMinimapDot(graphics, lp, p.getUsername());
+            drawMinimapDot(graphics, lp);
         }
 
         return null;
     }
 
-    private void drawMinimapDot(Graphics2D graphics, LocalPoint lp, String name)
+    private static String normalizeRsn(String name)
+    {
+        if (name == null) return null;
+        return name.replace('\u00A0', ' ').replace('_', ' ').trim();
+    }
+
+    private void drawMinimapDot(Graphics2D graphics, LocalPoint lp)
     {
         net.runelite.api.Point mm = Perspective.localToMinimap(client, lp);
         if (mm == null) return;
