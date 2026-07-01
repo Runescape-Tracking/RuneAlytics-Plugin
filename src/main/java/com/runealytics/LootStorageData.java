@@ -17,6 +17,20 @@ public class LootStorageData
     @SerializedName("boss_kills")
     private Map<String, BossKillData> bossKills = new HashMap<>();
 
+    /**
+     * Per-boss set of item IDs the user has hidden in RuneAlytics, keyed by
+     * normalised boss name. Separate from RuneLite's own ignore list.
+     */
+    @SerializedName("hidden_drops_by_boss")
+    private Map<String, Set<Integer>> hiddenDropsByBoss = new HashMap<>();
+
+    /**
+     * Normalised names of bosses the user has hidden from the panel entirely.
+     * Display-only; does not affect what gets synced to the server.
+     */
+    @SerializedName("hidden_bosses")
+    private Set<String> hiddenBosses = new HashSet<>();
+
     @Data
     public static class BossKillData
     {
@@ -62,6 +76,31 @@ public class LootStorageData
 
         @SerializedName("synced_to_server")
         private boolean syncedToServer;
+
+        /**
+         * Game mode at the time this kill was recorded.
+         * Values: "regular", "ironman", "leagues", "deadman", "fresh_start", "grid_master".
+         * Defaults to "regular" for records loaded from older storage files.
+         */
+        @SerializedName("game_mode")
+        private String gameMode = "regular";
+
+        /**
+         * OSRS account subtype at the time this kill was recorded.
+         * Values: "normal", "ironman", "hardcore_ironman", "ultimate_ironman",
+         * "group_ironman", "hardcore_group_ironman", "unranked_group_ironman".
+         */
+        @SerializedName("account_type")
+        private String accountType = "normal";
+
+        /**
+         * Player location when this kill happened, captured on the client thread
+         * and uploaded per-kill in the {@code /loot/bulk-sync} payload.
+         * {@code null} when no location was captured, in which case the field is
+         * omitted from the request.
+         */
+        @SerializedName("location")
+        private PlayerLocationSnapshot location;
     }
 
     @Data
@@ -82,11 +121,16 @@ public class LootStorageData
         @SerializedName("high_alch")
         private int highAlch;
 
+        // long: a per-drop value can exceed Integer.MAX_VALUE for large stacks
+        // of high-value items.
         @SerializedName("total_value")
-        private int totalValue;
+        private long totalValue;
 
         @SerializedName("hidden")
         private boolean hidden;
+
+        @SerializedName("is_pet")
+        private boolean pet;
     }
 
     @Data
@@ -112,5 +156,8 @@ public class LootStorageData
 
         @SerializedName("high_alch")
         private int highAlch;
+
+        @SerializedName("is_pet")
+        private boolean pet;
     }
 }

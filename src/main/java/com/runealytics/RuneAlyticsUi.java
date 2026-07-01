@@ -1,6 +1,8 @@
 package com.runealytics;
 
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.util.ImageUtil;
 
 import javax.swing.*;
 import javax.swing.border.Border;
@@ -8,10 +10,15 @@ import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
 import java.awt.*;
+import java.awt.image.BufferedImage;
 
+@Slf4j
 public final class RuneAlyticsUi
 {
     private RuneAlyticsUi() {}
+
+    /** Calibri font helper — falls back to SansSerif on non-Windows systems. */
+    private static Font cf(int style, float size) { return new Font("Calibri", style, Math.round(size)); }
 
     // ---------- PALETTE / CONSTANTS ----------
 
@@ -20,6 +27,10 @@ public final class RuneAlyticsUi
     private static final Color NEGATIVE_COLOR = new Color(255, 110, 110);
     private static final Color MUTED_TEXT     = new Color(200, 200, 200);
     private static final Color CARD_BORDER    = new Color(60, 60, 60, 180);
+
+    // Hard-coded white; ColorScheme.TEXT_COLOR varies between RuneLite releases
+    // and can render unreadably on dark backgrounds.
+    private static final Color LABEL_WHITE    = Color.WHITE;
 
     private static final int CARD_CORNER_RADIUS = 6;
 
@@ -107,8 +118,8 @@ public final class RuneAlyticsUi
     public static JLabel titleLabel(String text)
     {
         JLabel label = new JLabel(text);
-        label.setFont(label.getFont().deriveFont(Font.BOLD, 16f));
-        label.setForeground(ColorScheme.TEXT_COLOR);
+        label.setFont(cf(Font.BOLD, 17f));
+        label.setForeground(LABEL_WHITE);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
     }
@@ -116,7 +127,7 @@ public final class RuneAlyticsUi
     public static JLabel subtitleLabel(String text)
     {
         JLabel label = new JLabel(text);
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 11f));
+        label.setFont(cf(Font.PLAIN, 12f));
         label.setForeground(MUTED_TEXT);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
@@ -125,13 +136,13 @@ public final class RuneAlyticsUi
     public static JLabel bodyLabel(String text)
     {
         JLabel label = new JLabel(text);
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
-        label.setForeground(ColorScheme.TEXT_COLOR);
+        label.setFont(cf(Font.PLAIN, 13f));
+        label.setForeground(LABEL_WHITE);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
     }
 
-    /** For grey “value” labels like Username, Last Sync, etc. */
+    /** For grey "value" labels like Username, Last Sync, etc. */
     public static JLabel valueLabel(String text)
     {
         JLabel label = bodyLabel(text);
@@ -142,8 +153,8 @@ public final class RuneAlyticsUi
     public static JLabel statusLabel()
     {
         JLabel label = new JLabel(" ");
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 13f));
-        label.setForeground(ColorScheme.TEXT_COLOR);
+        label.setFont(cf(Font.PLAIN, 13f));
+        label.setForeground(LABEL_WHITE);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         label.setHorizontalAlignment(SwingConstants.LEFT);
         return label;
@@ -164,10 +175,10 @@ public final class RuneAlyticsUi
     public static JTextField inputField()
     {
         JTextField field = new JTextField();
-
+        field.setFont(cf(Font.PLAIN, 13f));
         field.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        field.setForeground(ColorScheme.TEXT_COLOR);
-        field.setCaretColor(ColorScheme.TEXT_COLOR);
+        field.setForeground(LABEL_WHITE);
+        field.setCaretColor(LABEL_WHITE);
 
         Border border = new CompoundBorder(
                 new LineBorder(ColorScheme.DARKER_GRAY_COLOR.brighter(), 1, true),
@@ -188,9 +199,11 @@ public final class RuneAlyticsUi
     public static JButton primaryButton(String text)
     {
         JButton button = new JButton(text);
-
+        button.setFont(cf(Font.BOLD, 13f));
         button.setMargin(new Insets(3, 12, 3, 12));
         button.setFocusPainted(false);
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
         button.setBackground(ColorScheme.BRAND_ORANGE);
@@ -208,13 +221,15 @@ public final class RuneAlyticsUi
     public static JButton secondaryButton(String text)
     {
         JButton button = new JButton(text);
-
+        button.setFont(cf(Font.PLAIN, 12f));
         button.setMargin(new Insets(3, 10, 3, 10));
         button.setFocusPainted(false);
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
         button.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        button.setForeground(ColorScheme.TEXT_COLOR);
+        button.setForeground(LABEL_WHITE);
 
         button.setBorder(new CompoundBorder(
                 new LineBorder(CARD_BORDER, 1, true),
@@ -238,7 +253,7 @@ public final class RuneAlyticsUi
         infoText.setForeground(MUTED_TEXT);
         infoText.setBorder(new EmptyBorder(10, 10, 10, 10));
         infoText.setAlignmentX(Component.LEFT_ALIGNMENT);
-        infoText.setFont(infoText.getFont().deriveFont(Font.PLAIN, 11f));
+        infoText.setFont(cf(Font.PLAIN, 12f));
         return infoText;
     }
 
@@ -252,7 +267,7 @@ public final class RuneAlyticsUi
 
         area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
         area.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-        area.setForeground(ColorScheme.TEXT_COLOR);
+        area.setForeground(LABEL_WHITE);
         area.setBorder(new EmptyBorder(4, 4, 4, 4));
 
         area.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -264,7 +279,7 @@ public final class RuneAlyticsUi
         JPanel card = cardPanel();
 
         JLabel header = bodyLabel(title);
-        header.setFont(header.getFont().deriveFont(Font.BOLD, 12f));
+        header.setFont(cf(Font.BOLD, 13f));
 
         JScrollPane scroll = new JScrollPane(area);
         scroll.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -278,6 +293,99 @@ public final class RuneAlyticsUi
         card.add(scroll);
 
         return card;
+    }
+
+    // ---------- PANEL HEADER ----------
+
+    private static final Color HEADER_TEAL = new Color(82, 196, 196);
+    private static final Color HEADER_GOLD  = new Color(212, 175, 55);
+
+    /**
+     * Shared branding header used at the top of every panel tab.
+     * Layout (centered):
+     *   [RuneAlytics logo — 42 px wide]
+     *   KNOW MORE. PLAY SMARTER.
+     *   {tabName}
+     */
+    public static JPanel buildPanelHeader(String tabName)
+    {
+        JPanel outer = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        outer.setOpaque(false);
+        outer.setAlignmentX(Component.LEFT_ALIGNMENT);
+        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
+
+        JPanel inner = new JPanel();
+        inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
+        inner.setOpaque(false);
+
+        // Logo — prefer the glow-free header logo, fall back to the app logo.
+        BufferedImage img = tryLoadHeaderImage("/lightLogo_noglow.png");
+        if (img == null) img = tryLoadHeaderImage("/runealytics_logo.png");
+
+        if (img != null)
+        {
+            JLabel logoLbl = scaledImageLabel(img, 72);
+            logoLbl.setAlignmentX(Component.CENTER_ALIGNMENT);
+            inner.add(logoLbl);
+            inner.add(vSpace(5));
+        }
+
+        JLabel tagline = new JLabel("KNOW MORE. PLAY SMARTER.", SwingConstants.CENTER);
+        tagline.setFont(cf(Font.BOLD, 12f));
+        tagline.setForeground(HEADER_TEAL);
+        tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
+        inner.add(tagline);
+
+        inner.add(vSpace(2));
+
+        JLabel tabLbl = new JLabel(tabName, SwingConstants.CENTER);
+        tabLbl.setFont(cf(Font.BOLD, 14f));
+        tabLbl.setForeground(HEADER_GOLD);
+        tabLbl.setAlignmentX(Component.CENTER_ALIGNMENT);
+        inner.add(tabLbl);
+
+        outer.add(inner);
+        return outer;
+    }
+
+    private static BufferedImage tryLoadHeaderImage(String resource)
+    {
+        try
+        {
+            return ImageUtil.loadImageResource(RuneAlyticsUi.class, resource);
+        }
+        catch (Exception e)
+        {
+            log.debug("Header image '{}' could not be loaded: {}", resource, e.getMessage());
+            return null;
+        }
+    }
+
+    private static JLabel scaledImageLabel(BufferedImage src, int targetW)
+    {
+        int finalW = Math.min(targetW, src.getWidth());
+        int finalH = Math.max(1, (int) Math.round(src.getHeight() * (finalW / (double) src.getWidth())));
+
+        if (finalW == src.getWidth())
+        {
+            JLabel lbl = new JLabel(new ImageIcon(src));
+            lbl.setPreferredSize(new Dimension(src.getWidth(), src.getHeight()));
+            lbl.setMaximumSize(new Dimension(src.getWidth(), src.getHeight()));
+            return lbl;
+        }
+
+        BufferedImage dest = new BufferedImage(finalW, finalH, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = dest.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g2.setRenderingHint(RenderingHints.KEY_RENDERING,     RenderingHints.VALUE_RENDER_QUALITY);
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,  RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.drawImage(src, 0, 0, finalW, finalH, null);
+        g2.dispose();
+
+        JLabel lbl = new JLabel(new ImageIcon(dest));
+        lbl.setPreferredSize(new Dimension(finalW, finalH));
+        lbl.setMaximumSize(new Dimension(finalW, finalH));
+        return lbl;
     }
 
     // ---------- SPACERS ----------
