@@ -545,7 +545,7 @@ public class LootTrackerManager
 
         log.debug("Zero-loot kill: '{}' id={} cb={}", name, npcId, npc.getCombatLevel());
         recordKill(name, npcId, npc.getCombatLevel(),
-                client.getWorld(), Collections.emptyList());
+                client.getWorld(), new ArrayList<>());
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1220,7 +1220,7 @@ public class LootTrackerManager
         killRecord.setKillNumber(killNumber);
         killRecord.setWorld(world);
         killRecord.setCombatLevel(combatLevel);
-        killRecord.setDrops(drops);
+        killRecord.setDrops(new ArrayList<>(drops));
         killRecord.setSyncedToServer(false); // picked up by the next batch
         killRecord.setGameMode(state.getCurrentGameMode());
         killRecord.setAccountType(state.getCurrentAccountSubtype());
