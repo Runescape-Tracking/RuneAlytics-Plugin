@@ -210,7 +210,7 @@ public class LootStorageManager
         killRecord.setKillNumber(killNumber);
         killRecord.setWorld(world);
         killRecord.setCombatLevel(combatLevel);
-        killRecord.setDrops(drops);
+        killRecord.setDrops(new java.util.ArrayList<>(drops));
         killRecord.setSyncedToServer(false);
         killRecord.setLocation(location);
 
