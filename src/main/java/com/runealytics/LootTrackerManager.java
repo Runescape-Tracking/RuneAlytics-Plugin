@@ -2,6 +2,7 @@ package com.runealytics;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.gson.Gson;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
 import net.runelite.api.widgets.Widget;
@@ -268,6 +269,7 @@ public class LootTrackerManager
     private final LootTrackerApiClient     apiClient;
     private final ConfigManager            configManager;
     private final ScheduledExecutorService executorService;
+    private final Gson                     gson;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  MUTABLE STATE
@@ -352,7 +354,8 @@ public class LootTrackerManager
             LootStorageManager       storageManager,
             LootTrackerApiClient     apiClient,
             ConfigManager            configManager,
-            ScheduledExecutorService executorService
+            ScheduledExecutorService executorService,
+            Gson                     gson
     )
     {
         this.client          = client;
@@ -364,6 +367,7 @@ public class LootTrackerManager
         this.apiClient       = apiClient;
         this.configManager   = configManager;
         this.executorService = executorService;
+        this.gson            = gson.newBuilder().setPrettyPrinting().create();
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -2137,8 +2141,7 @@ public class LootTrackerManager
             try (java.io.FileWriter fw = new java.io.FileWriter(tmp,
                     java.nio.charset.StandardCharsets.UTF_8))
             {
-                new com.google.gson.GsonBuilder().setPrettyPrinting()
-                        .create().toJson(allRecords, fw);
+                gson.toJson(allRecords, fw);
             }
             return tmp;
         }
