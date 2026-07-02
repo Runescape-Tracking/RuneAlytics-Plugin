@@ -44,8 +44,7 @@ import static com.runealytics.RuneAlyticsPanel.*;
 @PluginDescriptor(
         name = "RuneAlytics",
         description = "Advanced loot tracking and analytics",
-        tags = {"loot", "tracking", "analytics"},
-        enabledByDefault = false
+        tags = {"loot", "tracking", "analytics"}
 )
 public class RuneAlyticsPlugin extends Plugin
 {
