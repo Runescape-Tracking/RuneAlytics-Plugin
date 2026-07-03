@@ -3,6 +3,7 @@ package com.runealytics;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Skill;
 import net.runelite.client.game.SkillIconManager;
+import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.PluginPanel;
 
 import javax.inject.Inject;
@@ -15,6 +16,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.ScrollPaneConstants;
+import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
@@ -25,10 +27,13 @@ import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Container;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.LayoutManager;
+import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,7 +56,8 @@ import java.util.Map;
 public class RuneAlyticsXpTrackerPanel extends PluginPanel
 {
     // ── Shared theme (referenced by the row / detail components) ──────────────
-    static final Color NAVY_BG     = new Color(16, 20, 32);
+    // Base background matches the other RuneAlytics tabs (Loot Tracker etc.).
+    static final Color NAVY_BG     = ColorScheme.DARK_GRAY_COLOR;
     static final Color CARD_BG     = new Color(26, 31, 46);
     static final Color CARD_BORDER = new Color(44, 52, 74);
     static final Color CELL_BG     = new Color(30, 36, 52);
@@ -82,7 +88,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 
     // ── Swing structure ───────────────────────────────────────────────────────
     private final CardLayout cards = new CardLayout();
-    private final JPanel cardPanel = new JPanel(cards);
+    private final JPanel cardPanel = new ScrollableView(cards);
     private final RuneAlyticsXpSkillDetailPanel detailPanel;
 
     private final JLabel accountLabel = new JLabel();
@@ -133,8 +139,12 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         cardPanel.add(main, CARD_MAIN);
         cardPanel.add(detailPanel, CARD_DETAIL);
 
+        // ALWAYS-on 8px scrollbar keeps the content width constant, so the layout
+        // never shifts horizontally when content grows past the viewport height.
+        // The ScrollableView forces the content to the viewport width, so nothing
+        // is ever clipped on the right and the scrollbar never overlaps content.
         JScrollPane scroll = new JScrollPane(cardPanel,
-                ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS,
                 ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         scroll.setBorder(new EmptyBorder(0, 0, 0, 0));
         scroll.getVerticalScrollBar().setUnitIncrement(16);
@@ -142,6 +152,38 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         scroll.getViewport().setBackground(NAVY_BG);
         scroll.setBackground(NAVY_BG);
         add(scroll, BorderLayout.CENTER);
+    }
+
+    /**
+     * Mirror the parent's height as our preferred height (like the root
+     * RuneAlytics panel) so the tab grows and shrinks with the client window and
+     * the scroll viewport always fills the available vertical space.
+     */
+    @Override
+    public Dimension getPreferredSize()
+    {
+        Container parent = getParent();
+        int h = (parent != null && parent.getHeight() > 0) ? parent.getHeight() : 400;
+        return new Dimension(PluginPanel.PANEL_WIDTH + 10, h);
+    }
+
+    /**
+     * Scroll content that is forced to the viewport's width (never wider), so the
+     * design reflows within the available space and is never clipped by the
+     * always-on vertical scrollbar.
+     */
+    private static final class ScrollableView extends JPanel implements Scrollable
+    {
+        ScrollableView(LayoutManager layout)
+        {
+            super(layout);
+        }
+
+        @Override public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
+        @Override public int getScrollableUnitIncrement(Rectangle r, int o, int d) { return 16; }
+        @Override public int getScrollableBlockIncrement(Rectangle r, int o, int d) { return Math.max(16, r.height - 16); }
+        @Override public boolean getScrollableTracksViewportWidth()  { return true; }
+        @Override public boolean getScrollableTracksViewportHeight() { return false; }
     }
 
     private JPanel buildMainView()
@@ -344,7 +386,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 
     private void updateSkillRows(long now)
     {
-        List<RuneAlyticsXpSkillState> states = sessionManager.snapshotStates();
+        List<RuneAlyticsXpSkillState> states = sessionManager.snapshotStates(config.xpShowAllSkills());
+        long liveWindow = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
         List<Skill> order = new ArrayList<>(states.size());
         for (RuneAlyticsXpSkillState st : states) order.add(st.getSkill());
@@ -371,7 +414,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         for (RuneAlyticsXpSkillState st : states)
         {
             RuneAlyticsXpSkillRow row = rows.get(st.getSkill());
-            if (row != null) row.update(st, now);
+            if (row == null) continue;
+            // "LIVE" = still gaining XP; drops off once idle past the AFK window.
+            boolean live = st.hasGains() && st.getLastGainMs() > 0
+                    && (now - st.getLastGainMs()) < liveWindow;
+            row.update(st, now, live);
         }
     }
 

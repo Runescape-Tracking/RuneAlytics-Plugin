@@ -119,7 +119,7 @@ public class RuneAlyticsPanel extends PluginPanel
             {
                 Container p = getParent();
                 int h = (p != null && p.getHeight() > 0) ? p.getHeight() : 400;
-                return new Dimension(PluginPanel.PANEL_WIDTH, h);
+                return new Dimension(PluginPanel.PANEL_WIDTH + 10, h);
             }
         };
         tabbedPane.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -143,7 +143,7 @@ public class RuneAlyticsPanel extends PluginPanel
     {
         Container p = getParent();
         int h = (p != null && p.getHeight() > 0) ? p.getHeight() : 400;
-        return new Dimension(PluginPanel.PANEL_WIDTH, h);
+        return new Dimension(PluginPanel.PANEL_WIDTH + 10, h);
     }
 
     // ═════════════════════════════════════════════════════════════════════════

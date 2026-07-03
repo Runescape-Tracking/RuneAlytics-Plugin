@@ -324,6 +324,19 @@ public interface RunealyticsConfig extends Config
         return false;
     }
 
+    @ConfigItem(
+            keyName = "xpShowAllSkills",
+            name = "Show All Skills",
+            description = "List every skill (including untrained ones) rather than only "
+                    + "skills gained this session — useful for previewing the layout",
+            section = xpTrackerSection,
+            position = 9
+    )
+    default boolean xpShowAllSkills()
+    {
+        return false;
+    }
+
     // ==================== PRIVACY ====================
 
     @ConfigSection(

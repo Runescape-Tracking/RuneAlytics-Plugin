@@ -47,6 +47,7 @@ class RuneAlyticsXpSkillRow extends JPanel
     private static final Font LVL_FONT    = new Font("Calibri", Font.PLAIN, 11);
     private static final Font VALUE_FONT  = new Font("Calibri", Font.BOLD, 12);
     private static final Font SMALL_FONT  = new Font("Calibri", Font.PLAIN, 10);
+    private static final Font LIVE_FONT   = new Font("Calibri", Font.BOLD, 9);
 
     private static final Color HOVER_BG = new Color(34, 41, 60);
 
@@ -54,6 +55,7 @@ class RuneAlyticsXpSkillRow extends JPanel
     private final RunealyticsConfig config;
 
     private final JLabel nameLabel   = new JLabel();
+    private final JLabel liveLabel   = new JLabel("● LIVE");
     private final JLabel levelLabel  = new JLabel();
     private final JLabel gainedLabel = new JLabel();
     private final JLabel rateLabel   = new JLabel();
@@ -101,11 +103,24 @@ class RuneAlyticsXpSkillRow extends JPanel
         nameLabel.setFont(NAME_FONT);
         nameLabel.setForeground(TEXT);
         nameLabel.setText(prettyName(skill));
-        nameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        // Name line: [Skill name]  ● LIVE (green, only while actively training)
+        JPanel nameLine = new JPanel();
+        nameLine.setLayout(new BoxLayout(nameLine, BoxLayout.X_AXIS));
+        nameLine.setOpaque(false);
+        nameLine.setAlignmentX(Component.LEFT_ALIGNMENT);
+        liveLabel.setFont(LIVE_FONT);
+        liveLabel.setForeground(XP_GREEN);
+        liveLabel.setVisible(false);
+        nameLine.add(nameLabel);
+        nameLine.add(Box.createRigidArea(new Dimension(6, 0)));
+        nameLine.add(liveLabel);
+        nameLine.add(Box.createHorizontalGlue());
+
         levelLabel.setFont(LVL_FONT);
         levelLabel.setForeground(MUTED);
         levelLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        nameCol.add(nameLabel);
+        nameCol.add(nameLine);
         nameCol.add(levelLabel);
 
         JPanel left = new JPanel(new BorderLayout(6, 0));
@@ -209,11 +224,12 @@ class RuneAlyticsXpSkillRow extends JPanel
     }
 
     /** Refreshes this row's values from the given state. Runs on the EDT. */
-    void update(RuneAlyticsXpSkillState st, long nowMs)
+    void update(RuneAlyticsXpSkillState st, long nowMs, boolean live)
     {
         boolean ignoreAfk = config.xpIgnoreAfk();
         long afk = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
+        if (liveLabel.isVisible() != live) liveLabel.setVisible(live);
         levelLabel.setText("Lvl. " + st.displayLevel());
         // True XP-gained value (e.g. 1,441,027), never abbreviated.
         gainedLabel.setText(XpFormat.comma(st.getTotalGained()));

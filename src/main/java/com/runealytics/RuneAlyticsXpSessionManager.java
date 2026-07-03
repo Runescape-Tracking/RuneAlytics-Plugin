@@ -365,12 +365,25 @@ class RuneAlyticsXpSessionManager
     /** Skills that have gained XP this session, most-recently-trained first. */
     List<RuneAlyticsXpSkillState> snapshotStates()
     {
+        return snapshotStates(false);
+    }
+
+    /**
+     * Session skills, most-recently-trained first (so the actively-training skill
+     * floats to the top). Untrained skills — which have {@code lastGainMs == 0} —
+     * sort to the bottom in skill order and are only included when
+     * {@code includeUntrained} is set.
+     */
+    List<RuneAlyticsXpSkillState> snapshotStates(boolean includeUntrained)
+    {
         List<RuneAlyticsXpSkillState> list = new ArrayList<>();
         for (RuneAlyticsXpSkillState st : states.values())
         {
-            if (st.hasGains()) list.add(st);
+            if (includeUntrained || st.hasGains()) list.add(st);
         }
-        list.sort(Comparator.comparingLong(RuneAlyticsXpSkillState::getLastGainMs).reversed());
+        list.sort(Comparator
+                .comparingLong(RuneAlyticsXpSkillState::getLastGainMs).reversed()
+                .thenComparingInt(s -> s.getSkill().ordinal()));
         return list;
     }
 

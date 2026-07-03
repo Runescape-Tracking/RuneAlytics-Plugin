@@ -30,6 +30,11 @@ class XpSparkline extends JComponent
 
     private List<RuneAlyticsXpSkillState.Sample> samples = java.util.Collections.emptyList();
 
+    // Cheap signature of the last-painted data, so we skip repaints (and the
+    // resulting visual churn) when the samples have not actually changed.
+    private int  lastSize = -1;
+    private long lastSig  = Long.MIN_VALUE;
+
     XpSparkline()
     {
         setOpaque(false);
@@ -40,7 +45,19 @@ class XpSparkline extends JComponent
 
     void setSamples(List<RuneAlyticsXpSkillState.Sample> s)
     {
-        this.samples = (s != null) ? s : java.util.Collections.emptyList();
+        List<RuneAlyticsXpSkillState.Sample> next = (s != null) ? s : java.util.Collections.emptyList();
+        this.samples = next;
+
+        int size = next.size();
+        long sig = 0L;
+        if (size > 0)
+        {
+            RuneAlyticsXpSkillState.Sample last = next.get(size - 1);
+            sig = last.timeMs * 31L + last.totalGained;
+        }
+        if (size == lastSize && sig == lastSig) return; // no visual change → no repaint
+        lastSize = size;
+        lastSig  = sig;
         repaint();
     }
 
