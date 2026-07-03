@@ -13,23 +13,22 @@ import java.util.List;
 /**
  * Per-skill XP session state for the RuneAlytics XP Tracker.
  *
- * <p>One instance is created per skill the moment the first {@link net.runelite.api.events.StatChanged}
- * for that skill is observed after login. That first observation is treated as
- * the <em>baseline</em> — its XP is recorded as {@link #startXp} and no gain is
- * counted, which is how invalid startup XP spikes are ignored (a skill's first
- * StatChanged after login carries the full current XP, not a delta).</p>
+ * <p>One instance is created per skill the moment the first
+ * {@link net.runelite.api.events.StatChanged} for that skill is observed after
+ * login. That first observation is treated as the <em>baseline</em> — its XP is
+ * recorded as {@link #startXp} and no gain is counted, which is how invalid
+ * startup XP spikes are ignored.</p>
  *
- * <h2>XP/hr &amp; AFK smoothing</h2>
- * XP/hr is {@code totalGained / activeTime}. When AFK-ignoring is enabled, any
- * idle gap between two gains longer than the AFK timeout has its excess
- * subtracted from the active time, so standing idle does not deflate the rate.
- * The subtraction is also applied live (against "now") so the rate freezes while
- * currently AFK instead of decaying.
+ * <h2>Timekeeping</h2>
+ * All rate math ({@link #xpPerHour}, {@link #actionsPerHour},
+ * {@link #timeToNextLevelMs}) works in the <em>active-session clock</em> supplied
+ * by {@link RuneAlyticsXpSessionManager}. That clock excludes logged-out time, so
+ * XP/hr and time-to-level freeze while the player is logged out and resume on
+ * login — the rate is computed purely from time actually spent in-game. When AFK
+ * smoothing is enabled, in-game idle beyond the AFK timeout is also excluded.
  *
- * <p>All mutation happens on the RuneLite client thread (from
- * {@code onStatChanged}); the read-only derived getters used by the Swing panel
- * only read {@code volatile}/primitive fields and copy the drop/sample lists, so
- * a slightly stale read on the EDT is harmless.</p>
+ * <p>Drop timestamps, the "LIVE" marker and chart sample X-positions use real
+ * wall-clock time so "time ago" and the last-hour window stay truthful.</p>
  */
 @Getter
 class RuneAlyticsXpSkillState
@@ -48,21 +47,26 @@ class RuneAlyticsXpSkillState
     private volatile int  currentLevel;
     private volatile long totalGained;
 
-    /** Wall-clock ms of the first real gain (0 until then). */
-    private volatile long firstGainMs;
-    /** Wall-clock ms of the most recent real gain. */
-    private volatile long lastGainMs;
-    /** Accumulated idle time (ms) beyond the AFK grace window, from past gaps. */
+    /** True once at least one real gain has been recorded. */
+    private volatile boolean started;
+    /** Active-clock ms of the first real gain. */
+    private volatile long firstActiveMs;
+    /** Active-clock ms of the most recent real gain. */
+    private volatile long lastActiveMs;
+    /** Accumulated in-game idle (active-clock ms) beyond the AFK grace window. */
     private volatile long afkPausedMs;
+
+    /** Wall-clock ms of the most recent gain — drives "LIVE" + list ordering. */
+    private volatile long lastGainWallMs;
 
     private volatile int lastDropXp;
     private volatile int actions;
 
-    /** Most-recent-first list of XP drops (amount + time). Guarded by {@code this}. */
+    /** Most-recent-first list of XP drops (amount + wall time). Guarded by {@code this}. */
     private final Deque<XpDrop> recentDrops = new ArrayDeque<>();
-    /** Cumulative-gained trend samples. Guarded by {@code this}. */
+    /** Cumulative-gained trend samples (wall time). Guarded by {@code this}. */
     private final List<Sample> samples = new ArrayList<>();
-    /** Rolling XP/hr samples (last hour) for the detail chart. Guarded by {@code this}. */
+    /** Rolling XP/hr samples (last hour, wall time). Guarded by {@code this}. */
     private final List<Sample> rateHistory = new ArrayList<>();
 
     RuneAlyticsXpSkillState(Skill skill, long baselineXp)
@@ -79,29 +83,32 @@ class RuneAlyticsXpSkillState
     /**
      * Records a raw XP observation for this skill.
      *
-     * @return the positive XP gained, or {@code 0} when the observation was not a
-     *         forward gain (equal or, defensively, lower XP).
+     * @param newXp     the skill's current total XP
+     * @param wallNow   real wall-clock ms
+     * @param activeNow active-session-clock ms (excludes logged-out time)
+     * @return the positive XP gained, or {@code 0} when not a forward gain.
      */
-    synchronized int record(long newXp, long nowMs, boolean ignoreAfk, long afkTimeoutMs)
+    synchronized int record(long newXp, long wallNow, long activeNow, boolean ignoreAfk, long afkTimeoutMs)
     {
         int gained = (int) (newXp - currentXp);
         if (gained <= 0)
         {
-            // Defensive: never let XP go backwards (e.g. a stray duplicate event).
             if (newXp > currentXp) currentXp = newXp;
             return 0;
         }
 
-        if (firstGainMs == 0L)
+        if (!started)
         {
-            firstGainMs = nowMs;
+            started       = true;
+            firstActiveMs = activeNow;
         }
         else
         {
-            long gap = nowMs - lastGainMs;
+            long gap = activeNow - lastActiveMs;
             if (gap > afkTimeoutMs) afkPausedMs += (gap - afkTimeoutMs);
         }
-        lastGainMs = nowMs;
+        lastActiveMs   = activeNow;
+        lastGainWallMs = wallNow;
 
         currentXp    = newXp;
         currentLevel = levelForXp(newXp);
@@ -109,21 +116,19 @@ class RuneAlyticsXpSkillState
         lastDropXp   = gained;
         actions++;
 
-        recentDrops.addFirst(new XpDrop(gained, nowMs));
+        recentDrops.addFirst(new XpDrop(gained, wallNow));
         while (recentDrops.size() > MAX_RECENT_DROPS) recentDrops.removeLast();
 
-        samples.add(new Sample(nowMs, totalGained));
+        samples.add(new Sample(wallNow, totalGained));
         if (samples.size() > MAX_SAMPLES) downSample();
 
         return gained;
     }
 
-    /** Halves the sample buffer, preserving the overall trend shape. */
     private void downSample()
     {
         List<Sample> compact = new ArrayList<>(MAX_SAMPLES / 2 + 2);
         for (int i = 0; i < samples.size(); i += 2) compact.add(samples.get(i));
-        // Always keep the latest point so the line ends at the real value.
         Sample last = samples.get(samples.size() - 1);
         if (compact.isEmpty() || compact.get(compact.size() - 1) != last) compact.add(last);
         samples.clear();
@@ -132,7 +137,6 @@ class RuneAlyticsXpSkillState
 
     // ── Derived stats (EDT-safe reads) ────────────────────────────────────────
 
-    /** Real (capped-99) level for display. */
     int displayLevel()
     {
         return Math.min(currentLevel, Experience.MAX_REAL_LEVEL);
@@ -143,7 +147,6 @@ class RuneAlyticsXpSkillState
         return totalGained > 0L;
     }
 
-    /** XP remaining to the next level, or {@code 0} at the virtual cap. */
     long xpToNextLevel()
     {
         int next = levelForXp(currentXp) + 1;
@@ -151,7 +154,6 @@ class RuneAlyticsXpSkillState
         return Experience.getXpForLevel(next) - currentXp;
     }
 
-    /** Progress through the current level as a fraction {@code 0..1}. */
     double levelProgress()
     {
         int lvl = levelForXp(currentXp);
@@ -163,81 +165,75 @@ class RuneAlyticsXpSkillState
         return Math.max(0.0, Math.min(1.0, p));
     }
 
-    /** Active (AFK-adjusted when enabled) session time for this skill, in ms. */
-    long activeMillis(long nowMs, boolean ignoreAfk, long afkTimeoutMs)
+    /** Active training time (active-clock ms), AFK-adjusted when enabled. */
+    long activeMillis(long activeNow, boolean ignoreAfk, long afkTimeoutMs)
     {
-        if (firstGainMs == 0L) return 0L;
-        long elapsed = nowMs - firstGainMs;
+        if (!started) return 0L;
+        long elapsed = activeNow - firstActiveMs;
         if (elapsed < 0L) elapsed = 0L;
         if (!ignoreAfk) return elapsed;
 
         long paused = afkPausedMs;
-        long idle = nowMs - lastGainMs;
+        long idle = activeNow - lastActiveMs;
         if (idle > afkTimeoutMs) paused += (idle - afkTimeoutMs);
         return Math.max(0L, elapsed - paused);
     }
 
-    long xpPerHour(long nowMs, boolean ignoreAfk, long afkTimeoutMs)
+    long xpPerHour(long activeNow, boolean ignoreAfk, long afkTimeoutMs)
     {
-        long active = activeMillis(nowMs, ignoreAfk, afkTimeoutMs);
-        // Require ≥3s of active time before quoting a rate so the first couple of
-        // gains don't produce a wildly inflated XP/hr figure.
+        long active = activeMillis(activeNow, ignoreAfk, afkTimeoutMs);
         if (active < 3_000L || totalGained <= 0L) return 0L;
         return totalGained * 3_600_000L / active;
     }
 
-    long actionsPerHour(long nowMs, boolean ignoreAfk, long afkTimeoutMs)
+    long actionsPerHour(long activeNow, boolean ignoreAfk, long afkTimeoutMs)
     {
-        long active = activeMillis(nowMs, ignoreAfk, afkTimeoutMs);
+        long active = activeMillis(activeNow, ignoreAfk, afkTimeoutMs);
         if (active < 3_000L || actions <= 0) return 0L;
         return (long) actions * 3_600_000L / active;
     }
 
-    /** Estimated ms to the next level at the current rate; {@code -1} when unknown. */
-    long timeToNextLevelMs(long nowMs, boolean ignoreAfk, long afkTimeoutMs)
+    long timeToNextLevelMs(long activeNow, boolean ignoreAfk, long afkTimeoutMs)
     {
-        long rate = xpPerHour(nowMs, ignoreAfk, afkTimeoutMs);
+        long rate = xpPerHour(activeNow, ignoreAfk, afkTimeoutMs);
         long toNext = xpToNextLevel();
         if (rate <= 0L || toNext <= 0L) return -1L;
         return toNext * 3_600_000L / rate;
     }
 
-    /** Snapshot copy of recent drops (most-recent-first) for the EDT. */
     synchronized List<XpDrop> recentDropsSnapshot()
     {
         return new ArrayList<>(recentDrops);
     }
 
-    /** Snapshot copy of trend samples for the EDT. */
     synchronized List<Sample> samplesSnapshot()
     {
         return samples.isEmpty() ? Collections.emptyList() : new ArrayList<>(samples);
     }
 
-    /** Appends a rolling XP/hr sample and prunes anything older than {@code windowMs}. */
-    synchronized void sampleRate(long nowMs, boolean ignoreAfk, long afkTimeoutMs, long windowMs)
+    /** Appends a rolling XP/hr sample (wall X, rate Y) and prunes past {@code windowMs}. */
+    synchronized void sampleRate(long wallNow, long activeNow, boolean ignoreAfk,
+                                 long afkTimeoutMs, long windowMs)
     {
-        rateHistory.add(new Sample(nowMs, xpPerHour(nowMs, ignoreAfk, afkTimeoutMs)));
-        long cutoff = nowMs - windowMs;
+        rateHistory.add(new Sample(wallNow, xpPerHour(activeNow, ignoreAfk, afkTimeoutMs)));
+        long cutoff = wallNow - windowMs;
         rateHistory.removeIf(s -> s.timeMs < cutoff);
         while (rateHistory.size() > MAX_SAMPLES * 3) rateHistory.remove(0);
     }
 
-    /** Snapshot copy of the rolling XP/hr history for the EDT. */
     synchronized List<Sample> rateHistorySnapshot()
     {
         return rateHistory.isEmpty() ? Collections.emptyList() : new ArrayList<>(rateHistory);
     }
 
-    /**
-     * Resets only the XP/hr timing (and rate history) for this skill, keeping the
-     * XP gained. The rate recomputes from the next gain onward.
-     */
+    /** Resets only the XP/hr timing (and rate history), keeping the XP gained. */
     synchronized void resetRate()
     {
-        firstGainMs = 0L;
-        lastGainMs  = 0L;
-        afkPausedMs = 0L;
+        started        = false;
+        firstActiveMs  = 0L;
+        lastActiveMs   = 0L;
+        afkPausedMs    = 0L;
+        lastGainWallMs = 0L;
         rateHistory.clear();
     }
 

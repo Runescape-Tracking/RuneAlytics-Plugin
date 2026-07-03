@@ -108,6 +108,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     private List<Skill> lastOrder = new ArrayList<>();
 
     private JButton syncButton;
+    private JButton eyeButton;
+    private boolean showHidden = false;
 
     private Timer refreshTimer;
     private long syncMessageUntil = 0L;
@@ -275,8 +277,22 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         view.add(chart);
         view.add(Box.createRigidArea(new Dimension(0, 8)));
 
-        // Skills section
-        view.add(sectionLabel("SKILLS"));
+        // Skills section header with a "reveal hidden" toggle (like the Loot Tracker eye).
+        JPanel skillsHeader = new JPanel(new BorderLayout());
+        skillsHeader.setOpaque(false);
+        skillsHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        skillsHeader.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+        skillsHeader.add(sectionLabel("SKILLS"), BorderLayout.WEST);
+        eyeButton = new JButton("Show hidden");
+        eyeButton.setFont(new Font("Calibri", Font.BOLD, 10));
+        eyeButton.setForeground(MUTED);
+        eyeButton.setBackground(CELL_BG);
+        eyeButton.setFocusPainted(false);
+        eyeButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        eyeButton.setBorder(new CompoundBorder(new LineBorder(CARD_BORDER, 1, true), new EmptyBorder(2, 8, 2, 8)));
+        eyeButton.addActionListener(e -> onToggleShowHidden());
+        skillsHeader.add(eyeButton, BorderLayout.EAST);
+        view.add(skillsHeader);
         view.add(Box.createRigidArea(new Dimension(0, 4)));
         skillListPanel.setLayout(new BoxLayout(skillListPanel, BoxLayout.Y_AXIS));
         skillListPanel.setOpaque(false);
@@ -366,24 +382,34 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 
         overallSparkline.setSamples(sessionManager.overallRateHistorySnapshot());
 
+        // Eye toggle: only meaningful when something is hidden (or we're revealing).
+        int hiddenCount = sessionManager.hiddenCount();
+        eyeButton.setVisible(hiddenCount > 0 || showHidden);
+        eyeButton.setText((showHidden ? "Hide hidden" : "Show hidden")
+                + (hiddenCount > 0 ? " (" + hiddenCount + ")" : ""));
+        eyeButton.setForeground(showHidden ? XP_GREEN : MUTED);
+
+        long activeNow = sessionManager.activeElapsed(now);
+
         // Detail view, if showing
         if (detailPanel.getSkill() != null && isDetailShowing())
         {
             RuneAlyticsXpSkillState st = sessionManager.getState(detailPanel.getSkill());
             if (st == null) showMain();
-            else            detailPanel.update(st, now);
+            else            detailPanel.update(st, now, activeNow);
         }
 
         // Skill rows
         if (config.enableXpTracker())
         {
-            updateSkillRows(now);
+            updateSkillRows(now, activeNow);
         }
     }
 
-    private void updateSkillRows(long now)
+    private void updateSkillRows(long now, long activeNow)
     {
-        List<RuneAlyticsXpSkillState> states = sessionManager.snapshotStates(config.xpShowAllSkills());
+        List<RuneAlyticsXpSkillState> states =
+                sessionManager.snapshotStates(config.xpShowAllSkills(), showHidden);
         long liveWindow = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
         List<Skill> order = new ArrayList<>(states.size());
@@ -400,7 +426,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             {
                 RuneAlyticsXpSkillRow row = rows.computeIfAbsent(st.getSkill(), s ->
                         new RuneAlyticsXpSkillRow(s, iconManager, config,
-                                this::showSkillDetail, this::onResetSkillRate, this::onResetSkill));
+                                this::showSkillDetail, this::onResetSkillRate,
+                                this::onResetSkill, this::onToggleHide));
                 skillListPanel.add(row);
                 skillListPanel.add(Box.createRigidArea(new Dimension(0, 4)));
             }
@@ -412,10 +439,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         {
             RuneAlyticsXpSkillRow row = rows.get(st.getSkill());
             if (row == null) continue;
-            // "LIVE" = still gaining XP; drops off once idle past the AFK window.
-            boolean live = st.hasGains() && st.getLastGainMs() > 0
-                    && (now - st.getLastGainMs()) < liveWindow;
-            row.update(st, now, live);
+            // "LIVE" = still gaining XP; drops off once idle past the AFK window
+            // (real wall time, so it also clears while logged out).
+            boolean live = st.hasGains() && st.getLastGainWallMs() > 0
+                    && (now - st.getLastGainWallMs()) < liveWindow;
+            row.update(st, activeNow, live, sessionManager.isHidden(st.getSkill()));
         }
     }
 
@@ -477,8 +505,9 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     {
         RuneAlyticsXpSkillState st = sessionManager.getState(skill);
         if (st == null) return;
+        long now = System.currentTimeMillis();
         detailPanel.showSkill(skill);
-        detailPanel.update(st, System.currentTimeMillis());
+        detailPanel.update(st, now, sessionManager.activeElapsed(now));
         cards.show(cardPanel, CARD_DETAIL);
     }
 
@@ -503,6 +532,10 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 
     private void onResetSession()
     {
+        // Flush the finished session's XP/hr to the website BEFORE clearing it, so
+        // clearing a session records its data for analysis.
+        RuneAlyticsPlugin p = plugin;
+        if (p != null) p.syncXpSession(false);
         sessionManager.reset();
         showMain();
         refresh();
@@ -519,6 +552,22 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     private void onResetSkillRate(Skill skill)
     {
         sessionManager.resetSkillRate(skill);
+        refresh();
+    }
+
+    private void onToggleShowHidden()
+    {
+        showHidden = !showHidden;
+        lastOrder = new ArrayList<>(); // force list rebuild (membership changes)
+        refresh();
+    }
+
+    private void onToggleHide(Skill skill)
+    {
+        sessionManager.setHidden(skill, !sessionManager.isHidden(skill));
+        rows.remove(skill);
+        lastOrder = new ArrayList<>(); // force rebuild so the row appears/disappears
+        showMain();
         refresh();
     }
 

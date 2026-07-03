@@ -23,10 +23,9 @@ import java.util.List;
 class XpSparkline extends JComponent
 {
     private static final Color GRID   = new Color(40, 46, 64);
-    private static final Color LINE    = new Color(120, 150, 245);
-    private static final Color FILL_TOP = new Color(120, 150, 245, 90);
-    private static final Color FILL_BOT = new Color(120, 150, 245, 0);
-    private static final Color AXIS_TEXT = new Color(150, 158, 176);
+    private static final Color LINE_DEFAULT = new Color(120, 150, 245);
+
+    private Color lineColor = LINE_DEFAULT;
 
     private List<RuneAlyticsXpSkillState.Sample> samples = java.util.Collections.emptyList();
 
@@ -41,6 +40,15 @@ class XpSparkline extends JComponent
         setPreferredSize(new Dimension(200, 90));
         setMinimumSize(new Dimension(120, 60));
         setMaximumSize(new Dimension(Integer.MAX_VALUE, 120));
+    }
+
+    /** Sets the line/fill accent colour (e.g. the skill's colour). */
+    void setLineColor(Color c)
+    {
+        Color next = (c != null) ? c : LINE_DEFAULT;
+        if (next.equals(lineColor)) return;
+        lineColor = next;
+        repaint();
     }
 
     void setSamples(List<RuneAlyticsXpSkillState.Sample> s)
@@ -84,11 +92,15 @@ class XpSparkline extends JComponent
                 g2.drawLine(padL, y, w - padR, y);
             }
 
+            Color lineCol = lineColor;
+            Color fillTop = new Color(lineCol.getRed(), lineCol.getGreen(), lineCol.getBlue(), 90);
+            Color fillBot = new Color(lineCol.getRed(), lineCol.getGreen(), lineCol.getBlue(), 0);
+
             List<RuneAlyticsXpSkillState.Sample> data = samples;
             if (data.size() < 2)
             {
                 // Flat baseline until we have a trend to draw.
-                g2.setColor(LINE);
+                g2.setColor(lineCol);
                 g2.setStroke(new BasicStroke(2f));
                 int y = h - padB;
                 g2.drawLine(padL, y, w - padR, y);
@@ -130,10 +142,10 @@ class XpSparkline extends JComponent
             area.lineTo(lastX, baseY);
             area.closePath();
 
-            g2.setPaint(new GradientPaint(0, padT, FILL_TOP, 0, baseY, FILL_BOT));
+            g2.setPaint(new GradientPaint(0, padT, fillTop, 0, baseY, fillBot));
             g2.fill(area);
 
-            g2.setColor(LINE);
+            g2.setColor(lineCol);
             g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             g2.draw(line);
         }

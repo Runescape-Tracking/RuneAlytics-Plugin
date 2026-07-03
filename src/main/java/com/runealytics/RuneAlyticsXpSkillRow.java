@@ -50,9 +50,11 @@ class RuneAlyticsXpSkillRow extends JPanel
     private static final Font LIVE_FONT   = new Font("Calibri", Font.BOLD, 9);
 
     private static final Color HOVER_BG = new Color(34, 41, 60);
+    private static final Color DIM_ACCENT = new Color(90, 96, 110);
 
     private final Skill skill;
     private final RunealyticsConfig config;
+    private final Color skillColor;
 
     private final JLabel nameLabel   = new JLabel();
     private final JLabel liveLabel   = new JLabel("● LIVE");
@@ -62,13 +64,15 @@ class RuneAlyticsXpSkillRow extends JPanel
     private final JLabel infoLabel   = new JLabel();
     private final XpProgressBar bar  = new XpProgressBar();
     private final JPanel bottomRow;
+    private final JMenuItem hideItem = new JMenuItem("Hide skill");
 
     RuneAlyticsXpSkillRow(Skill skill, SkillIconManager iconManager, RunealyticsConfig config,
                           Consumer<Skill> onClick, Consumer<Skill> onResetRate,
-                          Consumer<Skill> onResetSession)
+                          Consumer<Skill> onResetSession, Consumer<Skill> onToggleHide)
     {
-        this.skill  = skill;
-        this.config = config;
+        this.skill      = skill;
+        this.config     = config;
+        this.skillColor = SkillColors.of(skill);
 
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setBackground(CARD_BG);
@@ -101,8 +105,9 @@ class RuneAlyticsXpSkillRow extends JPanel
         nameCol.setLayout(new BoxLayout(nameCol, BoxLayout.Y_AXIS));
         nameCol.setOpaque(false);
         nameLabel.setFont(NAME_FONT);
-        nameLabel.setForeground(TEXT);
+        nameLabel.setForeground(skillColor);
         nameLabel.setText(prettyName(skill));
+        bar.setAccent(skillColor);
 
         // Name line: [Skill name]  ● LIVE (green, only while actively training)
         JPanel nameLine = new JPanel();
@@ -158,16 +163,18 @@ class RuneAlyticsXpSkillRow extends JPanel
         add(Box.createRigidArea(new Dimension(0, 2)));
         add(bottomRow);
 
-        // ── Right-click reset menu ──
+        // ── Right-click menu: hide + resets ──
         JPopupMenu menu = new JPopupMenu();
         JMenuItem header = new JMenuItem(prettyName(skill));
         header.setEnabled(false);
         menu.add(header);
         menu.addSeparator();
+        hideItem.addActionListener(e -> { if (onToggleHide != null) onToggleHide.accept(skill); });
         JMenuItem resetRateItem = new JMenuItem("Reset XP/hr");
         resetRateItem.addActionListener(e -> { if (onResetRate != null) onResetRate.accept(skill); });
         JMenuItem resetSessionItem = new JMenuItem("Reset session XP");
         resetSessionItem.addActionListener(e -> { if (onResetSession != null) onResetSession.accept(skill); });
+        menu.add(hideItem);
         menu.add(resetRateItem);
         menu.add(resetSessionItem);
 
@@ -223,20 +230,32 @@ class RuneAlyticsXpSkillRow extends JPanel
         return skill;
     }
 
-    /** Refreshes this row's values from the given state. Runs on the EDT. */
-    void update(RuneAlyticsXpSkillState st, long nowMs, boolean live)
+    /**
+     * Refreshes this row's values. Runs on the EDT.
+     *
+     * @param activeNow active-session-clock ms (pauses when logged out) used for
+     *                  all rate/time calculations
+     */
+    void update(RuneAlyticsXpSkillState st, long activeNow, boolean live, boolean hidden)
     {
         boolean ignoreAfk = config.xpIgnoreAfk();
         long afk = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
-        if (liveLabel.isVisible() != live) liveLabel.setVisible(live);
+        // Hidden rows (only shown while "reveal hidden" is on) are dimmed and never
+        // marked LIVE, but still update their values.
+        hideItem.setText(hidden ? "Unhide skill" : "Hide skill");
+        nameLabel.setForeground(hidden ? MUTED : skillColor);
+        bar.setAccent(hidden ? DIM_ACCENT : skillColor);
+
+        boolean showLive = live && !hidden;
+        if (liveLabel.isVisible() != showLive) liveLabel.setVisible(showLive);
         levelLabel.setText("Lvl. " + st.displayLevel());
         // True XP-gained value (e.g. 1,441,027), never abbreviated.
         gainedLabel.setText(XpFormat.comma(st.getTotalGained()));
 
         if (config.xpShowPerHour())
         {
-            rateLabel.setText(XpFormat.compactUpper(st.xpPerHour(nowMs, ignoreAfk, afk)) + "/hr");
+            rateLabel.setText(XpFormat.compactUpper(st.xpPerHour(activeNow, ignoreAfk, afk)) + "/hr");
             rateLabel.setVisible(true);
         }
         else
@@ -249,18 +268,18 @@ class RuneAlyticsXpSkillRow extends JPanel
         if (showBottom)
         {
             bar.setFraction(st.levelProgress());
-            infoLabel.setText(buildInfo(st, nowMs, ignoreAfk, afk));
+            infoLabel.setText(buildInfo(st, activeNow, ignoreAfk, afk));
             infoLabel.setVisible(true);
         }
     }
 
     /** Builds the "time-to-level · xp-to-next" info string for the bottom row. */
-    private String buildInfo(RuneAlyticsXpSkillState st, long nowMs, boolean ignoreAfk, long afk)
+    private String buildInfo(RuneAlyticsXpSkillState st, long activeNow, boolean ignoreAfk, long afk)
     {
         long toNext = st.xpToNextLevel();
         if (toNext <= 0) return "maxed";
 
-        String ttl = XpFormat.timeToLevel(st.timeToNextLevelMs(nowMs, ignoreAfk, afk));
+        String ttl = XpFormat.timeToLevel(st.timeToNextLevelMs(activeNow, ignoreAfk, afk));
         String toNextStr = config.xpShowXpToNext()
                 ? XpFormat.compactUpper(toNext) + " to " + (st.displayLevel() + 1)
                 : "";

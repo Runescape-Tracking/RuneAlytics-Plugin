@@ -76,10 +76,18 @@ class RuneAlyticsXpSessionManager
     /** Wall-clock ms the current session began ({@code 0} = not started). */
     @Getter private volatile long sessionStartMs;
 
-    // Session-level active-time accounting (mirrors the per-skill model).
-    private volatile long sessionFirstGainMs;
-    private volatile long sessionLastGainMs;
+    // Session-level active-time accounting (active-clock domain).
+    private volatile boolean sessionStarted;
+    private volatile long sessionFirstActiveMs;
+    private volatile long sessionLastActiveMs;
     private volatile long sessionAfkPausedMs;
+
+    // Active-session clock: real elapsed time minus any logged-out spans, so the
+    // session runtime and every XP/hr figure freeze while logged out and resume
+    // on login. pauseStartWall != 0 means we are currently paused (logged out).
+    private volatile boolean loggedIn;
+    private volatile long pausedAccumMs;
+    private volatile long pauseStartWall;
 
     // Rolling overall XP/hr history (last hour).
     private final List<RuneAlyticsXpSkillState.Sample> overallRateHistory = new ArrayList<>();
@@ -90,6 +98,10 @@ class RuneAlyticsXpSessionManager
     private volatile String todayDate;
     private volatile long   lastTodayPersistMs;
 
+    // Skills hidden from the list (still counted in totals). Persisted globally.
+    private static final String HIDDEN_KEY = "xpHiddenSkills";
+    private final java.util.Set<Skill> hiddenSkills = ConcurrentHashMap.newKeySet();
+
     @Inject
     RuneAlyticsXpSessionManager(RunealyticsConfig config, CurrentPlayerIdentityService identity,
                                 ConfigManager configManager)
@@ -97,6 +109,7 @@ class RuneAlyticsXpSessionManager
         this.config        = config;
         this.identity      = identity;
         this.configManager = configManager;
+        loadHidden();
     }
 
     // ── Ingest (client thread) ────────────────────────────────────────────────
@@ -119,6 +132,7 @@ class RuneAlyticsXpSessionManager
             startNewSession(acct);
         }
 
+        long now = System.currentTimeMillis();
         RuneAlyticsXpSkillState st = states.get(skill);
         if (st == null)
         {
@@ -127,41 +141,80 @@ class RuneAlyticsXpSessionManager
             return;
         }
 
-        long now = System.currentTimeMillis();
-        int gained = st.record(xp, now, config.xpIgnoreAfk(), afkTimeoutMs());
+        long activeNow = activeElapsed(now);
+        int gained = st.record(xp, now, activeNow, config.xpIgnoreAfk(), afkTimeoutMs());
         if (gained > 0)
         {
             addToday(gained, now, acct);
-            onSessionGain(now);
+            onSessionGain(activeNow);
         }
     }
 
-    private void onSessionGain(long nowMs)
+    private void onSessionGain(long activeNow)
     {
-        if (sessionFirstGainMs == 0L)
+        if (!sessionStarted)
         {
-            sessionFirstGainMs = nowMs;
+            sessionStarted       = true;
+            sessionFirstActiveMs = activeNow;
         }
         else
         {
-            long gap = nowMs - sessionLastGainMs;
+            long gap = activeNow - sessionLastActiveMs;
             if (gap > afkTimeoutMs()) sessionAfkPausedMs += (gap - afkTimeoutMs());
         }
-        sessionLastGainMs = nowMs;
+        sessionLastActiveMs = activeNow;
     }
 
     private void startNewSession(String acct)
     {
         states.clear();
         synchronized (overallRateHistory) { overallRateHistory.clear(); }
-        sessionAccountKey  = acct;
-        sessionStartMs     = System.currentTimeMillis();
-        sessionFirstGainMs = 0L;
-        sessionLastGainMs  = 0L;
-        sessionAfkPausedMs = 0L;
-        lastRateSampleMs   = 0L;
+        sessionAccountKey    = acct;
+        sessionStartMs       = System.currentTimeMillis();
+        sessionStarted       = false;
+        sessionFirstActiveMs = 0L;
+        sessionLastActiveMs  = 0L;
+        sessionAfkPausedMs   = 0L;
+        lastRateSampleMs     = 0L;
+        // A gain implies we're in-game (covers the plugin being enabled
+        // mid-session, when no LOGGED_IN event fires), so start the clock running.
+        loggedIn             = true;
+        pausedAccumMs        = 0L;
+        pauseStartWall       = 0L;
         loadToday(acct);
         log.debug("[XP-Session] started for account '{}'", acct);
+    }
+
+    // ── Active-session clock ──────────────────────────────────────────────────
+
+    /**
+     * Notifies the manager of login state so the active-session clock can pause
+     * (logout) and resume (login). Called from the plugin's game-state handler.
+     */
+    void setLoggedIn(boolean in)
+    {
+        long now = System.currentTimeMillis();
+        if (in)
+        {
+            if (pauseStartWall > 0L)
+            {
+                pausedAccumMs += Math.max(0L, now - pauseStartWall);
+                pauseStartWall = 0L;
+            }
+        }
+        else if (pauseStartWall == 0L)
+        {
+            pauseStartWall = now;
+        }
+        loggedIn = in;
+    }
+
+    /** Active elapsed session ms (real elapsed minus logged-out spans). */
+    long activeElapsed(long wallNow)
+    {
+        if (sessionStartMs == 0L) return 0L;
+        long paused = pausedAccumMs + (pauseStartWall > 0L ? Math.max(0L, wallNow - pauseStartWall) : 0L);
+        return Math.max(0L, (wallNow - sessionStartMs) - paused);
     }
 
     // ── "Today" total ─────────────────────────────────────────────────────────
@@ -247,6 +300,7 @@ class RuneAlyticsXpSessionManager
 
         boolean ignoreAfk = config.xpIgnoreAfk();
         long afk = afkTimeoutMs();
+        long activeNow = activeElapsed(now);
 
         long rate = overallXpPerHour(now);
         synchronized (overallRateHistory)
@@ -259,7 +313,7 @@ class RuneAlyticsXpSessionManager
 
         for (RuneAlyticsXpSkillState st : states.values())
         {
-            st.sampleRate(now, ignoreAfk, afk, RATE_WINDOW_MS);
+            st.sampleRate(now, activeNow, ignoreAfk, afk, RATE_WINDOW_MS);
         }
     }
 
@@ -279,11 +333,14 @@ class RuneAlyticsXpSessionManager
     {
         states.clear();
         synchronized (overallRateHistory) { overallRateHistory.clear(); }
-        sessionStartMs     = System.currentTimeMillis();
-        sessionFirstGainMs = 0L;
-        sessionLastGainMs  = 0L;
-        sessionAfkPausedMs = 0L;
-        lastRateSampleMs   = 0L;
+        sessionStartMs       = System.currentTimeMillis();
+        sessionStarted       = false;
+        sessionFirstActiveMs = 0L;
+        sessionLastActiveMs  = 0L;
+        sessionAfkPausedMs   = 0L;
+        lastRateSampleMs     = 0L;
+        pausedAccumMs        = 0L;
+        pauseStartWall       = loggedIn ? 0L : sessionStartMs;
         log.debug("[XP-Session] reset (account='{}')", sessionAccountKey);
     }
 
@@ -316,19 +373,21 @@ class RuneAlyticsXpSessionManager
 
     long runtimeMs(long nowMs)
     {
-        return sessionStartMs == 0L ? 0L : Math.max(0L, nowMs - sessionStartMs);
+        // Session runtime excludes logged-out time (pauses on logout).
+        return activeElapsed(nowMs);
     }
 
     long overallXpPerHour(long nowMs)
     {
         long total = totalXpGained();
-        if (total <= 0L || sessionFirstGainMs == 0L) return 0L;
+        if (total <= 0L || !sessionStarted) return 0L;
 
-        long elapsed = nowMs - sessionFirstGainMs;
+        long activeNow = activeElapsed(nowMs);
+        long elapsed = activeNow - sessionFirstActiveMs;
         if (config.xpIgnoreAfk())
         {
             long paused = sessionAfkPausedMs;
-            long idle = nowMs - sessionLastGainMs;
+            long idle = activeNow - sessionLastActiveMs;
             if (idle > afkTimeoutMs()) paused += (idle - afkTimeoutMs());
             elapsed -= paused;
         }
@@ -365,26 +424,86 @@ class RuneAlyticsXpSessionManager
     /** Skills that have gained XP this session, most-recently-trained first. */
     List<RuneAlyticsXpSkillState> snapshotStates()
     {
-        return snapshotStates(false);
+        return snapshotStates(false, false);
     }
 
     /**
      * Session skills, most-recently-trained first (so the actively-training skill
      * floats to the top). Untrained skills — which have {@code lastGainMs == 0} —
      * sort to the bottom in skill order and are only included when
-     * {@code includeUntrained} is set.
+     * {@code includeUntrained} is set. Hidden skills are excluded unless
+     * {@code includeHidden} is set (they always still count toward totals).
      */
-    List<RuneAlyticsXpSkillState> snapshotStates(boolean includeUntrained)
+    List<RuneAlyticsXpSkillState> snapshotStates(boolean includeUntrained, boolean includeHidden)
     {
         List<RuneAlyticsXpSkillState> list = new ArrayList<>();
         for (RuneAlyticsXpSkillState st : states.values())
         {
-            if (includeUntrained || st.hasGains()) list.add(st);
+            if (!includeUntrained && !st.hasGains()) continue;
+            if (!includeHidden && hiddenSkills.contains(st.getSkill())) continue;
+            list.add(st);
         }
         list.sort(Comparator
-                .comparingLong(RuneAlyticsXpSkillState::getLastGainMs).reversed()
+                .comparingLong(RuneAlyticsXpSkillState::getLastGainWallMs).reversed()
                 .thenComparingInt(s -> s.getSkill().ordinal()));
         return list;
+    }
+
+    // ── Hidden skills ─────────────────────────────────────────────────────────
+
+    boolean isHidden(Skill skill)
+    {
+        return skill != null && hiddenSkills.contains(skill);
+    }
+
+    int hiddenCount()
+    {
+        return hiddenSkills.size();
+    }
+
+    void setHidden(Skill skill, boolean hidden)
+    {
+        if (skill == null) return;
+        boolean changed = hidden ? hiddenSkills.add(skill) : hiddenSkills.remove(skill);
+        if (changed) persistHidden();
+    }
+
+    private void loadHidden()
+    {
+        try
+        {
+            String csv = configManager.getConfiguration(CFG_GROUP, HIDDEN_KEY);
+            if (csv == null || csv.isEmpty()) return;
+            for (String name : csv.split(","))
+            {
+                String n = name.trim();
+                if (n.isEmpty()) continue;
+                try { hiddenSkills.add(Skill.valueOf(n)); }
+                catch (IllegalArgumentException ignored) { /* stale/unknown skill name */ }
+            }
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP-Session] could not load hidden skills: {}", e.getMessage());
+        }
+    }
+
+    private void persistHidden()
+    {
+        try
+        {
+            StringBuilder sb = new StringBuilder();
+            for (Skill s : hiddenSkills)
+            {
+                if (sb.length() > 0) sb.append(',');
+                sb.append(s.name());
+            }
+            configManager.setConfiguration(CFG_GROUP, HIDDEN_KEY, sb.toString());
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP-Session] could not persist hidden skills: {}", e.getMessage());
+        }
     }
 
     // ── Sync payload ──────────────────────────────────────────────────────────
@@ -404,6 +523,7 @@ class RuneAlyticsXpSessionManager
         long now = System.currentTimeMillis();
         boolean ignoreAfk = config.xpIgnoreAfk();
         long afk = afkTimeoutMs();
+        long activeNow = activeElapsed(now);
 
         List<RuneAlyticsXpSyncPayload.SkillEntry> entries = new ArrayList<>();
         for (RuneAlyticsXpSkillState st : states.values())
@@ -412,7 +532,7 @@ class RuneAlyticsXpSessionManager
             entries.add(new RuneAlyticsXpSyncPayload.SkillEntry(
                     st.getSkill().getName().toLowerCase(),
                     st.getTotalGained(),
-                    st.xpPerHour(now, ignoreAfk, afk),
+                    st.xpPerHour(activeNow, ignoreAfk, afk),
                     st.displayLevel(),
                     st.getCurrentXp()));
         }
