@@ -28,7 +28,6 @@ import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
-import java.awt.Container;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -188,19 +187,6 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         header.add(sep);
 
         return header;
-    }
-
-    /**
-     * Mirror the parent's height as our preferred height (like the root
-     * RuneAlytics panel) so the tab grows and shrinks with the client window and
-     * the scroll viewport always fills the available vertical space.
-     */
-    @Override
-    public Dimension getPreferredSize()
-    {
-        Container parent = getParent();
-        int h = (parent != null && parent.getHeight() > 0) ? parent.getHeight() : 400;
-        return new Dimension(PluginPanel.PANEL_WIDTH + 10, h);
     }
 
     /**
@@ -420,12 +406,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             clearRows();
         }
 
-        // Summary — runtime is session-wide; XP gained / XP-hr / levels are the
-        // single featured skill (favorite-if-live, else highest-output live skill).
+        // Summary — runtime is session-wide; XP gained / XP-hr / levels + the trend
+        // chart are the single featured skill (favorite-if-live, else highest-output
+        // live skill). updateFeaturedSummary also repoints the chart.
         runtimeVal.setText(XpFormat.duration(sessionManager.runtimeMs(now)));
         updateFeaturedSummary(now, activeNow, liveWindow);
-
-        overallSparkline.setSamples(sessionManager.overallRateHistorySnapshot());
 
         // Eye toggle: only meaningful when something is hidden (or we're revealing).
         int hiddenCount = sessionManager.hiddenCount();
@@ -520,10 +505,17 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             rateVal.setText(config.xpShowPerHour() ? "0" : "—");
             rateVal.setForeground(XP_GREEN);
             levelsVal.setText("0");
+            // No featured skill yet — show the combined trend in the default colour.
+            overallSparkline.setLineColor(null);
+            overallSparkline.setSamples(sessionManager.overallRateHistorySnapshot());
             return;
         }
 
         Color c = SkillColors.of(featured);
+
+        // Chart follows the featured skill: its own XP/hr history, in its colour.
+        overallSparkline.setLineColor(c);
+        overallSparkline.setSamples(fs.rateHistorySnapshot());
 
         // Only touch the icon/name when the featured skill actually changes.
         if (featured != lastFeatured)
