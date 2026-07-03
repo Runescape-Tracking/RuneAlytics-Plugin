@@ -15,6 +15,7 @@ import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JSeparator;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
@@ -159,7 +160,34 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         scroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
         scroll.getViewport().setBackground(NAVY_BG);
         scroll.setBackground(NAVY_BG);
+
+        // Shared branding header, pinned above the scroll like the other tabs.
+        add(buildXpHeader(), BorderLayout.NORTH);
         add(scroll, BorderLayout.CENTER);
+    }
+
+    /**
+     * The fixed branding header, identical in structure to the Loot Tracker's:
+     * the shared {@link RuneAlyticsUi#buildPanelHeader} block on a {@code (28,28,28)}
+     * strip with a divider beneath, pinned at the top so it never scrolls away.
+     */
+    private JPanel buildXpHeader()
+    {
+        JPanel header = new JPanel();
+        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+        header.setBackground(new Color(28, 28, 28));
+        header.setBorder(new EmptyBorder(8, 8, 8, 8));
+
+        header.add(RuneAlyticsUi.buildPanelHeader("XP Tracker"));
+        header.add(Box.createVerticalStrut(8));
+
+        JSeparator sep = new JSeparator();
+        sep.setForeground(new Color(55, 55, 55));
+        sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        sep.setAlignmentX(Component.LEFT_ALIGNMENT);
+        header.add(sep);
+
+        return header;
     }
 
     /**
@@ -202,11 +230,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         view.setOpaque(true);
         view.setBorder(new EmptyBorder(PAD, PAD, PAD, PAD));
 
-        // Header
-        JComponent header = RuneAlyticsUi.buildPanelHeader("XP Tracker");
-        header.setAlignmentX(Component.LEFT_ALIGNMENT);
-        view.add(header);
-        view.add(Box.createRigidArea(new Dimension(0, 6)));
+        // (Branding header is pinned above the scroll — see buildXpHeader.)
 
         // Account + sync badge row
         JPanel acctRow = new JPanel(new BorderLayout());
