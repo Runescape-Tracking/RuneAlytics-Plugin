@@ -102,6 +102,10 @@ class RuneAlyticsXpSessionManager
     private static final String HIDDEN_KEY = "xpHiddenSkills";
     private final java.util.Set<Skill> hiddenSkills = ConcurrentHashMap.newKeySet();
 
+    // Favorited skills — pinned to the session summary while being trained.
+    private static final String FAVORITE_KEY = "xpFavoriteSkills";
+    private final java.util.Set<Skill> favoriteSkills = ConcurrentHashMap.newKeySet();
+
     @Inject
     RuneAlyticsXpSessionManager(RunealyticsConfig config, CurrentPlayerIdentityService identity,
                                 ConfigManager configManager)
@@ -110,6 +114,7 @@ class RuneAlyticsXpSessionManager
         this.identity      = identity;
         this.configManager = configManager;
         loadHidden();
+        loadFavorites();
     }
 
     // ── Ingest (client thread) ────────────────────────────────────────────────
@@ -504,6 +509,112 @@ class RuneAlyticsXpSessionManager
         {
             log.debug("[XP-Session] could not persist hidden skills: {}", e.getMessage());
         }
+    }
+
+    // ── Favorite skills ───────────────────────────────────────────────────────
+
+    boolean isFavorite(Skill skill)
+    {
+        return skill != null && favoriteSkills.contains(skill);
+    }
+
+    void setFavorite(Skill skill, boolean favorite)
+    {
+        if (skill == null) return;
+        boolean changed = favorite ? favoriteSkills.add(skill) : favoriteSkills.remove(skill);
+        if (changed) persistFavorites();
+    }
+
+    private void loadFavorites()
+    {
+        try
+        {
+            String csv = configManager.getConfiguration(CFG_GROUP, FAVORITE_KEY);
+            if (csv == null || csv.isEmpty()) return;
+            for (String name : csv.split(","))
+            {
+                String n = name.trim();
+                if (n.isEmpty()) continue;
+                try { favoriteSkills.add(Skill.valueOf(n)); }
+                catch (IllegalArgumentException ignored) { /* stale/unknown skill name */ }
+            }
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP-Session] could not load favorite skills: {}", e.getMessage());
+        }
+    }
+
+    private void persistFavorites()
+    {
+        try
+        {
+            StringBuilder sb = new StringBuilder();
+            for (Skill s : favoriteSkills)
+            {
+                if (sb.length() > 0) sb.append(',');
+                sb.append(s.name());
+            }
+            configManager.setConfiguration(CFG_GROUP, FAVORITE_KEY, sb.toString());
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP-Session] could not persist favorite skills: {}", e.getMessage());
+        }
+    }
+
+    // ── Featured skill (drives the single-skill session summary) ──────────────
+
+    /**
+     * Chooses the skill to feature in the session summary:
+     * <ol>
+     *   <li>a favorited skill that is currently being trained (highest XP/hr wins
+     *       if several favorites are live), else</li>
+     *   <li>the live skill with the highest XP/hr, else</li>
+     *   <li>the most-recently-trained skill (so the summary isn't empty).</li>
+     * </ol>
+     *
+     * @param wallNow      real wall-clock ms
+     * @param liveWindowMs how long since the last gain still counts as "live"
+     * @return the featured skill, or {@code null} when nothing has been trained
+     */
+    Skill featuredSkill(long wallNow, long liveWindowMs)
+    {
+        long activeNow = activeElapsed(wallNow);
+        boolean ignoreAfk = config.xpIgnoreAfk();
+        long afk = afkTimeoutMs();
+
+        RuneAlyticsXpSkillState bestFav = null, bestLive = null, mostRecent = null;
+        long bestFavRate = -1L, bestFavWall = -1L;
+        long bestLiveRate = -1L, bestLiveWall = -1L;
+        long mostRecentWall = -1L;
+
+        for (RuneAlyticsXpSkillState st : states.values())
+        {
+            if (!st.hasGains()) continue;
+
+            long wall = st.getLastGainWallMs();
+            if (wall > mostRecentWall) { mostRecentWall = wall; mostRecent = st; }
+
+            boolean live = wall > 0L && (wallNow - wall) < liveWindowMs;
+            if (!live) continue;
+
+            long rate = st.xpPerHour(activeNow, ignoreAfk, afk);
+            if (rate > bestLiveRate || (rate == bestLiveRate && wall > bestLiveWall))
+            {
+                bestLive = st; bestLiveRate = rate; bestLiveWall = wall;
+            }
+            if (isFavorite(st.getSkill())
+                    && (rate > bestFavRate || (rate == bestFavRate && wall > bestFavWall)))
+            {
+                bestFav = st; bestFavRate = rate; bestFavWall = wall;
+            }
+        }
+
+        if (bestFav != null)    return bestFav.getSkill();
+        if (bestLive != null)   return bestLive.getSkill();
+        if (mostRecent != null) return mostRecent.getSkill();
+        return null;
     }
 
     // ── Sync payload ──────────────────────────────────────────────────────────

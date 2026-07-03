@@ -57,6 +57,7 @@ class RuneAlyticsXpSkillRow extends JPanel
     private final Color skillColor;
 
     private final JLabel nameLabel   = new JLabel();
+    private final JLabel starLabel   = new JLabel("★");
     private final JLabel liveLabel   = new JLabel("● LIVE");
     private final JLabel levelLabel  = new JLabel();
     private final JLabel gainedLabel = new JLabel();
@@ -65,10 +66,12 @@ class RuneAlyticsXpSkillRow extends JPanel
     private final XpProgressBar bar  = new XpProgressBar();
     private final JPanel bottomRow;
     private final JMenuItem hideItem = new JMenuItem("Hide skill");
+    private final JMenuItem favItem  = new JMenuItem("Favorite skill");
 
     RuneAlyticsXpSkillRow(Skill skill, SkillIconManager iconManager, RunealyticsConfig config,
                           Consumer<Skill> onClick, Consumer<Skill> onResetRate,
-                          Consumer<Skill> onResetSession, Consumer<Skill> onToggleHide)
+                          Consumer<Skill> onResetSession, Consumer<Skill> onToggleHide,
+                          Consumer<Skill> onToggleFavorite)
     {
         this.skill      = skill;
         this.config     = config;
@@ -114,11 +117,16 @@ class RuneAlyticsXpSkillRow extends JPanel
         nameLine.setLayout(new BoxLayout(nameLine, BoxLayout.X_AXIS));
         nameLine.setOpaque(false);
         nameLine.setAlignmentX(Component.LEFT_ALIGNMENT);
+        starLabel.setFont(LIVE_FONT);
+        starLabel.setForeground(GOLD);
+        starLabel.setVisible(false);
         liveLabel.setFont(LIVE_FONT);
         liveLabel.setForeground(XP_GREEN);
         liveLabel.setVisible(false);
         nameLine.add(nameLabel);
-        nameLine.add(Box.createRigidArea(new Dimension(6, 0)));
+        nameLine.add(Box.createRigidArea(new Dimension(4, 0)));
+        nameLine.add(starLabel);
+        nameLine.add(Box.createRigidArea(new Dimension(4, 0)));
         nameLine.add(liveLabel);
         nameLine.add(Box.createHorizontalGlue());
 
@@ -169,12 +177,15 @@ class RuneAlyticsXpSkillRow extends JPanel
         header.setEnabled(false);
         menu.add(header);
         menu.addSeparator();
+        favItem.addActionListener(e -> { if (onToggleFavorite != null) onToggleFavorite.accept(skill); });
         hideItem.addActionListener(e -> { if (onToggleHide != null) onToggleHide.accept(skill); });
         JMenuItem resetRateItem = new JMenuItem("Reset XP/hr");
         resetRateItem.addActionListener(e -> { if (onResetRate != null) onResetRate.accept(skill); });
         JMenuItem resetSessionItem = new JMenuItem("Reset session XP");
         resetSessionItem.addActionListener(e -> { if (onResetSession != null) onResetSession.accept(skill); });
+        menu.add(favItem);
         menu.add(hideItem);
+        menu.addSeparator();
         menu.add(resetRateItem);
         menu.add(resetSessionItem);
 
@@ -236,7 +247,7 @@ class RuneAlyticsXpSkillRow extends JPanel
      * @param activeNow active-session-clock ms (pauses when logged out) used for
      *                  all rate/time calculations
      */
-    void update(RuneAlyticsXpSkillState st, long activeNow, boolean live, boolean hidden)
+    void update(RuneAlyticsXpSkillState st, long activeNow, boolean live, boolean hidden, boolean favorite)
     {
         boolean ignoreAfk = config.xpIgnoreAfk();
         long afk = Math.max(1, config.xpAfkTimeout()) * 60_000L;
@@ -244,6 +255,8 @@ class RuneAlyticsXpSkillRow extends JPanel
         // Hidden rows (only shown while "reveal hidden" is on) are dimmed and never
         // marked LIVE, but still update their values.
         hideItem.setText(hidden ? "Unhide skill" : "Hide skill");
+        favItem.setText(favorite ? "Unfavorite skill" : "Favorite skill");
+        if (starLabel.isVisible() != favorite) starLabel.setVisible(favorite);
         nameLabel.setForeground(hidden ? MUTED : skillColor);
         bar.setAccent(hidden ? DIM_ACCENT : skillColor);
 

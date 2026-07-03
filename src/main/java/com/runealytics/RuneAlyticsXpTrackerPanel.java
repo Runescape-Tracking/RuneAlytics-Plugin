@@ -30,6 +30,7 @@ import java.awt.Component;
 import java.awt.Container;
 import java.awt.Cursor;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
 import java.awt.LayoutManager;
@@ -99,6 +100,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     private final JLabel totalVal   = new JLabel("0");
     private final JLabel rateVal    = new JLabel("0");
     private final JLabel levelsVal  = new JLabel("0");
+
+    // Session-summary "featured skill" tag (icon + name at top-right of the card).
+    private final JLabel summarySkillName = new JLabel();
+    private final JLabel summarySkillIcon = new JLabel();
+    private Skill lastFeatured = null;
 
     private final XpSparkline overallSparkline = new XpSparkline();
     private JPanel chartCardHolder;
@@ -239,15 +245,27 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         view.add(today);
         view.add(Box.createRigidArea(new Dimension(0, 8)));
 
-        // Summary card
+        // Summary card — focused on the featured (highest-output live) skill.
         JPanel summary = card();
-        summary.add(sectionLabel("SESSION SUMMARY"));
+        JPanel sumHeader = new JPanel(new BorderLayout());
+        sumHeader.setOpaque(false);
+        sumHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        sumHeader.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+        sumHeader.add(sectionLabel("SESSION SUMMARY"), BorderLayout.WEST);
+        JPanel skillTag = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        skillTag.setOpaque(false);
+        summarySkillName.setFont(new Font("Calibri", Font.BOLD, 12));
+        summarySkillName.setForeground(MUTED);
+        skillTag.add(summarySkillName);
+        skillTag.add(summarySkillIcon);
+        sumHeader.add(skillTag, BorderLayout.EAST);
+        summary.add(sumHeader);
         summary.add(Box.createRigidArea(new Dimension(0, 6)));
         JPanel grid = new JPanel(new GridLayout(2, 2, 6, 6));
         grid.setOpaque(false);
         grid.setAlignmentX(Component.LEFT_ALIGNMENT);
         grid.add(statCell("SESSION RUNTIME", runtimeVal, TEAL));
-        grid.add(statCell("TOTAL XP GAINED", totalVal,   GOLD));
+        grid.add(statCell("XP GAINED",       totalVal,   GOLD));
         grid.add(statCell("XP / HOUR",       rateVal,    XP_GREEN));
         grid.add(statCell("LEVELS GAINED",   levelsVal,  XP_BLUE));
         grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
@@ -357,6 +375,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 
         long now = System.currentTimeMillis();
         sessionManager.sampleRates(now);
+        long activeNow = sessionManager.activeElapsed(now);
+        long liveWindow = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
         // Account + sync badge
         String acct = sessionManager.getSessionAccountKey();
@@ -366,7 +386,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         // Compact mode toggles the chart card off.
         chartCard.setVisible(!config.xpCompactMode());
 
-        // "Today" total is always shown.
+        // "Today" total is always shown (all skills).
         todayVal.setText(XpFormat.comma(sessionManager.todayXpGained()) + " xp");
 
         if (!config.enableXpTracker())
@@ -376,12 +396,10 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             clearRows();
         }
 
-        // Summary
+        // Summary — runtime is session-wide; XP gained / XP-hr / levels are the
+        // single featured skill (favorite-if-live, else highest-output live skill).
         runtimeVal.setText(XpFormat.duration(sessionManager.runtimeMs(now)));
-        totalVal.setText(XpFormat.comma(sessionManager.totalXpGained()));
-        rateVal.setText(config.xpShowPerHour()
-                ? XpFormat.compactUpper(sessionManager.overallXpPerHour(now)) : "—");
-        levelsVal.setText(Integer.toString(sessionManager.levelsGained()));
+        updateFeaturedSummary(now, activeNow, liveWindow);
 
         overallSparkline.setSamples(sessionManager.overallRateHistorySnapshot());
 
@@ -391,8 +409,6 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         eyeButton.setText((showHidden ? "Hide hidden" : "Show hidden")
                 + (hiddenCount > 0 ? " (" + hiddenCount + ")" : ""));
         eyeButton.setForeground(showHidden ? XP_GREEN : MUTED);
-
-        long activeNow = sessionManager.activeElapsed(now);
 
         // Detail view, if showing
         if (detailPanel.getSkill() != null && isDetailShowing())
@@ -430,7 +446,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
                 RuneAlyticsXpSkillRow row = rows.computeIfAbsent(st.getSkill(), s ->
                         new RuneAlyticsXpSkillRow(s, iconManager, config,
                                 this::showSkillDetail, this::onResetSkillRate,
-                                this::onResetSkill, this::onToggleHide));
+                                this::onResetSkill, this::onToggleHide, this::onToggleFavorite));
                 skillListPanel.add(row);
                 skillListPanel.add(Box.createRigidArea(new Dimension(0, 4)));
             }
@@ -446,7 +462,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             // (real wall time, so it also clears while logged out).
             boolean live = st.hasGains() && st.getLastGainWallMs() > 0
                     && (now - st.getLastGainWallMs()) < liveWindow;
-            row.update(st, activeNow, live, sessionManager.isHidden(st.getSkill()));
+            row.update(st, activeNow, live, sessionManager.isHidden(st.getSkill()),
+                    sessionManager.isFavorite(st.getSkill()));
         }
     }
 
@@ -459,6 +476,59 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             skillListPanel.revalidate();
             skillListPanel.repaint();
         }
+    }
+
+    /**
+     * Points the session summary at a single skill: the favorite that's live, else
+     * the highest-output live skill, else the most-recent. XP gained / XP-hr /
+     * levels reflect that skill; XP/hr is tinted to the skill's colour, and its
+     * icon + name appear top-right.
+     */
+    private void updateFeaturedSummary(long now, long activeNow, long liveWindow)
+    {
+        Skill featured = sessionManager.featuredSkill(now, liveWindow);
+        RuneAlyticsXpSkillState fs = (featured != null) ? sessionManager.getState(featured) : null;
+
+        if (fs == null)
+        {
+            if (lastFeatured != null) { summarySkillName.setText(""); summarySkillIcon.setIcon(null); lastFeatured = null; }
+            totalVal.setText("0");
+            rateVal.setText(config.xpShowPerHour() ? "0" : "—");
+            rateVal.setForeground(XP_GREEN);
+            levelsVal.setText("0");
+            return;
+        }
+
+        Color c = SkillColors.of(featured);
+
+        // Only touch the icon/name when the featured skill actually changes.
+        if (featured != lastFeatured)
+        {
+            lastFeatured = featured;
+            summarySkillName.setText(RuneAlyticsXpSkillRow.prettyName(featured));
+            summarySkillName.setForeground(c);
+            try
+            {
+                java.awt.image.BufferedImage img = iconManager.getSkillImage(featured, true);
+                summarySkillIcon.setIcon(img != null ? new javax.swing.ImageIcon(img) : null);
+            }
+            catch (Exception ignored)
+            {
+                summarySkillIcon.setIcon(null);
+            }
+        }
+
+        boolean ignoreAfk = config.xpIgnoreAfk();
+        long afk = liveWindow; // AFK timeout == live window (both are xpAfkTimeout minutes)
+
+        totalVal.setText(XpFormat.comma(fs.getTotalGained()));
+        rateVal.setText(config.xpShowPerHour()
+                ? XpFormat.compactUpper(fs.xpPerHour(activeNow, ignoreAfk, afk)) : "—");
+        rateVal.setForeground(c); // XP/hr coloured to the featured skill
+
+        int start = Math.min(fs.getStartLevel(), 99);
+        int cur   = Math.min(fs.getCurrentLevel(), 99);
+        levelsVal.setText(Integer.toString(Math.max(0, cur - start)));
     }
 
     private void updateSyncBadge(long now)
@@ -571,6 +641,12 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         rows.remove(skill);
         lastOrder = new ArrayList<>(); // force rebuild so the row appears/disappears
         showMain();
+        refresh();
+    }
+
+    private void onToggleFavorite(Skill skill)
+    {
+        sessionManager.setFavorite(skill, !sessionManager.isFavorite(skill));
         refresh();
     }
 
