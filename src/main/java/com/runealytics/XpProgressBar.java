@@ -19,6 +19,8 @@ class XpProgressBar extends JComponent
     private static final Color FILL_HI = new Color(105, 220, 140);  // green
 
     private double fraction = 0.0;
+    /** Optional solid accent (per-skill colour); when null the blue→green blend is used. */
+    private Color accent = null;
 
     XpProgressBar()
     {
@@ -27,6 +29,14 @@ class XpProgressBar extends JComponent
         setPreferredSize(d);
         setMinimumSize(new Dimension(20, 6));
         setMaximumSize(new Dimension(Integer.MAX_VALUE, 6));
+    }
+
+    /** Sets a solid fill colour (e.g. the skill's accent). Pass {@code null} to restore the blend. */
+    void setAccent(Color c)
+    {
+        if (java.util.Objects.equals(accent, c)) return;
+        accent = c;
+        repaint();
     }
 
     /** Sets the fill fraction (0..1). No-op repaint when unchanged. */
@@ -55,8 +65,8 @@ class XpProgressBar extends JComponent
             int fw = (int) Math.round(w * fraction);
             if (fw > 0)
             {
-                // Blend the fill colour toward green as the bar fills up.
-                Color fill = blend(FILL_LO, FILL_HI, fraction);
+                // Use the per-skill accent when set, otherwise blend blue→green.
+                Color fill = (accent != null) ? accent : blend(FILL_LO, FILL_HI, fraction);
                 g2.setColor(fill);
                 g2.fillRoundRect(0, 0, Math.max(fw, arc), h, arc, arc);
             }

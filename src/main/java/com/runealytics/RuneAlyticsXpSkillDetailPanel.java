@@ -204,7 +204,12 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
     {
         this.skill = skill;
         lastDropSignature = -1;
+        Color accent = SkillColors.of(skill);
         nameLabel.setText(RuneAlyticsXpSkillRow.prettyName(skill));
+        nameLabel.setForeground(accent);
+        headerBar.setAccent(accent);
+        sparkline.setLineColor(accent);
+        gainedVal.setForeground(accent);
         resetBtn.setText("Reset " + RuneAlyticsXpSkillRow.prettyName(skill) + " XP");
         try
         {
@@ -222,8 +227,13 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         return skill;
     }
 
-    /** Refreshes all values for the current skill. Runs on the EDT. */
-    void update(RuneAlyticsXpSkillState st, long nowMs)
+    /**
+     * Refreshes all values for the current skill. Runs on the EDT.
+     *
+     * @param wallNow   real wall-clock ms (for "time ago" on drops)
+     * @param activeNow active-session-clock ms (for all rate/time calculations)
+     */
+    void update(RuneAlyticsXpSkillState st, long wallNow, long activeNow)
     {
         if (st == null) return;
 
@@ -241,18 +251,18 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         // True XP-gained value (never abbreviated).
         gainedVal.setText(XpFormat.comma(st.getTotalGained()));
         rateVal.setText(config.xpShowPerHour()
-                ? XpFormat.compactUpper(st.xpPerHour(nowMs, ignoreAfk, afk))
+                ? XpFormat.compactUpper(st.xpPerHour(activeNow, ignoreAfk, afk))
                 : "—");
-        actionsVal.setText(XpFormat.comma(st.actionsPerHour(nowMs, ignoreAfk, afk)));
+        actionsVal.setText(XpFormat.comma(st.actionsPerHour(activeNow, ignoreAfk, afk)));
         toNextVal.setText(toNext > 0 ? XpFormat.comma(toNext) : "—");
 
-        long ttlMs = st.timeToNextLevelMs(nowMs, ignoreAfk, afk);
+        long ttlMs = st.timeToNextLevelMs(activeNow, ignoreAfk, afk);
         ttlVal.setText(XpFormat.timeToLevel(ttlMs));
         estVal.setText(ttlMs <= 0 ? "—" : XpFormat.duration(ttlMs));
 
         sparkline.setSamples(st.rateHistorySnapshot());
 
-        updateDrops(st, nowMs);
+        updateDrops(st, wallNow);
     }
 
     private void updateDrops(RuneAlyticsXpSkillState st, long nowMs)

@@ -454,6 +454,9 @@ public class RuneAlyticsPlugin extends Plugin
 
         // Flush accumulated XP before the executor shuts down.
         try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.debug("XP flush on shutdown failed: {}", e.getMessage()); }
+        // Flush the current XP session snapshot (final XP/hr) and pause its clock.
+        try { flushXpSessionOnLogout(); } catch (Exception e) { log.debug("XP session flush on shutdown failed: {}", e.getMessage()); }
+        try { xpSessionManager.setLoggedIn(false); } catch (Exception e) { log.debug("XP session pause on shutdown failed: {}", e.getMessage()); }
         try { lootManager.shutdown();             } catch (Exception e) { log.debug("Loot manager shutdown failed: {}", e.getMessage()); }
         try { matchmakingManager.reset();         } catch (Exception e) { log.debug("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
         try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.debug("Matchmaking overlay removal failed: {}", e.getMessage()); }
@@ -1348,6 +1351,9 @@ public class RuneAlyticsPlugin extends Plugin
             // Best-effort flush of the current account's XP session snapshot.
             flushXpSessionOnLogout();
 
+            // Pause the XP session clock so runtime and XP/hr freeze while logged out.
+            xpSessionManager.setLoggedIn(false);
+
             // Clear the in-memory + on-screen loot so the panel resets to empty
             // and a different account logging in next can't inherit this
             // account's loot (which would then sync under the wrong account).
@@ -1381,6 +1387,8 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGGED_IN)
         {
             state.setLoggedIn(true);
+            // Resume the XP session clock (runtime + XP/hr) now that we're in-game.
+            xpSessionManager.setLoggedIn(true);
 
             // (Re)start the live-map heartbeat now that the player is in-game.
             // Idempotent; the heartbeat waits until the account is verified.
@@ -1755,23 +1763,23 @@ public class RuneAlyticsPlugin extends Plugin
         final String gameMode    = state.getCurrentGameMode();
         final String accountType = state.getCurrentAccountSubtype();
 
-        executorService.submit(() ->
+        // Build the payload synchronously (in-memory, cheap) so callers that reset
+        // the session immediately afterwards still capture the finished session's
+        // data. The HTTP call itself is enqueued asynchronously by the API client.
+        try
         {
-            try
-            {
-                RuneAlyticsXpSyncPayload payload =
-                        xpSessionManager.buildPayload(username, profileId, gameMode, accountType);
-                apiClient.syncXpSession(payload);
-                if (userInitiated && xpTrackerPanel != null)
-                    xpTrackerPanel.showSyncMessage("Synced", true);
-            }
-            catch (Exception e)
-            {
-                log.debug("[XP Session] sync failed: {}", e.getMessage());
-                if (userInitiated && xpTrackerPanel != null)
-                    xpTrackerPanel.showSyncMessage("Sync failed", false);
-            }
-        });
+            RuneAlyticsXpSyncPayload payload =
+                    xpSessionManager.buildPayload(username, profileId, gameMode, accountType);
+            apiClient.syncXpSession(payload);
+            if (userInitiated && xpTrackerPanel != null)
+                xpTrackerPanel.showSyncMessage("Synced", true);
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP Session] sync failed: {}", e.getMessage());
+            if (userInitiated && xpTrackerPanel != null)
+                xpTrackerPanel.showSyncMessage("Sync failed", false);
+        }
     }
 
     /** Returns the current RuneLite rsprofile key, or {@code null} if unavailable. */
@@ -1789,9 +1797,11 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     /**
-     * Best-effort XP-session flush at logout, before the local player is gone.
-     * Skipped when the tracker/auto-sync is off, the account isn't verified, or
-     * there is nothing to send. Never blocks the logout transition.
+     * Best-effort XP-session flush at logout / shutdown, before the local player
+     * is gone. Skipped when the tracker/auto-sync is off, the account isn't
+     * verified, or there is nothing to send. The payload is built synchronously
+     * (cheap, in-memory) and the HTTP call is enqueued asynchronously, so this
+     * never blocks the transition and is safe to call during shutdown.
      */
     private void flushXpSessionOnLogout()
     {
@@ -1804,7 +1814,6 @@ public class RuneAlyticsPlugin extends Plugin
         final String gameMode    = state.getCurrentGameMode();
         final String accountType = state.getCurrentAccountSubtype();
 
-        executorService.submit(() ->
         {
             try
             {
@@ -1815,7 +1824,7 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 log.debug("[XP Session] logout flush failed: {}", e.getMessage());
             }
-        });
+        }
     }
 
     /**
