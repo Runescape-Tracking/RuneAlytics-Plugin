@@ -256,7 +256,7 @@ public class RuneAlyticsVerificationPanel extends RuneAlyticsPanelBase
             catch (IOException ex)
             {
                 errorMessage = ex.getMessage();
-                log.error("[Verify] Request failed: {}", ex.getMessage());
+                log.debug("[Verify] Request failed: {}", ex.getMessage());
             }
 
             final boolean finalSuccess       = success;

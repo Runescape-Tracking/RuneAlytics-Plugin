@@ -97,7 +97,7 @@ public class LootSyncMergeService
         if (!identity.canSync())
         {
             String msg = identity.getMismatchMessage();
-            log.warn("[merge] Sync blocked: {}", msg);
+            log.debug("[merge] Sync blocked: {}", msg);
             return MergeResult.blocked(msg);
         }
 
@@ -149,7 +149,7 @@ public class LootSyncMergeService
         }
         else
         {
-            log.info("[merge] RuneLite Loot Tracker historical data cannot be safely matched to "
+            log.debug("[merge] RuneLite Loot Tracker historical data cannot be safely matched to "
                     + "this account. Using website data only.");
         }
 
@@ -165,7 +165,7 @@ public class LootSyncMergeService
         }
         catch (IOException e)
         {
-            log.warn("[merge] Failed to fetch website snapshot: {}", e.getMessage());
+            log.debug("[merge] Failed to fetch website snapshot: {}", e.getMessage());
             // Non-fatal: continue with RuneLite data only.
         }
 
@@ -213,7 +213,7 @@ public class LootSyncMergeService
             {
                 if (hasMarkup(srcData.sourceKey) || hasMarkup(srcData.sourceName))
                 {
-                    log.warn("[merge] Rejected website source with malformed name/key: key='{}' name='{}'",
+                    log.debug("[merge] Rejected website source with malformed name/key: key='{}' name='{}'",
                             srcData.sourceKey, srcData.sourceName);
                     continue;
                 }
@@ -257,7 +257,7 @@ public class LootSyncMergeService
         catch (IOException e)
         {
             uploadError = e.getMessage();
-            log.error("[merge] sync-absolute upload failed: {}", uploadError);
+            log.debug("[merge] sync-absolute upload failed: {}", uploadError);
         }
 
         // ── 8. Build result summary ───────────────────────────────────────────
@@ -406,13 +406,13 @@ public class LootSyncMergeService
         {
             if (!latch.await(NAME_RESOLVE_TIMEOUT_MS, TimeUnit.MILLISECONDS))
             {
-                log.warn("[merge] Timed out resolving {} RuneLite item name(s); using fallbacks",
+                log.debug("[merge] Timed out resolving {} RuneLite item name(s); using fallbacks",
                         itemIds.size());
             }
         }
         catch (InterruptedException e)
         {
-            Thread.currentThread().interrupt();
+            log.debug("[merge] Interrupted while resolving item names; using fallbacks");
         }
 
         // Backfill any IDs the client thread didn't resolve in time.

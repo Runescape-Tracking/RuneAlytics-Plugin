@@ -835,7 +835,7 @@ public class LootTrackerManager
         BossKillStats stats = bossKillStats.get(npcName);
         if (stats == null || stats.getKillHistory().isEmpty())
         {
-            log.warn("[Pet] No existing kill record for '{}' – pet drop not recorded", npcName);
+            log.debug("[Pet] No existing kill record for '{}' – pet drop not recorded", npcName);
             return;
         }
 
@@ -932,7 +932,7 @@ public class LootTrackerManager
             ItemContainer container = client.getItemContainer(containerId);
             if (container == null)
             {
-                log.warn("readRewardContainer: container {} not found for '{}'",
+                log.debug("readRewardContainer: container {} not found for '{}'",
                         containerId, sourceName);
                 return;
             }
@@ -1005,7 +1005,7 @@ public class LootTrackerManager
             Widget parent = client.getWidget(RewardSources.WIDGET_CLUE, 10);
             if (parent == null)
             {
-                log.warn("Clue reward widget (73,10) not found for '{}'", sourceName);
+                log.debug("Clue reward widget (73,10) not found for '{}'", sourceName);
                 return;
             }
 
@@ -1277,7 +1277,7 @@ public class LootTrackerManager
                 }
                 catch (Exception e)
                 {
-                    log.warn("Live sync failed: {}", e.getMessage());
+                    log.debug("Live sync failed: {}", e.getMessage());
                 }
                 finally
                 {
@@ -1289,7 +1289,7 @@ public class LootTrackerManager
 
     public void downloadKillHistoryFromServer()
     {
-        if (!allowSync) { log.warn("downloadKillHistoryFromServer: blocked – use manual sync"); return; }
+        if (!allowSync) { log.debug("downloadKillHistoryFromServer: blocked – use manual sync"); return; }
 
         String username = state.getVerifiedUsername();
         if (username == null) return;
@@ -1320,7 +1320,7 @@ public class LootTrackerManager
                 log.debug("Merged {} bosses from server for {}", serverData.size(), username);
             }
         }
-        catch (Exception e) { log.error("Failed to download kill history", e); }
+        catch (Exception e) { log.debug("Failed to download kill history", e); }
     }
 
     public void uploadUnsyncedKills()
@@ -1374,13 +1374,14 @@ public class LootTrackerManager
                     currentBatchMap.computeIfAbsent(bossName, k -> new ArrayList<>()).add(kill);
                     batchBuffer.add(kill);
 
-                    // When batch reaches limit, sync it
+                    // When batch reaches limit, sync it. Each batch is a
+                    // blocking HTTP round-trip, so the requests are naturally
+                    // spaced out without an explicit inter-batch delay.
                     if (batchBuffer.size() >= BATCH_SIZE)
                     {
                         processBatch(username, currentBatchMap);
                         batchBuffer.clear();
                         currentBatchMap.clear();
-                        Thread.sleep(500); // Safe to sleep on background thread
                     }
                 }
             }
@@ -1393,7 +1394,7 @@ public class LootTrackerManager
         }
         catch (Exception e)
         {
-            log.error("Upload unsynced kills failed", e);
+            log.debug("Upload unsynced kills failed", e);
         }
         finally
         {
@@ -1454,7 +1455,7 @@ public class LootTrackerManager
         }
         else
         {
-            log.error("Batch upload failed for {} bosses", byBoss.size());
+            log.debug("Batch upload failed for {} bosses", byBoss.size());
         }
     }
 
@@ -1477,12 +1478,12 @@ public class LootTrackerManager
                 uploadUnsyncedKills();
                 SwingUtilities.invokeLater(() -> {
                     if (panel != null) panel.showSyncCompleted();
-                    else log.warn("performManualSync: panel is null, cannot show sync completed");
+                    else log.debug("performManualSync: panel is null, cannot show sync completed");
                 });
             }
             catch (Exception e)
             {
-                log.error("Manual sync failed", e);
+                log.debug("Manual sync failed", e);
                 SwingUtilities.invokeLater(() -> { if (panel != null) panel.showSyncFailed(e.getMessage()); });
             }
             finally { allowSync = false; }
@@ -1513,7 +1514,7 @@ public class LootTrackerManager
         }
         catch (Exception e)
         {
-            log.warn("Sync: RuneLite Loot Tracker import failed", e);
+            log.debug("Sync: RuneLite Loot Tracker import failed", e);
         }
     }
 
@@ -1628,7 +1629,7 @@ public class LootTrackerManager
 
             if (effectiveKillCount > 0 && !hasDrops)
             {
-                log.warn("[Loot] '{}' has {} kill(s) but no recorded drops — "
+                log.debug("[Loot] '{}' has {} kill(s) but no recorded drops — "
                                 + "kills.size={}, aggregatedDrops.size={} (underlying data has no items "
                                 + "for this source; nothing to display)",
                         entry.getKey(), effectiveKillCount,
@@ -1648,7 +1649,7 @@ public class LootTrackerManager
 
                 if (stats.getKillCount() != bd.getKillCount())
                 {
-                    log.warn("KC mismatch '{}': memory={} disk={}",
+                    log.debug("KC mismatch '{}': memory={} disk={}",
                             entry.getKey(), stats.getKillCount(), bd.getKillCount());
                     stats.setKillCount(bd.getKillCount());
                 }
@@ -1782,7 +1783,7 @@ public class LootTrackerManager
                     }
                     catch (Exception ex)
                     {
-                        log.warn("[Loot] Backfill failed for a drop in '{}': {}", entry.getKey(), ex.getMessage());
+                        log.debug("[Loot] Backfill failed for a drop in '{}': {}", entry.getKey(), ex.getMessage());
                     }
                 }
 
@@ -1812,7 +1813,7 @@ public class LootTrackerManager
                     }
                     catch (Exception ex)
                     {
-                        log.warn("[Loot] Backfill failed for aggregated drop in '{}': {}",
+                        log.debug("[Loot] Backfill failed for aggregated drop in '{}': {}",
                                 entry.getKey(), ex.getMessage());
                     }
                 }
@@ -2047,7 +2048,7 @@ public class LootTrackerManager
 
                 if (matchingKeys.isEmpty())
                 {
-                    log.info("[rl-import] {} → no rsprofile key maps to account '{}' "
+                    log.debug("[rl-import] {} → no rsprofile key maps to account '{}' "
                             + "(known accounts: {}); importing nothing from this file",
                             propFile.getName(), normalizedTarget,
                             new java.util.HashSet<>(keyToAccount.values()));
@@ -2116,7 +2117,7 @@ public class LootTrackerManager
                     }
                 }
 
-                log.info("[rl-import] {} → account '{}' matched key(s) {}; "
+                log.debug("[rl-import] {} → account '{}' matched key(s) {}; "
                         + "imported {} loot source(s); ignored {} source(s) belonging to "
                         + "{} other account-key(s) {}",
                         propFile.getName(), normalizedTarget, matchingKeys,
@@ -2147,7 +2148,7 @@ public class LootTrackerManager
         }
         catch (Exception e)
         {
-            log.error("Failed to write profiles2 loot temp file", e);
+            log.debug("Failed to write profiles2 loot temp file", e);
             return null;
         }
     }
@@ -2324,7 +2325,7 @@ public class LootTrackerManager
             catch (Exception ex)
             {
                 importError[0] = ex.getMessage();
-                log.error("RuneLite import: record-build pass failed", ex);
+                log.debug("RuneLite import: record-build pass failed", ex);
             }
             finally
             {
@@ -2364,7 +2365,7 @@ public class LootTrackerManager
         }
         catch (Exception e)
         {
-            log.error("Failed to import RuneLite loot data", e);
+            log.debug("Failed to import RuneLite loot data", e);
             return "Import failed: " + e.getMessage();
         }
     }

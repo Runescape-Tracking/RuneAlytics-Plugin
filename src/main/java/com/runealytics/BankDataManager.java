@@ -118,12 +118,12 @@ public class BankDataManager
             }
             else
             {
-                log.error("Failed to sync wealth snapshot for {}", username);
+                log.debug("Failed to sync wealth snapshot for {}", username);
             }
         }
         catch (Exception e)
         {
-            log.error("Error syncing wealth snapshot for {}: {}", username, e.getMessage(), e);
+            log.debug("Error syncing wealth snapshot for {}: {}", username, e.getMessage(), e);
         }
     }
 

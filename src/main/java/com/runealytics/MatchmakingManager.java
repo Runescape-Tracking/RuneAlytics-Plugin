@@ -380,7 +380,7 @@ public class MatchmakingManager
             }
             catch (IOException ex)
             {
-                log.warn("[engage] IO error: {}", ex.getMessage());
+                log.debug("[engage] IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
@@ -401,7 +401,7 @@ public class MatchmakingManager
             else
             {
                 String body = result.getRawResponse();
-                log.warn("[engage] failed — msg='{}' body={}",
+                log.debug("[engage] failed — msg='{}' body={}",
                         result.getMessage(),
                         body.length() > 200 ? body.substring(0, 200) : body);
             }
@@ -477,17 +477,17 @@ public class MatchmakingManager
 
         if (token == null || token.isEmpty())
         {
-            log.warn("[death] skipping — local auth token is null/empty");
+            log.debug("[death] skipping — local auth token is null/empty");
             return;
         }
         if (verificationCode == null || verificationCode.isEmpty())
         {
-            log.warn("[death] skipping — verification code is null/empty");
+            log.debug("[death] skipping — verification code is null/empty");
             return;
         }
         if (rsn == null || rsn.isEmpty())
         {
-            log.warn("[death] skipping — local RSN is null/empty");
+            log.debug("[death] skipping — local RSN is null/empty");
             return;
         }
 
@@ -509,7 +509,7 @@ public class MatchmakingManager
             }
             catch (IOException ex)
             {
-                log.error("[death] reportMatch IO error: {}", ex.getMessage());
+                log.debug("[death] reportMatch IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
@@ -526,7 +526,7 @@ public class MatchmakingManager
             else if (!result.isTokenRefresh())
             {
                 // Token-refresh is already handled centrally by handleResult().
-                log.warn("[death] reportMatch failed — success={} msg='{}' body={}",
+                log.debug("[death] reportMatch failed — success={} msg='{}' body={}",
                         result.isSuccess(), result.getMessage(),
                         result.getRawResponse().length() > 200
                                 ? result.getRawResponse().substring(0, 200)
@@ -674,7 +674,7 @@ public class MatchmakingManager
             }
             catch (IOException ex)
             {
-                log.warn("[accept] IO error: {}", ex.getMessage());
+                log.debug("[accept] IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
@@ -693,7 +693,7 @@ public class MatchmakingManager
                 // Schedule a retry on failure so a transient error doesn't latch
                 // the match in "Pending".
                 String body = result.getRawResponse();
-                log.warn("[accept] failed — success={} tokenRefresh={} msg='{}' body={}",
+                log.debug("[accept] failed — success={} tokenRefresh={} msg='{}' body={}",
                         result.isSuccess(), result.isTokenRefresh(), result.getMessage(),
                         body.length() > 200 ? body.substring(0, 200) : body);
                 acceptCooldownUntilTick = tickCounter + RETRY_BACKOFF_TICKS;
@@ -778,7 +778,7 @@ public class MatchmakingManager
             }
             catch (IOException ex)
             {
-                log.warn("[begin-match] IO error: {}", ex.getMessage());
+                log.debug("[begin-match] IO error: {}", ex.getMessage());
                 result = new MatchmakingApiResult(null, ex.getMessage(), "", false, false);
             }
 
@@ -796,7 +796,7 @@ public class MatchmakingManager
             {
                 // Back-off so a transient failure doesn't latch the state.
                 String body = result.getRawResponse();
-                log.warn("[begin-match] failed — msg='{}' body={}",
+                log.debug("[begin-match] failed — msg='{}' body={}",
                         result.getMessage(),
                         body.length() > 200 ? body.substring(0, 200) : body);
                 beginCooldownUntilTick = tickCounter + RETRY_BACKOFF_TICKS;

@@ -122,13 +122,13 @@ public class DefaultRuneLiteLootTrackerReader
     {
         if (accountKey == null || accountKey.isEmpty())
         {
-            log.warn("[rl-reader] readForAccount called with null/empty accountKey — skipping");
+            log.debug("[rl-reader] readForAccount called with null/empty accountKey — skipping");
             return Collections.emptyMap();
         }
 
         if (files == null || files.isEmpty())
         {
-            log.warn("[rl-reader] No profiles2/*.properties files found under {} — "
+            log.debug("[rl-reader] No profiles2/*.properties files found under {} — "
                     + "no RuneLite tracker data to read for '{}'",
                     new File(RuneLite.RUNELITE_DIR, "profiles2"), accountKey);
             return Collections.emptyMap();
@@ -175,7 +175,7 @@ public class DefaultRuneLiteLootTrackerReader
 
         if (result.isEmpty())
         {
-            log.warn("[rl-reader] No RuneLite loot matched account '{}' across {} file(s). "
+            log.debug("[rl-reader] No RuneLite loot matched account '{}' across {} file(s). "
                     + "Display names seen in profiles2: {}. "
                     + "If '{}' isn't in that list, RuneLite has never recorded a displayName for "
                     + "this exact account — check capitalization/spacing.",

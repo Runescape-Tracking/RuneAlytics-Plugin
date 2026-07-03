@@ -409,7 +409,7 @@ public class RuneAlyticsPlugin extends Plugin
             }
             catch (Exception ex)
             {
-                log.error("Failed to populate RuneAlytics tabs", ex);
+                log.debug("Failed to populate RuneAlytics tabs", ex);
             }
         });
     }
@@ -447,17 +447,17 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         // Flush accumulated XP before the executor shuts down.
-        try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.warn("XP flush on shutdown failed: {}", e.getMessage()); }
-        try { lootManager.shutdown();             } catch (Exception e) { log.warn("Loot manager shutdown failed: {}", e.getMessage()); }
-        try { matchmakingManager.reset();         } catch (Exception e) { log.warn("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
-        try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.warn("Matchmaking overlay removal failed: {}", e.getMessage()); }
-        try { overlayManager.remove(liveMapOverlay);     } catch (Exception e) { log.warn("Live-map overlay removal failed: {}", e.getMessage()); }
+        try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.debug("XP flush on shutdown failed: {}", e.getMessage()); }
+        try { lootManager.shutdown();             } catch (Exception e) { log.debug("Loot manager shutdown failed: {}", e.getMessage()); }
+        try { matchmakingManager.reset();         } catch (Exception e) { log.debug("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
+        try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.debug("Matchmaking overlay removal failed: {}", e.getMessage()); }
+        try { overlayManager.remove(liveMapOverlay);     } catch (Exception e) { log.debug("Live-map overlay removal failed: {}", e.getMessage()); }
 
         // Remove the nav button.
         if (navButton != null)
         {
             try { clientToolbar.removeNavigation(navButton); }
-            catch (Exception e) { log.warn("Nav button removal failed: {}", e.getMessage()); }
+            catch (Exception e) { log.debug("Nav button removal failed: {}", e.getMessage()); }
             navButton = null;
         }
 
@@ -1269,7 +1269,7 @@ public class RuneAlyticsPlugin extends Plugin
             long elapsed = Instant.now().toEpochMilli() - whispererKillTime.toEpochMilli();
             if (elapsed > WHISPERER_GROUND_ITEM_WINDOW_MS + 5_000)
             {
-                log.warn("Whisperer ground-item window force-expired with {} items unclaimed",
+                log.debug("Whisperer ground-item window force-expired with {} items unclaimed",
                         whispererGroundItems.size());
                 whispererGroundItemWindow = false;
                 whispererGroundItems.clear();
@@ -1838,7 +1838,7 @@ public class RuneAlyticsPlugin extends Plugin
             // Catch Throwable (not just Exception) so an Error — e.g. an
             // ItemManager "must be called on client thread" assertion — still
             // resets the Sync button instead of leaving it stuck on "Syncing…".
-            log.error("[plugin] Loot sync failed", t);
+            log.debug("[plugin] Loot sync failed", t);
             if (userInitiated)
             {
                 SwingUtilities.invokeLater(() -> {
@@ -1908,7 +1908,7 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (whispererGroundItems.isEmpty())
             {
-                log.warn("Whisperer flush: no items");
+                log.debug("Whisperer flush: no items");
                 return;
             }
 
@@ -2070,7 +2070,7 @@ public class RuneAlyticsPlugin extends Plugin
             catch (Exception e)
             {
                 // Network failure: keep existing state rather than clearing a valid token
-                log.warn("Could not reach server to validate stored token for '{}': {}", rsn, e.getMessage());
+                log.debug("Could not reach server to validate stored token for '{}': {}", rsn, e.getMessage());
                 serverConfirmed = true; // optimistic — don't log out on connectivity issues
             }
 

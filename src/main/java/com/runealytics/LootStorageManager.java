@@ -81,7 +81,7 @@ public class LootStorageManager
         }
         catch (Exception e)
         {
-            log.error("Failed to load loot data for {}", username, e);
+            log.debug("Failed to load loot data for {}", username, e);
             currentData = new LootStorageData();
             currentData.setUsername(username);
             return currentData;
@@ -149,7 +149,7 @@ public class LootStorageManager
         }
         catch (Exception e)
         {
-            log.error("Failed to save loot data for {}", username, e);
+            log.debug("Failed to save loot data for {}", username, e);
         }
     }
 
@@ -397,7 +397,7 @@ public class LootStorageManager
 
         if (currentData == null)
         {
-            log.error("Failed to load client data - aborting merge");
+            log.debug("Failed to load client data - aborting merge");
             return;
         }
 

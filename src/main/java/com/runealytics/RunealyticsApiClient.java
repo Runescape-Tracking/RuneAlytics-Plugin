@@ -118,7 +118,7 @@ public class RunealyticsApiClient
             @SuppressWarnings("NullableProblems")
             public void onFailure(Call call, IOException e)
             {
-                log.warn("[XP Batch] Network failure: {}", e.getMessage());
+                log.debug("[XP Batch] Network failure: {}", e.getMessage());
             }
 
             @Override
@@ -131,11 +131,11 @@ public class RunealyticsApiClient
                     if (response.isSuccessful())
                         log.debug("[XP Batch] OK HTTP {} — {}", response.code(), body);
                     else
-                        log.warn("[XP Batch] FAILED HTTP {} — {}", response.code(), body);
+                        log.debug("[XP Batch] FAILED HTTP {} — {}", response.code(), body);
                 }
                 catch (IOException e)
                 {
-                    log.warn("[XP Batch] Could not read response body: {}", e.getMessage());
+                    log.debug("[XP Batch] Could not read response body: {}", e.getMessage());
                 }
                 finally
                 {
@@ -201,7 +201,7 @@ public class RunealyticsApiClient
             @SuppressWarnings("NullableProblems")
             public void onFailure(Call call, IOException e)
             {
-                log.warn("[Privacy] Network failure: {}", e.getMessage());
+                log.debug("[Privacy] Network failure: {}", e.getMessage());
             }
 
             @Override
@@ -214,11 +214,11 @@ public class RunealyticsApiClient
                     if (response.isSuccessful())
                         log.debug("[Privacy] OK HTTP {} — {}", response.code(), responseBody);
                     else
-                        log.warn("[Privacy] FAILED HTTP {} — {}", response.code(), responseBody);
+                        log.debug("[Privacy] FAILED HTTP {} — {}", response.code(), responseBody);
                 }
                 catch (IOException e)
                 {
-                    log.warn("[Privacy] Could not read response body: {}", e.getMessage());
+                    log.debug("[Privacy] Could not read response body: {}", e.getMessage());
                 }
                 finally
                 {
@@ -342,7 +342,7 @@ public class RunealyticsApiClient
             @SuppressWarnings("NullableProblems")
             public void onFailure(Call call, IOException e)
             {
-                log.warn("[Heartbeat] Network failure: {}", e.getMessage());
+                log.debug("[Heartbeat] Network failure: {}", e.getMessage());
             }
 
             @Override
@@ -363,12 +363,12 @@ public class RunealyticsApiClient
                     }
                     else
                     {
-                        log.warn("[Heartbeat] FAILED HTTP {} — {}", response.code(), responseBody);
+                        log.debug("[Heartbeat] FAILED HTTP {} — {}", response.code(), responseBody);
                     }
                 }
                 catch (IOException e)
                 {
-                    log.warn("[Heartbeat] Could not read response body: {}", e.getMessage());
+                    log.debug("[Heartbeat] Could not read response body: {}", e.getMessage());
                 }
                 finally
                 {
@@ -398,7 +398,7 @@ public class RunealyticsApiClient
         }
         catch (RuntimeException e)
         {
-            log.warn("[Heartbeat] Could not parse visible players: {}", e.getMessage());
+            log.debug("[Heartbeat] Could not parse visible players: {}", e.getMessage());
             return new java.util.ArrayList<>();
         }
     }
@@ -445,7 +445,7 @@ public class RunealyticsApiClient
         {
             if (!response.isSuccessful())
             {
-                log.warn("Feature-flag request failed: HTTP {}", response.code());
+                log.debug("Feature-flag request failed: HTTP {}", response.code());
                 return new HashMap<>();
             }
 
@@ -454,7 +454,7 @@ public class RunealyticsApiClient
 
             if (json == null || !json.has("flags") || !json.get("flags").isJsonObject())
             {
-                log.warn("Feature-flag response missing or invalid 'flags' object");
+                log.debug("Feature-flag response missing or invalid 'flags' object");
                 return new HashMap<>();
             }
 
@@ -466,14 +466,14 @@ public class RunealyticsApiClient
         }
         catch (IOException e)
         {
-            log.error("Failed to fetch feature flags for {}: {}", username, e.getMessage());
+            log.debug("Failed to fetch feature flags for {}: {}", username, e.getMessage());
             return new HashMap<>();
         }
         catch (com.google.gson.JsonSyntaxException e)
         {
             // Malformed body / unexpected JSON shape must not bubble out of the
             // 60s feature-flag poll or the login executor task.
-            log.warn("Feature-flag response was not valid JSON for {}: {}", username, e.getMessage());
+            log.debug("Feature-flag response was not valid JSON for {}: {}", username, e.getMessage());
             return new HashMap<>();
         }
     }
@@ -559,7 +559,7 @@ public class RunealyticsApiClient
                 log.debug("Bank data synced successfully");
                 return true;
             }
-            log.error("Failed to sync bank data. Status: {}", response.code());
+            log.debug("Failed to sync bank data. Status: {}", response.code());
             return false;
         }
     }

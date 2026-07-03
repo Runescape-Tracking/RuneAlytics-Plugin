@@ -178,12 +178,12 @@ public class LootTrackerApiClient
         {
             if (response.code() == 401 || response.code() == 403)
             {
-                log.warn("[snapshot] auth error: HTTP {}", response.code());
+                log.debug("[snapshot] auth error: HTTP {}", response.code());
                 return null;
             }
             if (!response.isSuccessful() || response.body() == null)
             {
-                log.warn("[snapshot] failed: HTTP {}", response.code());
+                log.debug("[snapshot] failed: HTTP {}", response.code());
                 return null;
             }
 
@@ -193,7 +193,7 @@ public class LootTrackerApiClient
         }
         catch (IOException e)
         {
-            log.error("[snapshot] network failure: {}", e.getMessage());
+            log.debug("[snapshot] network failure: {}", e.getMessage());
             throw e;
         }
     }
@@ -419,7 +419,7 @@ public class LootTrackerApiClient
         {
             if (!response.isSuccessful() || response.body() == null)
             {
-                log.warn("Failed to fetch kill history: HTTP {}", response.code());
+                log.debug("Failed to fetch kill history: HTTP {}", response.code());
                 return new HashMap<>();
             }
 
@@ -429,7 +429,7 @@ public class LootTrackerApiClient
             JsonObject responseObj = gson.fromJson(json, JsonObject.class);
             if (responseObj == null || !responseObj.has("kills") || !responseObj.get("kills").isJsonArray())
             {
-                log.warn("Invalid history response – missing 'kills' array");
+                log.debug("Invalid history response – missing 'kills' array");
                 return new HashMap<>();
             }
 
@@ -437,7 +437,7 @@ public class LootTrackerApiClient
         }
         catch (Exception e)
         {
-            log.error("Error fetching kill history from server", e);
+            log.debug("Error fetching kill history from server", e);
             return new HashMap<>();
         }
     }
@@ -529,7 +529,7 @@ public class LootTrackerApiClient
         }
 
         if (skipped > 0)
-            log.warn("Skipped {} malformed kill record(s) in history response", skipped);
+            log.debug("Skipped {} malformed kill record(s) in history response", skipped);
 
         // Re-resolve GE price / high alch for drops stored as 0 (noted, charged,
         // or untradeable items). ItemManager reads the client's item cache and
@@ -651,7 +651,7 @@ public class LootTrackerApiClient
             if (!response.isSuccessful())
             {
                 String responseBody = response.body() != null ? response.body().string() : "";
-                log.error("[{}] failed: HTTP {} — {}", contextForLog, response.code(), responseBody);
+                log.debug("[{}] failed: HTTP {} — {}", contextForLog, response.code(), responseBody);
                 return false;
             }
             log.debug("[{}] ok", contextForLog);
@@ -659,7 +659,7 @@ public class LootTrackerApiClient
         }
         catch (IOException e)
         {
-            log.error("[{}] network failure: {}", contextForLog, e.getMessage());
+            log.debug("[{}] network failure: {}", contextForLog, e.getMessage());
             return false;
         }
     }

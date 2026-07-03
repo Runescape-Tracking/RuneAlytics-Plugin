@@ -608,7 +608,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
                         ? e.getMessage()
                         : "Network error — check your connection.";
 
-                log.warn("Verification request failed: {}", e.getMessage());
+                log.debug("Verification request failed: {}", e.getMessage());
             }
 
             final boolean verified = errorMsg == null;
@@ -643,7 +643,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
                     updateConnectionStatus(false, finalError);
 
-                    log.warn("Verification failed for '{}': {}", rsn, finalError);
+                    log.debug("Verification failed for '{}': {}", rsn, finalError);
                 }
             });
         });

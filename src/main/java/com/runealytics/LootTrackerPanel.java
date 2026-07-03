@@ -578,7 +578,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
         if (plugin == null)
         {
-            log.warn("onSyncClicked: plugin reference not set, cannot sync");
+            log.debug("onSyncClicked: plugin reference not set, cannot sync");
             return;
         }
 
@@ -962,7 +962,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     catch (Throwable ex)
                     {
                         // Catch Throwable so Errors from RuneLite APIs don't leave refreshing=true.
-                        log.error("Refresh EDT rebuild failed", ex);
+                        log.debug("Refresh EDT rebuild failed", ex);
                     }
                     finally
                     {
@@ -972,7 +972,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             }
             catch (Throwable e)
             {
-                log.error("Refresh background thread failed", e);
+                log.debug("Refresh background thread failed", e);
                 refreshing.set(false);
             }
         });
