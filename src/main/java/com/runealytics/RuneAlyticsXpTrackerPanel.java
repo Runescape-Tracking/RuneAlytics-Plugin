@@ -5,7 +5,6 @@ import net.runelite.api.Skill;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.PluginPanel;
-
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.swing.Box;
@@ -57,19 +56,18 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 {
     // ── Shared theme (referenced by the row / detail components) ──────────────
     // Base background matches the other RuneAlytics tabs (Loot Tracker etc.).
-    static final Color NAVY_BG     = ColorScheme.DARK_GRAY_COLOR;
-    static final Color CARD_BG     = new Color(26, 31, 46);
-    static final Color CARD_BORDER = new Color(44, 52, 74);
-    static final Color CELL_BG     = new Color(30, 36, 52);
+    static final Color CARD_BG     = ColorScheme.DARKER_GRAY_COLOR;
+    static final Color CARD_BORDER = ColorScheme.MEDIUM_GRAY_COLOR;
+    static final Color CELL_BG     = ColorScheme.BORDER_COLOR;
     static final Color GOLD        = new Color(214, 178, 64);
     static final Color TEAL        = new Color(82, 196, 196);
     static final Color XP_BLUE     = new Color(108, 140, 244);
     static final Color XP_GREEN    = new Color(105, 220, 140);
-    static final Color TEXT        = new Color(228, 232, 240);
+    static final Color TEXT        = ColorScheme.TEXT_COLOR;
     static final Color MUTED       = new Color(150, 158, 178);
 
     private static final Font SECTION_FONT  = new Font("Calibri", Font.BOLD, 13);
-    private static final Font CELL_LBL_FONT = new Font("Calibri", Font.PLAIN, 11);
+    private static final Font CELL_LBL_FONT = new Font("Calibri", Font.BOLD, 12);
     private static final Font CELL_VAL_FONT = new Font("Calibri", Font.BOLD, 16);
 
     private static final int PAD = 6;
@@ -127,7 +125,6 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         this.iconManager    = iconManager;
 
         setLayout(new BorderLayout());
-        setBackground(NAVY_BG);
 
         JPanel main = buildMainView();
         chartCard = chartCardHolder; // populated by buildMainView()
@@ -135,7 +132,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         detailPanel = new RuneAlyticsXpSkillDetailPanel(iconManager, config,
                 this::showMain, this::onResetSkill);
 
-        cardPanel.setBackground(NAVY_BG);
+        cardPanel.setBackground(CARD_BG);
         cardPanel.add(main, CARD_MAIN);
         cardPanel.add(detailPanel, CARD_DETAIL);
 
@@ -149,8 +146,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         scroll.setBorder(new EmptyBorder(0, 0, 0, 0));
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         scroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
-        scroll.getViewport().setBackground(NAVY_BG);
-        scroll.setBackground(NAVY_BG);
+        scroll.getViewport().setBackground(CARD_BG);
+        scroll.setBackground(CARD_BG);
         add(scroll, BorderLayout.CENTER);
     }
 
@@ -190,7 +187,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     {
         JPanel view = new JPanel();
         view.setLayout(new BoxLayout(view, BoxLayout.Y_AXIS));
-        view.setBackground(NAVY_BG);
+        view.setBackground(CARD_BG);
         view.setOpaque(true);
         view.setBorder(new EmptyBorder(PAD, PAD, PAD, PAD));
 
@@ -244,8 +241,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         JPanel grid = new JPanel(new GridLayout(2, 2, 6, 6));
         grid.setOpaque(false);
         grid.setAlignmentX(Component.LEFT_ALIGNMENT);
-        grid.add(statCell("SESSION RUNTIME", runtimeVal, TEAL));
-        grid.add(statCell("TOTAL XP GAINED", totalVal,   GOLD));
+        grid.add(statCell("SESSION TIME", runtimeVal, TEAL));
+        grid.add(statCell("XP GAINED", totalVal,   GOLD));
         grid.add(statCell("XP / HOUR",       rateVal,    XP_GREEN));
         grid.add(statCell("LEVELS GAINED",   levelsVal,  XP_BLUE));
         grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
@@ -295,7 +292,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         // Wrap in BorderLayout.NORTH so the content keeps its preferred height and
         // never stretches to fill the tall scroll viewport (matches Loot Tracker).
         JPanel wrap = new JPanel(new BorderLayout());
-        wrap.setBackground(NAVY_BG);
+        wrap.setBackground(CARD_BG);
         wrap.setOpaque(true);
         wrap.add(view, BorderLayout.NORTH);
         return wrap;

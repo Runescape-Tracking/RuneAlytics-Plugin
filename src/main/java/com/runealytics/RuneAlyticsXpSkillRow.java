@@ -46,7 +46,7 @@ class RuneAlyticsXpSkillRow extends JPanel
     private static final Font NAME_FONT  = new Font("Calibri", Font.BOLD, 13);
     private static final Font LVL_FONT    = new Font("Calibri", Font.PLAIN, 11);
     private static final Font VALUE_FONT  = new Font("Calibri", Font.BOLD, 12);
-    private static final Font SMALL_FONT  = new Font("Calibri", Font.PLAIN, 10);
+    private static final Font SMALL_FONT  = new Font("Calibri", Font.PLAIN, 11);
     private static final Font LIVE_FONT   = new Font("Calibri", Font.BOLD, 9);
 
     private static final Color HOVER_BG = new Color(34, 41, 60);
@@ -78,7 +78,7 @@ class RuneAlyticsXpSkillRow extends JPanel
                 new LineBorder(CARD_BORDER, 1, true),
                 new EmptyBorder(6, 8, 6, 8)));
         setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        setMaximumSize(new Dimension(Integer.MAX_VALUE, 60));
+        setMaximumSize(new Dimension(Integer.MAX_VALUE, 65));
 
         // ── Top row: [icon] name / level ............ gained  rate ──
         JPanel top = new JPanel(new BorderLayout(6, 0));

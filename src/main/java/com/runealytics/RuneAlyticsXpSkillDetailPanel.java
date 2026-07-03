@@ -31,10 +31,10 @@ import static com.runealytics.RuneAlyticsXpTrackerPanel.CARD_BORDER;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.CELL_BG;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.GOLD;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.MUTED;
-import static com.runealytics.RuneAlyticsXpTrackerPanel.NAVY_BG;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.TEAL;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.TEXT;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.XP_GREEN;
+import static net.runelite.client.ui.ColorScheme.DARK_GRAY_COLOR;
 
 /**
  * Per-skill detail view for the XP Tracker. Shown when a skill row is clicked.
@@ -89,12 +89,12 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         this.onResetSkill = onResetSkill;
 
         setLayout(new BorderLayout());
-        setBackground(NAVY_BG);
+        setBackground(DARK_GRAY_COLOR);
         setOpaque(true);
 
         JPanel content = new JPanel();
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
-        content.setBackground(NAVY_BG);
+        content.setBackground(DARK_GRAY_COLOR);
         content.setOpaque(true);
         content.setBorder(new EmptyBorder(6, 6, 6, 6));
 
