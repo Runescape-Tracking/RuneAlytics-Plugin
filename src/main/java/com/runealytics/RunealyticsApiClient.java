@@ -146,6 +146,92 @@ public class RunealyticsApiClient
     }
 
     // ═════════════════════════════════════════════════════════════════════════
+    //  XP SESSION SNAPSHOT SYNC
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Sends a full XP-session snapshot to {@code /xp/session}.
+     *
+     * <p>Carries only the account named in the payload (built by
+     * {@link RuneAlyticsXpSessionManager#buildPayload}, which is scoped to a
+     * single account key). Fails gracefully — network / HTTP errors are logged at
+     * debug and never propagate. The auth token is attached as a header, never
+     * logged.</p>
+     *
+     * @param payload the session snapshot to send
+     */
+    public void syncXpSession(RuneAlyticsXpSyncPayload payload)
+    {
+        String token    = state.getVerificationCode();
+        String username = state.getVerifiedUsername();
+
+        if (token == null || token.isEmpty())
+        {
+            log.debug("[XP Session] Skipping — no verification token in state");
+            return;
+        }
+        if (username == null || username.isEmpty())
+        {
+            log.debug("[XP Session] Skipping — no username in state");
+            return;
+        }
+        if (payload == null || payload.skills.isEmpty())
+        {
+            log.debug("[XP Session] Skipping — no per-skill session data to send");
+            return;
+        }
+
+        String payloadJson = gson.toJson(payload.toJson());
+        String url         = config.apiUrl() + "/xp/session";
+
+        // Log the payload for debugging, but never the token.
+        log.debug("[XP Session] POST {} | skills={} total_xp={} duration={}s payload={}",
+                url, payload.skills.size(), payload.totalXpGained,
+                payload.sessionDurationSec, payloadJson);
+
+        RequestBody body    = RequestBody.create(JSON, payloadJson);
+        Request     request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("Authorization", "Bearer " + token)
+                .addHeader("Content-Type",  "application/json")
+                .addHeader("Accept",        "application/json")
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback()
+        {
+            @Override
+            @SuppressWarnings("NullableProblems")
+            public void onFailure(Call call, IOException e)
+            {
+                log.debug("[XP Session] Network failure: {}", e.getMessage());
+            }
+
+            @Override
+            @SuppressWarnings("NullableProblems")
+            public void onResponse(Call call, Response response)
+            {
+                try
+                {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (response.isSuccessful())
+                        log.debug("[XP Session] OK HTTP {} — {}", response.code(), responseBody);
+                    else
+                        log.debug("[XP Session] FAILED HTTP {} — {}", response.code(), responseBody);
+                }
+                catch (IOException e)
+                {
+                    log.debug("[XP Session] Could not read response body: {}", e.getMessage());
+                }
+                finally
+                {
+                    response.close();
+                }
+            }
+        });
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
     //  PRIVACY SETTINGS
     // ═════════════════════════════════════════════════════════════════════════
 

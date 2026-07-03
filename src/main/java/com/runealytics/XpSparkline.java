@@ -1,0 +1,128 @@
+package com.runealytics;
+
+import javax.swing.JComponent;
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.GradientPaint;
+import java.awt.RenderingHints;
+import java.awt.geom.GeneralPath;
+import java.awt.geom.Path2D;
+import java.util.List;
+
+/**
+ * Lightweight custom-painted "XP gain over time" chart for the XP Tracker.
+ *
+ * <p>Deliberately avoids any charting library — it just plots the cumulative
+ * gained-XP samples as a filled sparkline. The X axis is time (first→last
+ * sample), the Y axis is cumulative XP (0→max). With fewer than two samples it
+ * draws a flat baseline so it never looks broken on a fresh session.</p>
+ */
+class XpSparkline extends JComponent
+{
+    private static final Color GRID   = new Color(40, 46, 64);
+    private static final Color LINE    = new Color(120, 150, 245);
+    private static final Color FILL_TOP = new Color(120, 150, 245, 90);
+    private static final Color FILL_BOT = new Color(120, 150, 245, 0);
+    private static final Color AXIS_TEXT = new Color(150, 158, 176);
+
+    private List<RuneAlyticsXpSkillState.Sample> samples = java.util.Collections.emptyList();
+
+    XpSparkline()
+    {
+        setOpaque(false);
+        setPreferredSize(new Dimension(200, 90));
+        setMinimumSize(new Dimension(120, 60));
+        setMaximumSize(new Dimension(Integer.MAX_VALUE, 120));
+    }
+
+    void setSamples(List<RuneAlyticsXpSkillState.Sample> s)
+    {
+        this.samples = (s != null) ? s : java.util.Collections.emptyList();
+        repaint();
+    }
+
+    @Override
+    protected void paintComponent(Graphics g)
+    {
+        Graphics2D g2 = (Graphics2D) g.create();
+        try
+        {
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            int w = getWidth();
+            int h = getHeight();
+            int padL = 6, padR = 6, padT = 6, padB = 6;
+            int plotW = Math.max(1, w - padL - padR);
+            int plotH = Math.max(1, h - padT - padB);
+
+            // Baseline gridlines (quarters).
+            g2.setColor(GRID);
+            g2.setStroke(new BasicStroke(1f));
+            for (int i = 0; i <= 4; i++)
+            {
+                int y = padT + (int) Math.round(plotH * (i / 4.0));
+                g2.drawLine(padL, y, w - padR, y);
+            }
+
+            List<RuneAlyticsXpSkillState.Sample> data = samples;
+            if (data.size() < 2)
+            {
+                // Flat baseline until we have a trend to draw.
+                g2.setColor(LINE);
+                g2.setStroke(new BasicStroke(2f));
+                int y = h - padB;
+                g2.drawLine(padL, y, w - padR, y);
+                return;
+            }
+
+            long t0 = data.get(0).timeMs;
+            long t1 = data.get(data.size() - 1).timeMs;
+            long span = Math.max(1L, t1 - t0);
+            long maxY = 1L;
+            for (RuneAlyticsXpSkillState.Sample s : data) maxY = Math.max(maxY, s.totalGained);
+
+            GeneralPath line = new GeneralPath();
+            Path2D.Float area = new Path2D.Float();
+            boolean started = false;
+            int lastX = padL, baseY = h - padB;
+
+            for (RuneAlyticsXpSkillState.Sample s : data)
+            {
+                double fx = (s.timeMs - t0) / (double) span;
+                double fy = s.totalGained / (double) maxY;
+                int x = padL + (int) Math.round(fx * plotW);
+                int y = padT + (int) Math.round((1.0 - fy) * plotH);
+
+                if (!started)
+                {
+                    line.moveTo(x, y);
+                    area.moveTo(x, baseY);
+                    area.lineTo(x, y);
+                    started = true;
+                }
+                else
+                {
+                    line.lineTo(x, y);
+                    area.lineTo(x, y);
+                }
+                lastX = x;
+            }
+            area.lineTo(lastX, baseY);
+            area.closePath();
+
+            g2.setPaint(new GradientPaint(0, padT, FILL_TOP, 0, baseY, FILL_BOT));
+            g2.fill(area);
+
+            g2.setColor(LINE);
+            g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g2.draw(line);
+        }
+        finally
+        {
+            g2.dispose();
+        }
+    }
+}

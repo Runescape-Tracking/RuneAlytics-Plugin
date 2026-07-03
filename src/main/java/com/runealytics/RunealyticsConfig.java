@@ -205,12 +205,131 @@ public interface RunealyticsConfig extends Config
         return false;
     }
 
+    // ==================== XP TRACKER ====================
+
+    @ConfigSection(
+            name = "XP Tracker",
+            description = "Configure the session XP Tracker tab",
+            position = 5
+    )
+    String xpTrackerSection = "xpTracker";
+
+    @ConfigItem(
+            keyName = "enableXpTracker",
+            name = "Enable XP Tracker",
+            description = "Track session XP per skill in the XP Tracker tab",
+            section = xpTrackerSection,
+            position = 0
+    )
+    default boolean enableXpTracker()
+    {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "xpTrackActiveAccountOnly",
+            name = "Track Only Active Account",
+            description = "Only track XP for the currently logged-in RuneScape account "
+                    + "(never mixes other RuneLite profiles). Always on for account safety.",
+            section = xpTrackerSection,
+            position = 1
+    )
+    default boolean xpTrackActiveAccountOnly()
+    {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "xpShowPerHour",
+            name = "Show XP / Hour",
+            description = "Show the XP/hr figure in the tracker",
+            section = xpTrackerSection,
+            position = 2
+    )
+    default boolean xpShowPerHour()
+    {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "xpShowXpToNext",
+            name = "Show XP to Next Level",
+            description = "Show remaining XP to the next level on each skill",
+            section = xpTrackerSection,
+            position = 3
+    )
+    default boolean xpShowXpToNext()
+    {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "xpShowRecentDrops",
+            name = "Show Recent XP Drops",
+            description = "Show the recent XP drops list in the skill detail view",
+            section = xpTrackerSection,
+            position = 4
+    )
+    default boolean xpShowRecentDrops()
+    {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "xpIgnoreAfk",
+            name = "Ignore AFK Gaps",
+            description = "Exclude idle time longer than the AFK timeout from XP/hr so "
+                    + "standing idle does not deflate your rate",
+            section = xpTrackerSection,
+            position = 5
+    )
+    default boolean xpIgnoreAfk()
+    {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "xpAfkTimeout",
+            name = "AFK Timeout (minutes)",
+            description = "Idle time (minutes) after which XP/hr stops counting elapsed time",
+            section = xpTrackerSection,
+            position = 6
+    )
+    default int xpAfkTimeout()
+    {
+        return 5;
+    }
+
+    @ConfigItem(
+            keyName = "xpAutoSync",
+            name = "Auto-sync XP Sessions",
+            description = "Automatically sync the current account's XP session to RuneAlytics",
+            section = xpTrackerSection,
+            position = 7
+    )
+    default boolean xpAutoSync()
+    {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "xpCompactMode",
+            name = "Compact Mode",
+            description = "Hide the trend chart and progress bars for a denser XP Tracker",
+            section = xpTrackerSection,
+            position = 8
+    )
+    default boolean xpCompactMode()
+    {
+        return false;
+    }
+
     // ==================== PRIVACY ====================
 
     @ConfigSection(
             name = "Privacy",
             description = "Control who can see your data on RuneAlytics.com",
-            position = 4
+            position = 6
     )
     String privacySection = "privacy";
 
