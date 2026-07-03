@@ -3,11 +3,13 @@ package com.runealytics;
 import lombok.Getter;
 import net.runelite.api.Experience;
 import net.runelite.api.Skill;
+import net.runelite.client.config.ConfigManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -30,15 +32,21 @@ import java.util.concurrent.ConcurrentHashMap;
  * account — so a different RuneLite profile / RuneScape account can never mix
  * its XP into another's session.
  *
- * <h2>Baseline / startup spikes</h2>
- * The first observation of any skill in a session is stored as its baseline and
- * counts as zero gain, which naturally discards the full-XP StatChanged events
- * RuneLite fires at login.
+ * <h2>"Today" total</h2>
+ * A per-account running total of XP earned on the current calendar day is kept
+ * and persisted (throttled) via {@link ConfigManager}, so it survives client
+ * restarts and spans multiple sessions within the same day, resetting at local
+ * midnight.
+ *
+ * <h2>Rate history</h2>
+ * XP/hr is sampled on a throttled cadence (driven by the panel's refresh timer)
+ * into rolling, last-hour buffers — one overall and one per skill — which the
+ * sparkline charts plot.
  *
  * <h2>Threading</h2>
- * {@link #recordXp} runs on the RuneLite client thread. The Swing panel reads
- * the aggregate getters and {@link #snapshotStates()} on the EDT; state fields
- * are {@code volatile} and collections are copied, so a marginally stale read is
+ * {@link #recordXp} runs on the RuneLite client thread; {@link #sampleRates} and
+ * the aggregate getters run on the Swing EDT. State fields are {@code volatile}
+ * and collections are copied / concurrent, so a marginally stale read is
  * harmless and never throws.
  */
 @Singleton
@@ -46,11 +54,20 @@ class RuneAlyticsXpSessionManager
 {
     private static final Logger log = LoggerFactory.getLogger(RuneAlyticsXpSessionManager.class);
 
-    /** Cap on overall trend samples (down-sampled when exceeded). */
-    private static final int MAX_OVERALL_SAMPLES = 200;
+    private static final String CFG_GROUP = "runealytics";
+
+    /** Rolling rate-history window (1 hour). */
+    private static final long RATE_WINDOW_MS = 3_600_000L;
+    /** Minimum gap between rate samples. */
+    private static final long RATE_SAMPLE_INTERVAL_MS = 3_000L;
+    /** Cap on overall rate-history samples. */
+    private static final int  MAX_RATE_SAMPLES = 300;
+    /** Throttle for persisting the "today" total to config. */
+    private static final long TODAY_PERSIST_INTERVAL_MS = 10_000L;
 
     private final RunealyticsConfig config;
     private final CurrentPlayerIdentityService identity;
+    private final ConfigManager configManager;
 
     private final Map<Skill, RuneAlyticsXpSkillState> states = new ConcurrentHashMap<>();
 
@@ -64,13 +81,22 @@ class RuneAlyticsXpSessionManager
     private volatile long sessionLastGainMs;
     private volatile long sessionAfkPausedMs;
 
-    private final List<RuneAlyticsXpSkillState.Sample> overallSamples = new ArrayList<>();
+    // Rolling overall XP/hr history (last hour).
+    private final List<RuneAlyticsXpSkillState.Sample> overallRateHistory = new ArrayList<>();
+    private volatile long lastRateSampleMs;
+
+    // "Today" running total (per account, persisted).
+    private volatile long   todayXpGained;
+    private volatile String todayDate;
+    private volatile long   lastTodayPersistMs;
 
     @Inject
-    RuneAlyticsXpSessionManager(RunealyticsConfig config, CurrentPlayerIdentityService identity)
+    RuneAlyticsXpSessionManager(RunealyticsConfig config, CurrentPlayerIdentityService identity,
+                                ConfigManager configManager)
     {
-        this.config   = config;
-        this.identity = identity;
+        this.config        = config;
+        this.identity      = identity;
+        this.configManager = configManager;
     }
 
     // ── Ingest (client thread) ────────────────────────────────────────────────
@@ -105,6 +131,7 @@ class RuneAlyticsXpSessionManager
         int gained = st.record(xp, now, config.xpIgnoreAfk(), afkTimeoutMs());
         if (gained > 0)
         {
+            addToday(gained, now, acct);
             onSessionGain(now);
         }
     }
@@ -121,34 +148,128 @@ class RuneAlyticsXpSessionManager
             if (gap > afkTimeoutMs()) sessionAfkPausedMs += (gap - afkTimeoutMs());
         }
         sessionLastGainMs = nowMs;
-
-        long total = totalXpGained();
-        synchronized (overallSamples)
-        {
-            overallSamples.add(new RuneAlyticsXpSkillState.Sample(nowMs, total));
-            if (overallSamples.size() > MAX_OVERALL_SAMPLES)
-            {
-                List<RuneAlyticsXpSkillState.Sample> compact =
-                        new ArrayList<>(MAX_OVERALL_SAMPLES / 2 + 2);
-                for (int i = 0; i < overallSamples.size(); i += 2) compact.add(overallSamples.get(i));
-                RuneAlyticsXpSkillState.Sample last = overallSamples.get(overallSamples.size() - 1);
-                if (compact.isEmpty() || compact.get(compact.size() - 1) != last) compact.add(last);
-                overallSamples.clear();
-                overallSamples.addAll(compact);
-            }
-        }
     }
 
     private void startNewSession(String acct)
     {
         states.clear();
-        synchronized (overallSamples) { overallSamples.clear(); }
+        synchronized (overallRateHistory) { overallRateHistory.clear(); }
         sessionAccountKey  = acct;
         sessionStartMs     = System.currentTimeMillis();
         sessionFirstGainMs = 0L;
         sessionLastGainMs  = 0L;
         sessionAfkPausedMs = 0L;
+        lastRateSampleMs   = 0L;
+        loadToday(acct);
         log.debug("[XP-Session] started for account '{}'", acct);
+    }
+
+    // ── "Today" total ─────────────────────────────────────────────────────────
+
+    private void addToday(long gained, long now, String acct)
+    {
+        String today = LocalDate.now().toString();
+        if (!today.equals(todayDate))
+        {
+            todayDate     = today;
+            todayXpGained = 0L;
+        }
+        todayXpGained += gained;
+
+        if (now - lastTodayPersistMs > TODAY_PERSIST_INTERVAL_MS)
+        {
+            lastTodayPersistMs = now;
+            persistToday(acct);
+        }
+    }
+
+    private void loadToday(String acct)
+    {
+        String today = LocalDate.now().toString();
+        try
+        {
+            String storedDate = configManager.getConfiguration(CFG_GROUP, todayDateKey(acct));
+            String storedVal  = configManager.getConfiguration(CFG_GROUP, todayTotalKey(acct));
+            if (today.equals(storedDate) && storedVal != null)
+            {
+                todayXpGained = Long.parseLong(storedVal.trim());
+            }
+            else
+            {
+                todayXpGained = 0L;
+            }
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP-Session] could not load today total for '{}': {}", acct, e.getMessage());
+            todayXpGained = 0L;
+        }
+        todayDate = today;
+    }
+
+    private void persistToday(String acct)
+    {
+        try
+        {
+            configManager.setConfiguration(CFG_GROUP, todayDateKey(acct),  todayDate);
+            configManager.setConfiguration(CFG_GROUP, todayTotalKey(acct), Long.toString(todayXpGained));
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP-Session] could not persist today total for '{}': {}", acct, e.getMessage());
+        }
+    }
+
+    private static String sanitize(String acct)
+    {
+        return acct == null ? "unknown" : acct.replaceAll("[^a-z0-9]", "_");
+    }
+
+    private static String todayTotalKey(String acct) { return "xpTodayTotal_" + sanitize(acct); }
+    private static String todayDateKey(String acct)  { return "xpTodayDate_"  + sanitize(acct); }
+
+    long todayXpGained()
+    {
+        // Reset the displayed value at local midnight even before the next gain.
+        return LocalDate.now().toString().equals(todayDate) ? todayXpGained : 0L;
+    }
+
+    // ── Rate sampling (EDT-driven, throttled) ─────────────────────────────────
+
+    /**
+     * Samples the current overall and per-skill XP/hr into the rolling last-hour
+     * buffers. Throttled internally — safe to call every panel refresh tick.
+     */
+    void sampleRates(long now)
+    {
+        if (now - lastRateSampleMs < RATE_SAMPLE_INTERVAL_MS) return;
+        lastRateSampleMs = now;
+
+        boolean ignoreAfk = config.xpIgnoreAfk();
+        long afk = afkTimeoutMs();
+
+        long rate = overallXpPerHour(now);
+        synchronized (overallRateHistory)
+        {
+            overallRateHistory.add(new RuneAlyticsXpSkillState.Sample(now, rate));
+            long cutoff = now - RATE_WINDOW_MS;
+            overallRateHistory.removeIf(s -> s.timeMs < cutoff);
+            while (overallRateHistory.size() > MAX_RATE_SAMPLES) overallRateHistory.remove(0);
+        }
+
+        for (RuneAlyticsXpSkillState st : states.values())
+        {
+            st.sampleRate(now, ignoreAfk, afk, RATE_WINDOW_MS);
+        }
+    }
+
+    List<RuneAlyticsXpSkillState.Sample> overallRateHistorySnapshot()
+    {
+        synchronized (overallRateHistory)
+        {
+            return overallRateHistory.isEmpty()
+                    ? Collections.emptyList() : new ArrayList<>(overallRateHistory);
+        }
     }
 
     // ── Controls ──────────────────────────────────────────────────────────────
@@ -157,11 +278,12 @@ class RuneAlyticsXpSessionManager
     void reset()
     {
         states.clear();
-        synchronized (overallSamples) { overallSamples.clear(); }
+        synchronized (overallRateHistory) { overallRateHistory.clear(); }
         sessionStartMs     = System.currentTimeMillis();
         sessionFirstGainMs = 0L;
         sessionLastGainMs  = 0L;
         sessionAfkPausedMs = 0L;
+        lastRateSampleMs   = 0L;
         log.debug("[XP-Session] reset (account='{}')", sessionAccountKey);
     }
 
@@ -169,6 +291,13 @@ class RuneAlyticsXpSessionManager
     void resetSkill(Skill skill)
     {
         if (skill != null) states.remove(skill);
+    }
+
+    /** Resets only a single skill's XP/hr timing, keeping its gained XP. */
+    void resetSkillRate(Skill skill)
+    {
+        RuneAlyticsXpSkillState st = (skill == null) ? null : states.get(skill);
+        if (st != null) st.resetRate();
     }
 
     long afkTimeoutMs()
@@ -243,14 +372,6 @@ class RuneAlyticsXpSessionManager
         }
         list.sort(Comparator.comparingLong(RuneAlyticsXpSkillState::getLastGainMs).reversed());
         return list;
-    }
-
-    List<RuneAlyticsXpSkillState.Sample> overallSamplesSnapshot()
-    {
-        synchronized (overallSamples)
-        {
-            return overallSamples.isEmpty() ? Collections.emptyList() : new ArrayList<>(overallSamples);
-        }
     }
 
     // ── Sync payload ──────────────────────────────────────────────────────────

@@ -37,12 +37,14 @@ import java.util.Map;
 /**
  * The RuneAlytics "XP" side-panel tab.
  *
- * <p>Shows the current session's XP: a summary card (runtime, total XP, XP/hr,
- * levels gained), a trend sparkline, and a per-skill list with progress bars.
- * Clicking a skill opens {@link RuneAlyticsXpSkillDetailPanel}. All data is read
- * from {@link RuneAlyticsXpSessionManager}; the view is refreshed once per second
- * by a Swing timer that only runs while the tab is attached, and reuses skill
- * rows so a live-updating session does not thrash the layout.</p>
+ * <p>Shows the current session's XP: an "earned today" banner, a summary card
+ * (runtime, total XP, XP/hr, levels gained), an XP/hr trend sparkline (last
+ * hour), and a per-skill list with progress bars and time-to-level. Clicking a
+ * skill opens {@link RuneAlyticsXpSkillDetailPanel}; right-clicking a skill
+ * offers per-skill resets. All data is read from
+ * {@link RuneAlyticsXpSessionManager}; the view is refreshed once per second by
+ * a Swing timer that only runs while the tab is attached, and reuses skill rows
+ * so a live-updating session does not thrash the layout.</p>
  */
 @Slf4j
 @Singleton
@@ -52,6 +54,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     static final Color NAVY_BG     = new Color(16, 20, 32);
     static final Color CARD_BG     = new Color(26, 31, 46);
     static final Color CARD_BORDER = new Color(44, 52, 74);
+    static final Color CELL_BG     = new Color(30, 36, 52);
     static final Color GOLD        = new Color(214, 178, 64);
     static final Color TEAL        = new Color(82, 196, 196);
     static final Color XP_BLUE     = new Color(108, 140, 244);
@@ -59,9 +62,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     static final Color TEXT        = new Color(228, 232, 240);
     static final Color MUTED       = new Color(150, 158, 178);
 
-    private static final Font SECTION_FONT = new Font("Calibri", Font.BOLD, 11);
-    private static final Font CELL_LBL_FONT = new Font("Calibri", Font.PLAIN, 10);
-    private static final Font CELL_VAL_FONT = new Font("Calibri", Font.BOLD, 15);
+    private static final Font SECTION_FONT  = new Font("Calibri", Font.BOLD, 13);
+    private static final Font CELL_LBL_FONT = new Font("Calibri", Font.PLAIN, 11);
+    private static final Font CELL_VAL_FONT = new Font("Calibri", Font.BOLD, 16);
+
+    private static final int PAD = 6;
 
     private static final String CARD_MAIN   = "main";
     private static final String CARD_DETAIL = "detail";
@@ -83,12 +88,14 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     private final JLabel accountLabel = new JLabel();
     private final JLabel syncBadge    = new JLabel();
 
+    private final JLabel todayVal   = new JLabel("0 xp");
     private final JLabel runtimeVal = new JLabel("00:00:00");
     private final JLabel totalVal   = new JLabel("0");
     private final JLabel rateVal    = new JLabel("0");
     private final JLabel levelsVal  = new JLabel("0");
 
     private final XpSparkline overallSparkline = new XpSparkline();
+    private JPanel chartCardHolder;
     private final JPanel chartCard;
 
     private final JPanel skillListPanel = new JPanel();
@@ -117,6 +124,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         setBackground(NAVY_BG);
 
         JPanel main = buildMainView();
+        chartCard = chartCardHolder; // populated by buildMainView()
+
         detailPanel = new RuneAlyticsXpSkillDetailPanel(iconManager, config,
                 this::showMain, this::onResetSkill);
 
@@ -129,15 +138,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
                 ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         scroll.setBorder(new EmptyBorder(0, 0, 0, 0));
         scroll.getVerticalScrollBar().setUnitIncrement(16);
+        scroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
         scroll.getViewport().setBackground(NAVY_BG);
         scroll.setBackground(NAVY_BG);
         add(scroll, BorderLayout.CENTER);
-
-        chartCard = chartCardHolder; // populated by buildMainView() above
     }
-
-    // buildMainView stores the chart card here so the constructor can keep a ref.
-    private JPanel chartCardHolder;
 
     private JPanel buildMainView()
     {
@@ -145,7 +150,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         view.setLayout(new BoxLayout(view, BoxLayout.Y_AXIS));
         view.setBackground(NAVY_BG);
         view.setOpaque(true);
-        view.setBorder(new EmptyBorder(8, 8, 8, 8));
+        view.setBorder(new EmptyBorder(PAD, PAD, PAD, PAD));
 
         // Header
         JComponent header = RuneAlyticsUi.buildPanelHeader("XP Tracker");
@@ -168,6 +173,28 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         view.add(acctRow);
         view.add(Box.createRigidArea(new Dimension(0, 8)));
 
+        // XP earned today (top highlight)
+        JPanel today = card();
+        today.setBackground(new Color(34, 28, 16));
+        today.setBorder(new CompoundBorder(
+                new LineBorder(new Color(96, 78, 34), 1, true),
+                new EmptyBorder(6, 8, 6, 8)));
+        JPanel todayInner = new JPanel(new BorderLayout());
+        todayInner.setOpaque(false);
+        todayInner.setAlignmentX(Component.LEFT_ALIGNMENT);
+        todayInner.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        JLabel todayCap = new JLabel("XP EARNED TODAY");
+        todayCap.setFont(new Font("Calibri", Font.BOLD, 12));
+        todayCap.setForeground(MUTED);
+        todayVal.setFont(new Font("Calibri", Font.BOLD, 15));
+        todayVal.setForeground(GOLD);
+        todayVal.setHorizontalAlignment(SwingConstants.RIGHT);
+        todayInner.add(todayCap, BorderLayout.WEST);
+        todayInner.add(todayVal, BorderLayout.EAST);
+        today.add(todayInner);
+        view.add(today);
+        view.add(Box.createRigidArea(new Dimension(0, 8)));
+
         // Summary card
         JPanel summary = card();
         summary.add(sectionLabel("SESSION SUMMARY"));
@@ -179,7 +206,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         grid.add(statCell("TOTAL XP GAINED", totalVal,   GOLD));
         grid.add(statCell("XP / HOUR",       rateVal,    XP_GREEN));
         grid.add(statCell("LEVELS GAINED",   levelsVal,  XP_BLUE));
-        grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, grid.getPreferredSize().height + 40));
+        grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
         summary.add(grid);
         view.add(summary);
         view.add(Box.createRigidArea(new Dimension(0, 8)));
@@ -199,9 +226,9 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         view.add(controls);
         view.add(Box.createRigidArea(new Dimension(0, 8)));
 
-        // Chart card
+        // Chart card (XP/hr over the last hour)
         JPanel chart = card();
-        chart.add(sectionLabel("XP GAIN OVER TIME"));
+        chart.add(sectionLabel("XP / HOUR"));
         chart.add(Box.createRigidArea(new Dimension(0, 6)));
         overallSparkline.setAlignmentX(Component.LEFT_ALIGNMENT);
         chart.add(overallSparkline);
@@ -223,7 +250,13 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         emptyLabel.setText("No XP gained yet this session.");
         view.add(emptyLabel);
 
-        return view;
+        // Wrap in BorderLayout.NORTH so the content keeps its preferred height and
+        // never stretches to fill the tall scroll viewport (matches Loot Tracker).
+        JPanel wrap = new JPanel(new BorderLayout());
+        wrap.setBackground(NAVY_BG);
+        wrap.setOpaque(true);
+        wrap.add(view, BorderLayout.NORTH);
+        return wrap;
     }
 
     // ── Lifecycle: run the refresh timer only while attached ──────────────────
@@ -265,6 +298,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         }
 
         long now = System.currentTimeMillis();
+        sessionManager.sampleRates(now);
 
         // Account + sync badge
         String acct = sessionManager.getSessionAccountKey();
@@ -273,6 +307,9 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 
         // Compact mode toggles the chart card off.
         chartCard.setVisible(!config.xpCompactMode());
+
+        // "Today" total is always shown.
+        todayVal.setText(XpFormat.comma(sessionManager.todayXpGained()) + " xp");
 
         if (!config.enableXpTracker())
         {
@@ -283,12 +320,12 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 
         // Summary
         runtimeVal.setText(XpFormat.duration(sessionManager.runtimeMs(now)));
-        totalVal.setText(XpFormat.compactUpper(sessionManager.totalXpGained()));
+        totalVal.setText(XpFormat.comma(sessionManager.totalXpGained()));
         rateVal.setText(config.xpShowPerHour()
                 ? XpFormat.compactUpper(sessionManager.overallXpPerHour(now)) : "—");
         levelsVal.setText(Integer.toString(sessionManager.levelsGained()));
 
-        overallSparkline.setSamples(sessionManager.overallSamplesSnapshot());
+        overallSparkline.setSamples(sessionManager.overallRateHistorySnapshot());
 
         // Detail view, if showing
         if (detailPanel.getSkill() != null && isDetailShowing())
@@ -321,8 +358,9 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             skillListPanel.removeAll();
             for (RuneAlyticsXpSkillState st : states)
             {
-                RuneAlyticsXpSkillRow row = rows.computeIfAbsent(st.getSkill(),
-                        s -> new RuneAlyticsXpSkillRow(s, iconManager, config, this::showSkillDetail));
+                RuneAlyticsXpSkillRow row = rows.computeIfAbsent(st.getSkill(), s ->
+                        new RuneAlyticsXpSkillRow(s, iconManager, config,
+                                this::showSkillDetail, this::onResetSkillRate, this::onResetSkill));
                 skillListPanel.add(row);
                 skillListPanel.add(Box.createRigidArea(new Dimension(0, 4)));
             }
@@ -434,6 +472,12 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         refresh();
     }
 
+    private void onResetSkillRate(Skill skill)
+    {
+        sessionManager.resetSkillRate(skill);
+        refresh();
+    }
+
     // ── Small builders ────────────────────────────────────────────────────────
 
     private JPanel card()
@@ -449,28 +493,33 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         return p;
     }
 
+    /** A summary stat cell with its caption + value vertically & horizontally centered. */
     private JComponent statCell(String caption, JLabel valueLabel, Color valueColor)
     {
         JPanel p = new JPanel();
         p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
-        p.setBackground(new Color(30, 36, 52));
+        p.setBackground(CELL_BG);
         p.setOpaque(true);
         p.setBorder(new CompoundBorder(
                 new LineBorder(CARD_BORDER, 1, true),
-                new EmptyBorder(6, 8, 6, 8)));
+                new EmptyBorder(8, 6, 8, 6)));
 
         JLabel cap = new JLabel(caption);
         cap.setFont(CELL_LBL_FONT);
         cap.setForeground(MUTED);
-        cap.setAlignmentX(Component.LEFT_ALIGNMENT);
+        cap.setAlignmentX(Component.CENTER_ALIGNMENT);
+        cap.setHorizontalAlignment(SwingConstants.CENTER);
 
         valueLabel.setFont(CELL_VAL_FONT);
         valueLabel.setForeground(valueColor);
-        valueLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        valueLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        valueLabel.setHorizontalAlignment(SwingConstants.CENTER);
 
+        p.add(Box.createVerticalGlue());
         p.add(cap);
-        p.add(Box.createRigidArea(new Dimension(0, 3)));
+        p.add(Box.createRigidArea(new Dimension(0, 4)));
         p.add(valueLabel);
+        p.add(Box.createVerticalGlue());
         return p;
     }
 

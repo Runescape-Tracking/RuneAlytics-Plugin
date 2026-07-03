@@ -7,8 +7,11 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
 import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
@@ -18,6 +21,7 @@ import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.Point;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.function.Consumer;
@@ -34,8 +38,8 @@ import static com.runealytics.RuneAlyticsXpTrackerPanel.XP_GREEN;
  *
  * <p>Created once per skill and reused — {@link #update} only mutates label text
  * and the progress fraction, so polling it from the refresh timer is cheap and
- * causes no structural relayout. Clicking the row opens that skill's detail view
- * via the supplied callback.</p>
+ * causes no structural relayout. Left-clicking the row opens that skill's detail
+ * view; right-clicking opens a menu to reset the skill's XP/hr or session XP.</p>
  */
 class RuneAlyticsXpSkillRow extends JPanel
 {
@@ -53,12 +57,13 @@ class RuneAlyticsXpSkillRow extends JPanel
     private final JLabel levelLabel  = new JLabel();
     private final JLabel gainedLabel = new JLabel();
     private final JLabel rateLabel   = new JLabel();
-    private final JLabel toNextLabel = new JLabel();
+    private final JLabel infoLabel   = new JLabel();
     private final XpProgressBar bar  = new XpProgressBar();
     private final JPanel bottomRow;
 
     RuneAlyticsXpSkillRow(Skill skill, SkillIconManager iconManager, RunealyticsConfig config,
-                          Consumer<Skill> onClick)
+                          Consumer<Skill> onClick, Consumer<Skill> onResetRate,
+                          Consumer<Skill> onResetSession)
     {
         this.skill  = skill;
         this.config = config;
@@ -113,11 +118,9 @@ class RuneAlyticsXpSkillRow extends JPanel
         valueCol.setOpaque(false);
         gainedLabel.setFont(VALUE_FONT);
         gainedLabel.setForeground(GOLD);
-        gainedLabel.setHorizontalAlignment(SwingConstants.RIGHT);
         gainedLabel.setAlignmentX(Component.RIGHT_ALIGNMENT);
         rateLabel.setFont(SMALL_FONT);
         rateLabel.setForeground(XP_GREEN);
-        rateLabel.setHorizontalAlignment(SwingConstants.RIGHT);
         rateLabel.setAlignmentX(Component.RIGHT_ALIGNMENT);
         valueCol.add(gainedLabel);
         valueCol.add(rateLabel);
@@ -125,27 +128,79 @@ class RuneAlyticsXpSkillRow extends JPanel
         top.add(left,     BorderLayout.CENTER);
         top.add(valueCol, BorderLayout.EAST);
 
-        // ── Bottom row: [progress bar] .......... xp to next ──
+        // ── Bottom row: [progress bar] .......... time-to-level · xp to next ──
         bottomRow = new JPanel(new BorderLayout(6, 0));
         bottomRow.setOpaque(false);
         bottomRow.setBorder(new EmptyBorder(4, 0, 0, 0));
         bottomRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        toNextLabel.setFont(SMALL_FONT);
-        toNextLabel.setForeground(MUTED);
-        toNextLabel.setHorizontalAlignment(SwingConstants.RIGHT);
-        bottomRow.add(bar,        BorderLayout.CENTER);
-        bottomRow.add(toNextLabel, BorderLayout.EAST);
+        infoLabel.setFont(SMALL_FONT);
+        infoLabel.setForeground(MUTED);
+        infoLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+        bottomRow.add(bar,       BorderLayout.CENTER);
+        bottomRow.add(infoLabel, BorderLayout.EAST);
 
         add(top);
         add(Box.createRigidArea(new Dimension(0, 2)));
         add(bottomRow);
 
-        addMouseListener(new MouseAdapter()
+        // ── Right-click reset menu ──
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem header = new JMenuItem(prettyName(skill));
+        header.setEnabled(false);
+        menu.add(header);
+        menu.addSeparator();
+        JMenuItem resetRateItem = new JMenuItem("Reset XP/hr");
+        resetRateItem.addActionListener(e -> { if (onResetRate != null) onResetRate.accept(skill); });
+        JMenuItem resetSessionItem = new JMenuItem("Reset session XP");
+        resetSessionItem.addActionListener(e -> { if (onResetSession != null) onResetSession.accept(skill); });
+        menu.add(resetRateItem);
+        menu.add(resetSessionItem);
+
+        // Install one mouse handler on the row and every descendant so a click or
+        // right-click anywhere on the row works (Swing does not bubble to parents).
+        installMouse(this, onClick, menu);
+    }
+
+    private void installMouse(Component c, Consumer<Skill> onClick, JPopupMenu menu)
+    {
+        MouseAdapter ma = new MouseAdapter()
         {
-            @Override public void mouseClicked(MouseEvent e) { if (onClick != null) onClick.accept(skill); }
-            @Override public void mouseEntered(MouseEvent e) { setBackground(HOVER_BG); }
-            @Override public void mouseExited(MouseEvent e)  { setBackground(CARD_BG); }
-        });
+            @Override public void mousePressed(MouseEvent e)  { maybePopup(e, menu); }
+            @Override public void mouseReleased(MouseEvent e) { maybePopup(e, menu); }
+
+            @Override public void mouseClicked(MouseEvent e)
+            {
+                if (SwingUtilities.isLeftMouseButton(e) && !e.isPopupTrigger() && onClick != null)
+                {
+                    onClick.accept(skill);
+                }
+            }
+
+            @Override public void mouseEntered(MouseEvent e) { setBackground(HOVER_BG); repaint(); }
+
+            @Override public void mouseExited(MouseEvent e)
+            {
+                Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(),
+                        RuneAlyticsXpSkillRow.this);
+                if (!contains(p)) { setBackground(CARD_BG); repaint(); }
+            }
+        };
+        c.addMouseListener(ma);
+        if (c instanceof java.awt.Container)
+        {
+            for (Component child : ((java.awt.Container) c).getComponents())
+            {
+                installMouse(child, onClick, menu);
+            }
+        }
+    }
+
+    private void maybePopup(MouseEvent e, JPopupMenu menu)
+    {
+        if (e.isPopupTrigger())
+        {
+            menu.show(e.getComponent(), e.getX(), e.getY());
+        }
     }
 
     Skill getSkill()
@@ -160,7 +215,8 @@ class RuneAlyticsXpSkillRow extends JPanel
         long afk = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
         levelLabel.setText("Lvl. " + st.displayLevel());
-        gainedLabel.setText(XpFormat.compactUpper(st.getTotalGained()));
+        // True XP-gained value (e.g. 1,441,027), never abbreviated.
+        gainedLabel.setText(XpFormat.comma(st.getTotalGained()));
 
         if (config.xpShowPerHour())
         {
@@ -177,19 +233,26 @@ class RuneAlyticsXpSkillRow extends JPanel
         if (showBottom)
         {
             bar.setFraction(st.levelProgress());
-            if (config.xpShowXpToNext())
-            {
-                long toNext = st.xpToNextLevel();
-                toNextLabel.setText(toNext > 0
-                        ? XpFormat.compactUpper(toNext) + " to " + (st.displayLevel() + 1)
-                        : "maxed");
-                toNextLabel.setVisible(true);
-            }
-            else
-            {
-                toNextLabel.setVisible(false);
-            }
+            infoLabel.setText(buildInfo(st, nowMs, ignoreAfk, afk));
+            infoLabel.setVisible(true);
         }
+    }
+
+    /** Builds the "time-to-level · xp-to-next" info string for the bottom row. */
+    private String buildInfo(RuneAlyticsXpSkillState st, long nowMs, boolean ignoreAfk, long afk)
+    {
+        long toNext = st.xpToNextLevel();
+        if (toNext <= 0) return "maxed";
+
+        String ttl = XpFormat.timeToLevel(st.timeToNextLevelMs(nowMs, ignoreAfk, afk));
+        String toNextStr = config.xpShowXpToNext()
+                ? XpFormat.compactUpper(toNext) + " to " + (st.displayLevel() + 1)
+                : "";
+
+        boolean hasTtl = !"—".equals(ttl);
+        if (hasTtl && !toNextStr.isEmpty()) return ttl + "  ·  " + toNextStr;
+        if (hasTtl)                          return ttl;
+        return toNextStr;
     }
 
     static String prettyName(Skill skill)

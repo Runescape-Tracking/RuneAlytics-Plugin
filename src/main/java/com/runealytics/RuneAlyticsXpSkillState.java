@@ -62,6 +62,8 @@ class RuneAlyticsXpSkillState
     private final Deque<XpDrop> recentDrops = new ArrayDeque<>();
     /** Cumulative-gained trend samples. Guarded by {@code this}. */
     private final List<Sample> samples = new ArrayList<>();
+    /** Rolling XP/hr samples (last hour) for the detail chart. Guarded by {@code this}. */
+    private final List<Sample> rateHistory = new ArrayList<>();
 
     RuneAlyticsXpSkillState(Skill skill, long baselineXp)
     {
@@ -210,6 +212,33 @@ class RuneAlyticsXpSkillState
     synchronized List<Sample> samplesSnapshot()
     {
         return samples.isEmpty() ? Collections.emptyList() : new ArrayList<>(samples);
+    }
+
+    /** Appends a rolling XP/hr sample and prunes anything older than {@code windowMs}. */
+    synchronized void sampleRate(long nowMs, boolean ignoreAfk, long afkTimeoutMs, long windowMs)
+    {
+        rateHistory.add(new Sample(nowMs, xpPerHour(nowMs, ignoreAfk, afkTimeoutMs)));
+        long cutoff = nowMs - windowMs;
+        rateHistory.removeIf(s -> s.timeMs < cutoff);
+        while (rateHistory.size() > MAX_SAMPLES * 3) rateHistory.remove(0);
+    }
+
+    /** Snapshot copy of the rolling XP/hr history for the EDT. */
+    synchronized List<Sample> rateHistorySnapshot()
+    {
+        return rateHistory.isEmpty() ? Collections.emptyList() : new ArrayList<>(rateHistory);
+    }
+
+    /**
+     * Resets only the XP/hr timing (and rate history) for this skill, keeping the
+     * XP gained. The rate recomputes from the next gain onward.
+     */
+    synchronized void resetRate()
+    {
+        firstGainMs = 0L;
+        lastGainMs  = 0L;
+        afkPausedMs = 0L;
+        rateHistory.clear();
     }
 
     private static int levelForXp(long xp)

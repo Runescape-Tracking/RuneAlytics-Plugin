@@ -28,6 +28,7 @@ import java.util.function.Consumer;
 
 import static com.runealytics.RuneAlyticsXpTrackerPanel.CARD_BG;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.CARD_BORDER;
+import static com.runealytics.RuneAlyticsXpTrackerPanel.CELL_BG;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.GOLD;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.MUTED;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.NAVY_BG;
@@ -40,16 +41,18 @@ import static com.runealytics.RuneAlyticsXpTrackerPanel.XP_GREEN;
  *
  * <p>Structure mirrors the RuneAlytics mockup: a back link, a skill header card
  * (icon, level, progress-to-next), a stat grid (XP gained, XP/hr, actions/hr,
- * time-to-level, XP-to-next, est. time), a per-skill trend sparkline, a recent
- * XP drops list, and a reset-this-skill button.</p>
+ * time-to-level, XP-to-next, est. time), a per-skill XP/hr sparkline, a recent
+ * XP drops list, and a reset-this-skill button. The content is wrapped in
+ * {@code BorderLayout.NORTH} so cards keep their preferred height and never
+ * stretch to fill the tall scroll viewport.</p>
  */
 class RuneAlyticsXpSkillDetailPanel extends JPanel
 {
-    private static final Font H_FONT     = new Font("Calibri", Font.BOLD, 16);
-    private static final Font LBL_FONT    = new Font("Calibri", Font.PLAIN, 10);
-    private static final Font VAL_FONT    = new Font("Calibri", Font.BOLD, 13);
-    private static final Font SECTION_FONT = new Font("Calibri", Font.BOLD, 11);
-    private static final Font DROP_FONT   = new Font("Calibri", Font.PLAIN, 11);
+    private static final Font H_FONT      = new Font("Calibri", Font.BOLD, 16);
+    private static final Font LBL_FONT     = new Font("Calibri", Font.PLAIN, 11);
+    private static final Font VAL_FONT     = new Font("Calibri", Font.BOLD, 13);
+    private static final Font SECTION_FONT = new Font("Calibri", Font.BOLD, 13);
+    private static final Font DROP_FONT    = new Font("Calibri", Font.PLAIN, 11);
 
     private final SkillIconManager iconManager;
     private final RunealyticsConfig config;
@@ -85,10 +88,15 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         this.config       = config;
         this.onResetSkill = onResetSkill;
 
-        setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
+        setLayout(new BorderLayout());
         setBackground(NAVY_BG);
         setOpaque(true);
-        setBorder(new EmptyBorder(8, 8, 8, 8));
+
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setBackground(NAVY_BG);
+        content.setOpaque(true);
+        content.setBorder(new EmptyBorder(6, 6, 6, 6));
 
         // ── Back link ──
         JLabel back = new JLabel("←  Back to Skills");
@@ -101,13 +109,14 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         {
             @Override public void mouseClicked(MouseEvent e) { if (onBack != null) onBack.run(); }
         });
-        add(back);
+        content.add(back);
 
         // ── Header card ──
         JPanel header = card();
         JPanel headerTop = new JPanel(new BorderLayout(8, 0));
         headerTop.setOpaque(false);
         headerTop.setAlignmentX(Component.LEFT_ALIGNMENT);
+        headerTop.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
         iconLabel.setPreferredSize(new Dimension(30, 30));
         JPanel titleCol = new JPanel();
         titleCol.setLayout(new BoxLayout(titleCol, BoxLayout.Y_AXIS));
@@ -132,10 +141,10 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         toNextLabel.setForeground(MUTED);
         toNextLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
         header.add(toNextLabel);
-        add(header);
-        add(Box.createRigidArea(new Dimension(0, 8)));
+        content.add(header);
+        content.add(Box.createRigidArea(new Dimension(0, 8)));
 
-        // ── Stat grid (2 x 3) ──
+        // ── Stat grid (3 x 2) ──
         JPanel grid = new JPanel(new GridLayout(3, 2, 6, 6));
         grid.setOpaque(false);
         grid.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -145,18 +154,18 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         grid.add(statCell("TIME TO LEVEL",    ttlVal,    TEXT));
         grid.add(statCell("XP TO NEXT LEVEL", toNextVal, TEXT));
         grid.add(statCell("EST. TIME",        estVal,    TEXT));
-        grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, grid.getPreferredSize().height));
-        add(grid);
-        add(Box.createRigidArea(new Dimension(0, 8)));
+        grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 210));
+        content.add(grid);
+        content.add(Box.createRigidArea(new Dimension(0, 8)));
 
-        // ── Sparkline card ──
+        // ── Sparkline card (XP/hr over the last hour) ──
         JPanel chartCard = card();
-        chartCard.add(sectionLabel("XP GAIN OVER TIME"));
+        chartCard.add(sectionLabel("XP / HOUR"));
         chartCard.add(Box.createRigidArea(new Dimension(0, 6)));
         sparkline.setAlignmentX(Component.LEFT_ALIGNMENT);
         chartCard.add(sparkline);
-        add(chartCard);
-        add(Box.createRigidArea(new Dimension(0, 8)));
+        content.add(chartCard);
+        content.add(Box.createRigidArea(new Dimension(0, 8)));
 
         // ── Recent XP drops ──
         dropsCard = card();
@@ -166,8 +175,8 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         dropsList.setOpaque(false);
         dropsList.setAlignmentX(Component.LEFT_ALIGNMENT);
         dropsCard.add(dropsList);
-        add(dropsCard);
-        add(Box.createRigidArea(new Dimension(0, 8)));
+        content.add(dropsCard);
+        content.add(Box.createRigidArea(new Dimension(0, 8)));
 
         // ── Reset this skill ──
         resetBtn = new JButton("Reset Skill XP");
@@ -185,7 +194,9 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         {
             if (this.skill != null && this.onResetSkill != null) this.onResetSkill.accept(this.skill);
         });
-        add(resetBtn);
+        content.add(resetBtn);
+
+        add(content, BorderLayout.NORTH);
     }
 
     /** Points the panel at a skill and resets its per-skill drop cache. */
@@ -227,16 +238,19 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
                 ? XpFormat.comma(toNext) + " xp to level " + (st.displayLevel() + 1)
                 : "Level maxed");
 
-        gainedVal.setText(XpFormat.compactUpper(st.getTotalGained()));
+        // True XP-gained value (never abbreviated).
+        gainedVal.setText(XpFormat.comma(st.getTotalGained()));
         rateVal.setText(config.xpShowPerHour()
                 ? XpFormat.compactUpper(st.xpPerHour(nowMs, ignoreAfk, afk))
                 : "—");
         actionsVal.setText(XpFormat.comma(st.actionsPerHour(nowMs, ignoreAfk, afk)));
         toNextVal.setText(toNext > 0 ? XpFormat.comma(toNext) : "—");
-        ttlVal.setText(XpFormat.timeToLevel(st.timeToNextLevelMs(nowMs, ignoreAfk, afk)));
-        estVal.setText(formatEst(st.timeToNextLevelMs(nowMs, ignoreAfk, afk)));
 
-        sparkline.setSamples(st.samplesSnapshot());
+        long ttlMs = st.timeToNextLevelMs(nowMs, ignoreAfk, afk);
+        ttlVal.setText(XpFormat.timeToLevel(ttlMs));
+        estVal.setText(ttlMs <= 0 ? "—" : XpFormat.duration(ttlMs));
+
+        sparkline.setSamples(st.rateHistorySnapshot());
 
         updateDrops(st, nowMs);
     }
@@ -315,11 +329,6 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         }
     }
 
-    private static String formatEst(long ms)
-    {
-        return ms <= 0 ? "—" : XpFormat.duration(ms);
-    }
-
     // ── Small builders ────────────────────────────────────────────────────────
 
     private JPanel card()
@@ -335,29 +344,34 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         return p;
     }
 
+    /** Stat cell with caption + value vertically & horizontally centered. */
     private JComponent statCell(String caption, JLabel valueLabel, Color valueColor)
     {
         JPanel p = new JPanel();
         p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
-        p.setBackground(CARD_BG);
+        p.setBackground(CELL_BG);
         p.setOpaque(true);
         p.setBorder(new CompoundBorder(
                 new LineBorder(CARD_BORDER, 1, true),
-                new EmptyBorder(6, 8, 6, 8)));
+                new EmptyBorder(8, 6, 8, 6)));
 
         JLabel cap = new JLabel(caption);
         cap.setFont(LBL_FONT);
         cap.setForeground(MUTED);
-        cap.setAlignmentX(Component.LEFT_ALIGNMENT);
+        cap.setAlignmentX(Component.CENTER_ALIGNMENT);
+        cap.setHorizontalAlignment(SwingConstants.CENTER);
 
         valueLabel.setFont(VAL_FONT);
         valueLabel.setForeground(valueColor);
         valueLabel.setText("—");
-        valueLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        valueLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        valueLabel.setHorizontalAlignment(SwingConstants.CENTER);
 
+        p.add(Box.createVerticalGlue());
         p.add(cap);
-        p.add(Box.createRigidArea(new Dimension(0, 2)));
+        p.add(Box.createRigidArea(new Dimension(0, 3)));
         p.add(valueLabel);
+        p.add(Box.createVerticalGlue());
         return p;
     }
 
