@@ -27,7 +27,6 @@ import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
-import java.awt.Container;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -161,43 +160,6 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     }
 
     /**
-     * The fixed branding header, identical in structure to the Loot Tracker's:
-     * the shared {@link RuneAlyticsUi#buildPanelHeader} block on a {@code (28,28,28)}
-     * strip with a divider beneath, pinned at the top so it never scrolls away.
-     */
-    private JPanel buildXpHeader()
-    {
-        JPanel header = new JPanel();
-        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
-        header.setBackground(new Color(28, 28, 28));
-        header.setBorder(new EmptyBorder(8, 8, 8, 8));
-
-        header.add(RuneAlyticsUi.buildPanelHeader("XP Tracker"));
-        header.add(Box.createVerticalStrut(8));
-
-        JSeparator sep = new JSeparator();
-        sep.setForeground(new Color(55, 55, 55));
-        sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
-        sep.setAlignmentX(Component.LEFT_ALIGNMENT);
-        header.add(sep);
-
-        return header;
-    }
-
-    /**
-     * Mirror the parent's height as our preferred height (like the root
-     * RuneAlytics panel) so the tab grows and shrinks with the client window and
-     * the scroll viewport always fills the available vertical space.
-     */
-    @Override
-    public Dimension getPreferredSize()
-    {
-        Container parent = getParent();
-        int h = (parent != null && parent.getHeight() > 0) ? parent.getHeight() : 400;
-        return new Dimension(PluginPanel.PANEL_WIDTH + 10, h);
-    }
-
-    /**
      * Scroll content that is forced to the viewport's width (never wider), so the
      * design reflows within the available space and is never clipped by the
      * always-on vertical scrollbar.
@@ -224,7 +186,18 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         view.setOpaque(true);
         view.setBorder(new EmptyBorder(PAD, PAD, PAD, PAD));
 
-        // (Branding header is pinned above the scroll — see buildXpHeader.)
+        // Shared branding header (logo + tagline + tab name), like every other tab.
+        JComponent branding = RuneAlyticsUi.buildPanelHeader("XP Tracker");
+        branding.setAlignmentX(Component.LEFT_ALIGNMENT);
+        view.add(branding);
+        view.add(Box.createRigidArea(new Dimension(0, 6)));
+
+        JSeparator headerSep = new JSeparator();
+        headerSep.setForeground(new Color(55, 55, 55));
+        headerSep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        headerSep.setAlignmentX(Component.LEFT_ALIGNMENT);
+        view.add(headerSep);
+        view.add(Box.createRigidArea(new Dimension(0, 8)));
 
         // Account + sync badge row
         JPanel acctRow = new JPanel(new BorderLayout());
@@ -414,12 +387,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             clearRows();
         }
 
-        // Summary — runtime is session-wide; XP gained / XP-hr / levels are the
-        // single featured skill (favorite-if-live, else highest-output live skill).
+        // Summary — runtime is session-wide; XP gained / XP-hr / levels + the trend
+        // chart are the single featured skill (favorite-if-live, else highest-output
+        // live skill). updateFeaturedSummary also repoints the chart.
         runtimeVal.setText(XpFormat.duration(sessionManager.runtimeMs(now)));
         updateFeaturedSummary(now, activeNow, liveWindow);
-
-        overallSparkline.setSamples(sessionManager.overallRateHistorySnapshot());
 
         // Eye toggle: only meaningful when something is hidden (or we're revealing).
         int hiddenCount = sessionManager.hiddenCount();
@@ -514,10 +486,17 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             rateVal.setText(config.xpShowPerHour() ? "0" : "—");
             rateVal.setForeground(XP_GREEN);
             levelsVal.setText("0");
+            // No featured skill yet — show the combined trend in the default colour.
+            overallSparkline.setLineColor(null);
+            overallSparkline.setSamples(sessionManager.overallRateHistorySnapshot());
             return;
         }
 
         Color c = SkillColors.of(featured);
+
+        // Chart follows the featured skill: its own XP/hr history, in its colour.
+        overallSparkline.setLineColor(c);
+        overallSparkline.setSamples(fs.rateHistorySnapshot());
 
         // Only touch the icon/name when the featured skill actually changes.
         if (featured != lastFeatured)
