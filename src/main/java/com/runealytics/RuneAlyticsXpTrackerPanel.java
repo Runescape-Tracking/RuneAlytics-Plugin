@@ -121,6 +121,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     private boolean showHidden = false;
 
     private Timer refreshTimer;
+    private Timer liveFadeTimer;
     private long syncMessageUntil = 0L;
 
     @Inject
@@ -363,7 +364,16 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             refreshTimer = new Timer(1000, e -> refresh());
             refreshTimer.setRepeats(true);
         }
+        if (liveFadeTimer == null)
+        {
+            // ~15fps animation tick that only fades LIVE indicators (no-op per row
+            // unless its opacity actually changed), so the fade is smooth without
+            // running a full data refresh.
+            liveFadeTimer = new Timer(66, e -> tickLiveFades());
+            liveFadeTimer.setRepeats(true);
+        }
         refreshTimer.start();
+        liveFadeTimer.start();
         refresh();
     }
 
@@ -371,7 +381,19 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     public void removeNotify()
     {
         if (refreshTimer != null) refreshTimer.stop();
+        if (liveFadeTimer != null) liveFadeTimer.stop();
         super.removeNotify();
+    }
+
+    /** Fades the LIVE indicator on every currently-listed skill row. */
+    private void tickLiveFades()
+    {
+        long now = System.currentTimeMillis();
+        for (Skill s : lastOrder)
+        {
+            RuneAlyticsXpSkillRow row = rows.get(s);
+            if (row != null) row.tickLiveFade(now);
+        }
     }
 
     void setPlugin(RuneAlyticsPlugin plugin)
@@ -450,7 +472,6 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     {
         List<RuneAlyticsXpSkillState> states =
                 sessionManager.snapshotStates(config.xpShowAllSkills(), showHidden);
-        long liveWindow = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
         List<Skill> order = new ArrayList<>(states.size());
         for (RuneAlyticsXpSkillState st : states) order.add(st.getSkill());
@@ -479,11 +500,9 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         {
             RuneAlyticsXpSkillRow row = rows.get(st.getSkill());
             if (row == null) continue;
-            // "LIVE" = still gaining XP; drops off once idle past the AFK window
-            // (real wall time, so it also clears while logged out).
-            boolean live = st.hasGains() && st.getLastGainWallMs() > 0
-                    && (now - st.getLastGainWallMs()) < liveWindow;
-            row.update(st, activeNow, live, sessionManager.isHidden(st.getSkill()),
+            // The row manages its own "LIVE" indicator (15s window + fade) from the
+            // skill's last-gain wall time via the animation tick below.
+            row.update(st, activeNow, sessionManager.isHidden(st.getSkill()),
                     sessionManager.isFavorite(st.getSkill()));
         }
     }
