@@ -5,7 +5,6 @@ import net.runelite.client.game.SkillIconManager;
 
 import javax.swing.Box;
 import javax.swing.BoxLayout;
-import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
@@ -60,7 +59,7 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
 
     private Skill skill;
 
-    private final JLabel iconLabel   = new JLabel();
+    private final XpSkillIcon iconLabel = new XpSkillIcon(32);
     private final JLabel nameLabel   = new JLabel();
     private final JLabel levelLabel  = new JLabel();
     private final XpProgressBar headerBar = new XpProgressBar();
@@ -117,7 +116,6 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         headerTop.setOpaque(false);
         headerTop.setAlignmentX(Component.LEFT_ALIGNMENT);
         headerTop.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
-        iconLabel.setPreferredSize(new Dimension(30, 30));
         JPanel titleCol = new JPanel();
         titleCol.setLayout(new BoxLayout(titleCol, BoxLayout.Y_AXIS));
         titleCol.setOpaque(false);
@@ -213,12 +211,11 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         resetBtn.setText("Reset " + RuneAlyticsXpSkillRow.prettyName(skill) + " XP");
         try
         {
-            java.awt.image.BufferedImage img = iconManager.getSkillImage(skill, false);
-            iconLabel.setIcon(img != null ? new ImageIcon(img) : null);
+            iconLabel.setImage(iconManager.getSkillImage(skill, false));
         }
         catch (Exception ignored)
         {
-            iconLabel.setIcon(null);
+            iconLabel.setImage(null);
         }
     }
 

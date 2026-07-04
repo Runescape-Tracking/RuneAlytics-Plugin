@@ -5,7 +5,6 @@ import net.runelite.client.game.SkillIconManager;
 
 import javax.swing.Box;
 import javax.swing.BoxLayout;
-import javax.swing.ImageIcon;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
@@ -102,17 +101,16 @@ class RuneAlyticsXpSkillRow extends JPanel
         top.setOpaque(false);
         top.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JLabel iconLabel = new JLabel();
+        // Skill sprite on a circular MEDIUM_GRAY backing so it stays legible.
+        XpSkillIcon iconLabel = new XpSkillIcon(24);
         try
         {
-            java.awt.image.BufferedImage img = iconManager.getSkillImage(skill, true);
-            if (img != null) iconLabel.setIcon(new ImageIcon(img));
+            iconLabel.setImage(iconManager.getSkillImage(skill, true));
         }
         catch (Exception ignored)
         {
-            // Fall back to a text-only row if icons are unavailable.
+            // Fall back to an empty circle if icons are unavailable.
         }
-        iconLabel.setPreferredSize(new Dimension(22, 22));
 
         JPanel nameCol = new JPanel();
         nameCol.setLayout(new BoxLayout(nameCol, BoxLayout.Y_AXIS));

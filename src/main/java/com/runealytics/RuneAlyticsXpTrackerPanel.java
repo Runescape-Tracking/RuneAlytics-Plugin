@@ -101,7 +101,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 
     // Session-summary "featured skill" tag (icon + name at top-right of the card).
     private final JLabel summarySkillName = new JLabel();
-    private final JLabel summarySkillIcon = new JLabel();
+    private final XpSkillIcon summarySkillIcon = new XpSkillIcon(24);
     private Skill lastFeatured = null;
 
     private final XpSparkline overallSparkline = new XpSparkline();
@@ -527,7 +527,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 
         if (fs == null)
         {
-            if (lastFeatured != null) { summarySkillName.setText(""); summarySkillIcon.setIcon(null); lastFeatured = null; }
+            if (lastFeatured != null) { summarySkillName.setText(""); summarySkillIcon.setImage(null); lastFeatured = null; }
             totalVal.setText("0");
             rateVal.setText(config.xpShowPerHour() ? "0" : "—");
             rateVal.setForeground(XP_GREEN);
@@ -552,12 +552,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             summarySkillName.setForeground(c);
             try
             {
-                java.awt.image.BufferedImage img = iconManager.getSkillImage(featured, true);
-                summarySkillIcon.setIcon(img != null ? new javax.swing.ImageIcon(img) : null);
+                summarySkillIcon.setImage(iconManager.getSkillImage(featured, true));
             }
             catch (Exception ignored)
             {
-                summarySkillIcon.setIcon(null);
+                summarySkillIcon.setImage(null);
             }
         }
 
