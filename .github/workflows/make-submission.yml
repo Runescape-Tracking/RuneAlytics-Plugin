@@ -2,9 +2,11 @@ name: Make Submission Branch
 
 # Regenerates the test-free `submission` branch that the RuneLite Plugin Hub
 # builds. Run manually (workflow_dispatch) or automatically when a release tag
-# is pushed. The job strips src/test and .github via
-# scripts/make-submission.sh, verifies the stripped tree still compiles, pushes
-# the result to `submission`, and surfaces the commit SHA to paste into the
+# is pushed. Via scripts/make-submission.sh the job removes the unit-test suite
+# (keeping the standard RuneAlyticsPluginTest launcher + shadowJar), strips
+# checkstyle.xml, .github and scripts, trims checkstyle + mockito/mockwebserver
+# from build.gradle, verifies the stripped tree still compiles, pushes the
+# result to `submission`, and surfaces the commit SHA to paste into the
 # plugin-hub PR.
 
 on:

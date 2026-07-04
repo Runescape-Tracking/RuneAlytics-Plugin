@@ -3,18 +3,30 @@
 # make-submission.sh — regenerate the test-free `submission` branch.
 #
 # The RuneLite Plugin Hub builds (and reviewers read) the exact git commit you
-# point it at. This script derives a clean, production-only commit from the dev
-# tree by stripping everything that must not ship:
+# point it at. This script derives a clean, production commit from the dev tree
+# that matches the standard RuneLite external-plugin layout you have always
+# submitted, by removing only the dev-only additions layered on top of it.
 #
-#   - src/test/            (the entire unit-test suite + the dev launcher)
-#   - .github/             (our development CI workflows)
+# What is stripped:
 #
-# It also trims the test-only declarations from build.gradle (the
-# `testImplementation` dependencies and the dev-launcher `shadowJar` task) so
-# the submitted build file matches the stripped tree and contains no dangling
-# reference to the removed launcher. Only the checkstyle wiring and the
-# production `compileOnly` dependencies remain. The dev tree (master) keeps its
-# full build.gradle untouched — the edit happens only in the throwaway worktree.
+#   - the unit-test suite under src/test/  (every *Test.java that has @Test),
+#     BUT the standard dev launcher src/test/.../RuneAlyticsPluginTest.java is
+#     KEPT — it is part of the RuneLite template, has no @Test methods, and is
+#     the Main-Class that the shadowJar task boots.
+#   - src/test test resources (e.g. logback-test.xml) added for the suite.
+#   - checkstyle.xml            (dev-only quality gate)
+#   - .github/                  (our development CI workflows)
+#   - scripts/                  (this tooling — never needed on submission)
+#
+# It also trims from build.gradle ONLY the dev-only additions:
+#   - the `id 'checkstyle'` plugin line, the `checkstyle { ... }` block, and the
+#     standalone `configurations.checkstyle { ... }` exclude line, and
+#   - the `testImplementation` lines for mockito and mockwebserver.
+#
+# Everything that has always shipped is preserved verbatim: the shadowJar task
+# (and its RuneAlyticsPluginTest Main-Class), and the junit / runelite client /
+# jshell testImplementation dependencies. The dev tree (master) keeps its full
+# build.gradle untouched — the edit happens only in the throwaway worktree.
 #
 # The result is committed onto the `submission` branch, compiled to prove the
 # stripped tree still builds on its own, and the resulting commit SHA is printed
@@ -41,34 +53,48 @@ cd "$REPO_ROOT"
 SOURCE_REF="${1:-$(git rev-parse --abbrev-ref HEAD)}"
 SUBMISSION_BRANCH="${SUBMISSION_BRANCH:-submission}"
 
-# Paths stripped from the submission tree.
+# The standard dev launcher that MUST survive the strip (Main-Class of shadowJar).
+KEEP_LAUNCHER="src/test/java/com/runealytics/RuneAlyticsPluginTest.java"
+
+# Whole paths removed from the submission tree (dev-only tooling/config).
 STRIP_PATHS=(
-    "src/test"
+    "checkstyle.xml"
     ".github"
+    "scripts"
 )
 
 info()  { printf '\033[36m[make-submission]\033[0m %s\n' "$*"; }
 fail()  { printf '\033[31m[make-submission] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
-# Remove test-only declarations from build.gradle in the current directory:
-#   * every `testImplementation` line, and
-#   * the whole `tasks.register('shadowJar', Jar) { ... }` block.
-# The shadowJar block is matched by net-brace counting so the `${...}` sequences
-# inside its strings (which are brace-balanced per line) don't confuse it. A
-# final pass trims trailing blank lines. Groovy validity is guaranteed by the
-# compileJava verification step that follows.
+# Remove dev-only declarations from build.gradle in the current directory:
+#   * the `id 'checkstyle'` plugin line,
+#   * the whole `checkstyle { ... }` block,
+#   * the standalone `configurations.checkstyle { ... }` exclude line, and
+#   * the mockito and mockwebserver testImplementation lines.
+# The junit / runelite client / jshell testImplementation lines and the entire
+# shadowJar task are left intact. The checkstyle block is matched by net-brace
+# counting; a final pass trims trailing blank lines. Groovy validity is proven
+# by the compileJava verification step that follows.
 trim_build_gradle() {
     awk '
-        /^[[:space:]]*testImplementation/ { next }
-        /tasks\.register\(.shadowJar./    { inShadow=1; depth=0; seenOpen=0 }
-        inShadow {
+        # Drop the checkstyle plugin id (inside the plugins { } block).
+        /^[[:space:]]*id[[:space:]]+.checkstyle./ { next }
+        # Drop the dev-only test dependencies (keep junit + runelite client/jshell).
+        /^[[:space:]]*testImplementation.*mockito/       { next }
+        /^[[:space:]]*testImplementation.*mockwebserver/ { next }
+        # Drop the standalone one-line configurations.checkstyle { ... } exclude.
+        /^[[:space:]]*configurations\.checkstyle[[:space:]]*\{/ { next }
+        # Drop the whole checkstyle { ... } block by brace counting.
+        /^[[:space:]]*checkstyle[[:space:]]*\{/ { inCs=1; depth=0; seenOpen=0 }
+        inCs {
             o=gsub(/[{]/,""); c=gsub(/[}]/,""); depth += o - c
             if (o>0) seenOpen=1
-            if (seenOpen && depth<=0) inShadow=0
+            if (seenOpen && depth<=0) inCs=0
             next
         }
         { print }
     ' build.gradle \
+        | cat -s \
         | awk 'NF{last=NR} {line[NR]=$0} END{for (i=1;i<=last;i++) print line[i]}' \
         > build.gradle.tmp
     mv build.gradle.tmp build.gradle
@@ -106,7 +132,7 @@ trap cleanup EXIT
 
 git worktree add --quiet --force "${WORKTREE_DIR}" "${SUBMISSION_BRANCH}"
 
-# 4. Strip dev/test paths and commit the result.
+# 4. Strip dev-only paths + the unit tests and commit the result.
 (
     cd "${WORKTREE_DIR}"
 
@@ -116,13 +142,20 @@ git worktree add --quiet --force "${WORKTREE_DIR}" "${SUBMISSION_BRANCH}"
         fi
     done
 
-    # Trim the test-only declarations from build.gradle so it matches the
-    # stripped tree (no test deps, no dev-launcher shadowJar task).
+    # Remove the unit-test suite (and its test resources) while keeping the
+    # standard RuneAlyticsPluginTest launcher that shadowJar boots.
+    while IFS= read -r f; do
+        [ "${f}" = "${KEEP_LAUNCHER}" ] && continue
+        git rm --quiet -- "${f}"
+    done < <(git ls-files 'src/test')
+
+    # Trim the dev-only declarations from build.gradle (checkstyle + mockito +
+    # mockwebserver); keep shadowJar and the junit/client/jshell test deps.
     trim_build_gradle
     git add build.gradle
 
     if git diff --cached --quiet; then
-        info "Nothing to strip — source is already test-free."
+        info "Nothing to strip — source is already submission-clean."
     else
         git commit --quiet -m "build: strip dev/test tooling for Plugin Hub submission
 
@@ -139,13 +172,17 @@ Do not commit onto this branch by hand — re-run the script instead."
             || fail "Stripped submission tree failed to compile."
     fi
 
-    # 6. Sanity-check: no test sources or test-only build config leaked into the
-    #    submission tree.
-    if [ -d "src/test" ]; then
-        fail "src/test still present in submission tree — strip failed."
+    # 6. Sanity checks: the launcher survived, no unit tests leaked, and
+    #    build.gradle no longer references any dev-only tooling.
+    if [ ! -f "${KEEP_LAUNCHER}" ]; then
+        fail "Dev launcher ${KEEP_LAUNCHER} was removed — strip is too aggressive."
     fi
-    if grep -qE 'testImplementation|shadowJar' build.gradle; then
-        fail "build.gradle still references test-only tooling — trim failed."
+    LEAKED_TESTS="$(git ls-files 'src/test' | grep -v "^${KEEP_LAUNCHER}$" || true)"
+    if [ -n "${LEAKED_TESTS}" ]; then
+        fail "Unit-test files still present in submission tree:"$'\n'"${LEAKED_TESTS}"
+    fi
+    if grep -qE 'mockito|mockwebserver|checkstyle' build.gradle; then
+        fail "build.gradle still references dev-only tooling — trim failed."
     fi
 )
 
