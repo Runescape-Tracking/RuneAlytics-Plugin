@@ -13,6 +13,7 @@ import javax.inject.Singleton;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.LongSupplier;
 
 /**
  * Guards loot recording against false positives during death-recovery events.
@@ -96,6 +97,13 @@ public class DeathRecoveryGuard
 
     private final Client client;
 
+    /**
+     * Time source for all suppression-window arithmetic. Defaults to the system
+     * clock in production; tests inject a controllable one for deterministic
+     * boundary checks.
+     */
+    private final LongSupplier clock;
+
     // ── Mutable state (all written on client thread) ──────────────────────────
 
     /** Time at which the most recent death was detected (epoch ms), or 0. */
@@ -120,7 +128,18 @@ public class DeathRecoveryGuard
     @Inject
     public DeathRecoveryGuard(Client client)
     {
+        this(client, System::currentTimeMillis);
+    }
+
+    /**
+     * Test seam: lets a unit test supply a deterministic time source. Production
+     * always goes through the {@code @Inject} constructor above, which uses
+     * {@link System#currentTimeMillis()}.
+     */
+    DeathRecoveryGuard(Client client, LongSupplier clock)
+    {
         this.client = client;
+        this.clock  = clock;
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -137,7 +156,7 @@ public class DeathRecoveryGuard
     {
         if (deathDetectedAt == 0L) return false;
 
-        long now        = System.currentTimeMillis();
+        long now        = clock.getAsLong();
         long elapsed    = now - deathDetectedAt;
         boolean inWindow = elapsed < DEATH_SUPPRESSION_MS;
         boolean extended = inRecoveryRegion || recoveryWidgetOpen;
@@ -329,7 +348,7 @@ public class DeathRecoveryGuard
 
     private void triggerDeath(String reason)
     {
-        deathDetectedAt = System.currentTimeMillis();
+        deathDetectedAt = clock.getAsLong();
         lastRecoveryInteractionAt = deathDetectedAt;
         log.debug("[death-guard] Death detected ({}). Suppression active for {} minutes.",
                 reason, DEATH_SUPPRESSION_MINUTES);
@@ -337,7 +356,7 @@ public class DeathRecoveryGuard
 
     private void markRecoveryInteraction(String context)
     {
-        lastRecoveryInteractionAt = System.currentTimeMillis();
+        lastRecoveryInteractionAt = clock.getAsLong();
         log.debug("[death-guard] Recovery interaction: {}", context);
     }
 

@@ -178,7 +178,7 @@ public class MatchmakingSession
         public String  getRiskValueLabel()    { return riskValueLabel; }
         public RiskItem getMostValuableKept() { return mostValuableKept; }
         public List<RiskItem> getKeptItems()  { return keptItems; }
-        public List<RiskItem> getAtRiskItems(){ return atRiskItems; }
+        public List<RiskItem> getAtRiskItems() { return atRiskItems; }
     }
 
     /** Empty placeholder used before the first risk valuation arrives. */
@@ -365,8 +365,8 @@ public class MatchmakingSession
 
     public RiskInfo getPlayer1Risk()        { return player1Risk; }
     public RiskInfo getPlayer2Risk()        { return player2Risk; }
-    public long     getMatchTotalRiskValue(){ return matchTotalRiskValue; }
-    public String   getMatchTotalRiskLabel(){ return matchTotalRiskLabel; }
+    public long     getMatchTotalRiskValue() { return matchTotalRiskValue; }
+    public String   getMatchTotalRiskLabel() { return matchTotalRiskLabel; }
 
     /** Risk valuation for the local player. */
     public RiskInfo getLocalRisk()
