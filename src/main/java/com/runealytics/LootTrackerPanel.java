@@ -89,6 +89,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private String       lastDisplayFingerprint = null;
     private String       highlightedBoss        = null;
+    /** Boss order + highlight currently laid out, so a refresh that doesn't change
+     *  structure can update cards in place (no teardown / no flicker). */
+    private List<String> displayedOrder         = new ArrayList<>();
+    private String       displayedHighlight     = null;
     private boolean      showIgnoredItems       = false;
     private SortMode     currentSort            = SortMode.RECENT;
     private SourceFilter currentFilter          = SourceFilter.ALL;
@@ -930,6 +934,27 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 {
                     try
                     {
+                        List<String> newOrder = new ArrayList<>(sorted.size());
+                        for (BossKillStats s : sorted) newOrder.add(s.getNpcName());
+
+                        // Fast path: same bosses, same order, same highlight → update
+                        // the existing cards in place. No removeAll, so no flicker.
+                        boolean inPlace = !sorted.isEmpty()
+                                && newOrder.equals(displayedOrder)
+                                && java.util.Objects.equals(highlightedBoss, displayedHighlight)
+                                && bossCardMap.size() == newOrder.size();
+
+                        if (inPlace)
+                        {
+                            for (BossKillStats stats : sorted)
+                                updateLoot(stats.getNpcName(), stats);
+                            totalKillsLabel.setText("Kills " + formatNumber(totalKills));
+                            totalValueLabel.setText("Value " + formatGp(totalVal));
+                            return;
+                        }
+
+                        // Slow path: structure changed (boss added/removed/reordered,
+                        // filter or highlight change) → rebuild the list.
                         int savedScroll = scrollPane.getVerticalScrollBar().getValue();
                         bossListPanel.removeAll();
                         itemSlotMap.clear();
@@ -954,6 +979,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                             totalValueLabel.setText("Value " + formatGp(totalVal));
                         }
+
+                        displayedOrder     = newOrder;
+                        displayedHighlight = highlightedBoss;
 
                         bossListPanel.revalidate();
                         bossListPanel.repaint();

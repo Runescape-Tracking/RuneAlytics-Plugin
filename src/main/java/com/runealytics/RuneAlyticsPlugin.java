@@ -132,6 +132,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private RuneAlyticsState         state;
     @Inject private ScheduledExecutorService executorService;
     @Inject private XpTrackerManager         xpTrackerManager;
+    @Inject private RuneAlyticsXpSessionManager xpSessionManager;
     @Inject private RunealyticsApiClient     apiClient;
     @Inject private BankDataManager          bankDataManager;
     @Inject private MatchmakingManager       matchmakingManager;
@@ -147,6 +148,7 @@ public class RuneAlyticsPlugin extends Plugin
     private NavigationButton         navButton;
     // Assigned on the EDT during startUp, read from background executor threads.
     private volatile LootTrackerPanel lootTrackerPanel;
+    private volatile RuneAlyticsXpTrackerPanel xpTrackerPanel;
 
     // ── Live-map heartbeat ─────────────────────────────────────────────────────
     /** Heartbeat period (ms): how often live-map location, gear and inventory are pushed to the site. */
@@ -168,9 +170,10 @@ public class RuneAlyticsPlugin extends Plugin
     private final AtomicBoolean bankSyncScheduled = new AtomicBoolean(false);
 
     // ── Feature-flag change tracking ────────────────────────────────────────────
-    /** Last loot-sync / match-enabled flags pushed to the UI. Null = not yet fetched. */
-    private Boolean lastLootSyncFlag    = null;
+    /** Last loot-sync / xp-tracker / match-enabled flags pushed to the UI. Null = not yet fetched. */
+    private Boolean lastLootSyncFlag     = null;
     private Boolean lastMatchEnabledFlag = null;
+    private Boolean lastXpTrackerFlag    = null;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT TRACKING STATE
@@ -387,23 +390,28 @@ public class RuneAlyticsPlugin extends Plugin
             try
             {
                 LootTrackerPanel        lootPanel        = injector.getInstance(LootTrackerPanel.class);
+                RuneAlyticsXpTrackerPanel xpPanel        = injector.getInstance(RuneAlyticsXpTrackerPanel.class);
                 MatchmakingPanel        matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
                 RuneAlyticsSettingsPanel settingsPanel   = injector.getInstance(RuneAlyticsSettingsPanel.class);
                 // Create the verification panel singleton on the EDT.
                 injector.getInstance(RuneAlyticsVerificationPanel.class);
 
                 lootTrackerPanel = lootPanel;
-                // Give the panel a reference to this plugin for the new buttons.
+                xpTrackerPanel   = xpPanel;
+                // Give the panels a reference to this plugin for their buttons.
                 lootPanel.setPlugin(this);
+                xpPanel.setPlugin(this);
                 // Sync starts in a neutral "checking…" state until feature flags
                 // confirm whether it is active — never assert it's turned off
                 // before we actually know (it defaults ON for verified players).
                 lootPanel.setSyncChecking();
 
-                // Loot Tracker has no feature gate — local tracking is always available.
-                // Sync availability is controlled separately via setSyncEnabled().
-                mainPanel.addTab("Loot Tracker", null,             lootPanel);
-                mainPanel.addTab("Matches",      FEATURE_MATCHES,  matchmakingPanel);
+                // Loot Tracker has no feature gate — local tracking is always
+                // available. The XP Tracker tab is gated by the server "xp_tracker"
+                // flag; Matches by "match_finder"; Settings by verification.
+                mainPanel.addTab("Loot Tracker", null,                 lootPanel);
+                mainPanel.addTab("XP",           FEATURE_XP_TRACKER,   xpPanel);
+                mainPanel.addTab("Matches",      FEATURE_MATCHES,      matchmakingPanel);
                 mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
                 log.debug("RuneAlytics tabs populated");
             }
@@ -448,6 +456,9 @@ public class RuneAlyticsPlugin extends Plugin
 
         // Flush accumulated XP before the executor shuts down.
         try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.debug("XP flush on shutdown failed: {}", e.getMessage()); }
+        // Flush the current XP session snapshot (final XP/hr) and pause its clock.
+        try { flushXpSessionOnLogout(); } catch (Exception e) { log.debug("XP session flush on shutdown failed: {}", e.getMessage()); }
+        try { xpSessionManager.setLoggedIn(false); } catch (Exception e) { log.debug("XP session pause on shutdown failed: {}", e.getMessage()); }
         try { lootManager.shutdown();             } catch (Exception e) { log.debug("Loot manager shutdown failed: {}", e.getMessage()); }
         try { matchmakingManager.reset();         } catch (Exception e) { log.debug("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
         try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.debug("Matchmaking overlay removal failed: {}", e.getMessage()); }
@@ -1339,6 +1350,12 @@ public class RuneAlyticsPlugin extends Plugin
             // double-upload. Upload-only; runs async so logout isn't delayed.
             performLogoutSyncFlush();
 
+            // Best-effort flush of the current account's XP session snapshot.
+            flushXpSessionOnLogout();
+
+            // Pause the XP session clock so runtime and XP/hr freeze while logged out.
+            xpSessionManager.setLoggedIn(false);
+
             // Clear the in-memory + on-screen loot so the panel resets to empty
             // and a different account logging in next can't inherit this
             // account's loot (which would then sync under the wrong account).
@@ -1353,6 +1370,7 @@ public class RuneAlyticsPlugin extends Plugin
             previousXp.clear();
             lastLootSyncFlag     = null;
             lastMatchEnabledFlag = null;
+            lastXpTrackerFlag    = null;
 
             matchmakingManager.reset(); // clear any active match on logout
             // Back to the neutral "unknown" state — the next login re-fetches the
@@ -1360,6 +1378,7 @@ public class RuneAlyticsPlugin extends Plugin
             if (lootTrackerPanel != null) lootTrackerPanel.setSyncChecking();
             SwingUtilities.invokeLater(() -> {
                 mainPanel.showLoggedOutState();
+                if (xpTrackerPanel != null) xpTrackerPanel.refresh();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
                 injector.getInstance(MatchmakingPanel.class).refreshLoginState();
             });
@@ -1371,6 +1390,8 @@ public class RuneAlyticsPlugin extends Plugin
         if (gs == GameState.LOGGED_IN)
         {
             state.setLoggedIn(true);
+            // Resume the XP session clock (runtime + XP/hr) now that we're in-game.
+            xpSessionManager.setLoggedIn(true);
 
             // (Re)start the live-map heartbeat now that the player is in-game.
             // Idempotent; the heartbeat waits until the account is verified.
@@ -1408,9 +1429,11 @@ public class RuneAlyticsPlugin extends Plugin
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
                 boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
                 boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
+                boolean xpTracker = flags.getOrDefault(FEATURE_XP_TRACKER, false);
+                state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
                 if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
                 SwingUtilities.invokeLater(() ->
-                        mainPanel.showMainFeatures(true, matchEnabled));
+                        mainPanel.showMainFeatures(true, xpTracker, matchEnabled));
 
                 // Auto-reconcile loot on login. Delayed so the login itself
                 // isn't slowed and the client has settled (local player + item
@@ -1640,12 +1663,23 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onStatChanged(StatChanged event)
     {
-        if (!config.enableXpTracking() || !state.isLoggedIn() || !state.isVerified()) return;
-
         Skill skill = event.getSkill();
         if (skill == Skill.OVERALL) return;
 
         int current = event.getXp();
+
+        // ── Local session XP tracking (XP Tracker tab) ────────────────────────
+        // Runs whenever logged in — no verification required, mirroring how loot
+        // tracking works locally. The session manager scopes itself to the active
+        // account and ignores the startup baseline spike internally.
+        if (config.enableXpTracker() && state.isLoggedIn())
+        {
+            xpSessionManager.recordXp(skill, current);
+        }
+
+        // ── Website XP batch sync (unchanged; requires a verified account) ────
+        if (!config.enableXpTracking() || !state.isLoggedIn() || !state.isVerified()) return;
+
         Integer prev = previousXp.get(skill);
 
         // First observation for this skill — record a baseline and wait for a real gain
@@ -1687,6 +1721,152 @@ public class RuneAlyticsPlugin extends Plugin
                 skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
             });
         }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  XP SESSION SNAPSHOT SYNC  (XP Tracker tab)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** Manual / periodic session sync (not an end-of-session post). */
+    public void syncXpSession(boolean userInitiated)
+    {
+        syncXpSession(userInitiated, false);
+    }
+
+    /**
+     * Builds and uploads the current account's XP-session snapshot to
+     * {@code /api/plugin/xp/session}.
+     *
+     * <p>Gated by the server {@code "xp_session"} feature flag — when the flag is
+     * off the call is silently skipped. Sends only the currently logged-in,
+     * verified account's session data, and fails gracefully (a visible badge when
+     * user-initiated) — it never throws or crashes the plugin.</p>
+     *
+     * @param userInitiated {@code true} when triggered by the panel's Sync button
+     * @param ended         {@code true} for the final post of a session
+     *                      (logout / shutdown / reset), {@code false} otherwise
+     */
+    public void syncXpSession(boolean userInitiated, boolean ended)
+    {
+        // ── Server feature-flag gate ──────────────────────────────────────────
+        if (!state.isXpSessionSyncEnabled())
+        {
+            // Silently skip when the server hasn't enabled xp_session.
+            if (userInitiated && xpTrackerPanel != null)
+                xpTrackerPanel.showSyncMessage("Sync off", false);
+            return;
+        }
+
+        if (!config.enableXpTracker())
+        {
+            if (userInitiated && xpTrackerPanel != null)
+                xpTrackerPanel.showSyncMessage("XP tracker off", false);
+            return;
+        }
+        if (!state.isLoggedIn() || !state.isVerified())
+        {
+            if (userInitiated && xpTrackerPanel != null)
+                xpTrackerPanel.showSyncMessage("Link account", false);
+            return;
+        }
+        if (!currentPlayerIdentity.canSync())
+        {
+            if (userInitiated && xpTrackerPanel != null)
+                xpTrackerPanel.showSyncMessage("Account mismatch", false);
+            return;
+        }
+        if (xpSessionManager.totalXpGained() <= 0L)
+        {
+            if (userInitiated && xpTrackerPanel != null)
+                xpTrackerPanel.showSyncMessage("No XP yet", false);
+            return;
+        }
+
+        final String username    = state.getVerifiedUsername();
+        final String profileId   = safeProfileKey();
+        final String gameMode    = state.getCurrentGameMode();
+        final String accountType = state.getCurrentAccountSubtype();
+
+        // Build the payload synchronously (in-memory, cheap) so callers that reset
+        // the session immediately afterwards still capture the finished session's
+        // data. The HTTP call itself is enqueued asynchronously by the API client.
+        try
+        {
+            RuneAlyticsXpSyncPayload payload =
+                    xpSessionManager.buildPayload(username, profileId, gameMode, accountType, ended);
+            apiClient.syncXpSession(payload);
+            if (userInitiated && xpTrackerPanel != null)
+                xpTrackerPanel.showSyncMessage("Synced", true);
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP Session] sync failed: {}", e.getMessage());
+            if (userInitiated && xpTrackerPanel != null)
+                xpTrackerPanel.showSyncMessage("Sync failed", false);
+        }
+    }
+
+    /** Returns the current RuneLite rsprofile key, or {@code null} if unavailable. */
+    private String safeProfileKey()
+    {
+        try
+        {
+            return configManager.getRSProfileKey();
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP Session] could not resolve rsprofile key: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Best-effort XP-session flush at logout / shutdown, before the local player
+     * is gone. Skipped when the tracker/auto-sync is off, the account isn't
+     * verified, or there is nothing to send. The payload is built synchronously
+     * (cheap, in-memory) and the HTTP call is enqueued asynchronously, so this
+     * never blocks the transition and is safe to call during shutdown.
+     */
+    private void flushXpSessionOnLogout()
+    {
+        if (!state.isXpSessionSyncEnabled()) return; // server xp_session flag off
+        if (!config.enableXpTracker() || !config.xpAutoSync()) return;
+        if (!state.isVerified()) return;
+        if (xpSessionManager.totalXpGained() <= 0L) return;
+
+        final String username    = state.getVerifiedUsername();
+        final String profileId   = safeProfileKey();
+        final String gameMode    = state.getCurrentGameMode();
+        final String accountType = state.getCurrentAccountSubtype();
+
+        try
+        {
+            // ended = true: this is the final post of the session.
+            apiClient.syncXpSession(
+                    xpSessionManager.buildPayload(username, profileId, gameMode, accountType, true));
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP Session] logout flush failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Auto-syncs the XP session every 60s when enabled and there is XP to send.
+     * Guarded so it no-ops when the tracker/auto-sync is off or nothing is logged in.
+     */
+    @net.runelite.client.task.Schedule(
+            period = 60000,
+            unit   = ChronoUnit.MILLIS,
+            asynchronous = true
+    )
+    public void syncXpSessionScheduled()
+    {
+        if (!state.isXpSessionSyncEnabled()) return; // server xp_session flag off
+        if (!config.enableXpTracker() || !config.xpAutoSync()) return;
+        if (!state.isLoggedIn() || !state.isVerified()) return;
+        if (xpSessionManager.totalXpGained() <= 0L) return;
+        syncXpSession(false, false); // periodic mid-session snapshot
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1878,6 +2058,8 @@ public class RuneAlyticsPlugin extends Plugin
         Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
         boolean lootSync    = flags.getOrDefault(FEATURE_LOOT,    false);
         boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
+        boolean xpTracker   = flags.getOrDefault(FEATURE_XP_TRACKER, false);
+        state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
 
         // Only touch the UI when a flag actually changed.
         if (lastLootSyncFlag == null || lastLootSyncFlag != lootSync)
@@ -1885,11 +2067,18 @@ public class RuneAlyticsPlugin extends Plugin
             lastLootSyncFlag = lootSync;
             if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
         }
-        if (lastMatchEnabledFlag == null || lastMatchEnabledFlag != matchEnabled)
+        // Re-apply tab visibility whenever the XP Tracker or Match Finder flag
+        // changes (disabling the active tab moves the user to a working one).
+        boolean tabsChanged =
+                (lastMatchEnabledFlag == null || lastMatchEnabledFlag != matchEnabled)
+                        || (lastXpTrackerFlag == null || lastXpTrackerFlag != xpTracker);
+        if (tabsChanged)
         {
             lastMatchEnabledFlag = matchEnabled;
+            lastXpTrackerFlag    = xpTracker;
             final boolean me = matchEnabled;
-            SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, me));
+            final boolean xp = xpTracker;
+            SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, xp, me));
         }
     }
 
@@ -2129,6 +2318,8 @@ public class RuneAlyticsPlugin extends Plugin
 
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
                 boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
+                boolean xpTracker = flags.getOrDefault(FEATURE_XP_TRACKER, false);
+                state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
 
                 // LOGGED_IN fired before verification completed, so its
                 // setSyncEnabled() call was skipped. Apply the loot flag here so
@@ -2141,6 +2332,7 @@ public class RuneAlyticsPlugin extends Plugin
                 {
                     mainPanel.showMainFeatures(
                             lootSync,
+                            xpTracker,
                             flags.getOrDefault(FEATURE_MATCHES, false));
                     injector.getInstance(MatchmakingPanel.class).refreshLoginState();
                 });

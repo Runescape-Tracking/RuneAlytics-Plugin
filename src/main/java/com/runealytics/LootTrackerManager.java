@@ -1845,9 +1845,27 @@ public class LootTrackerManager
 
         for (String npcName : data.getBossKills().keySet())
         {
+            // Thieving / skilling loot (coins, untradeable coin pouches, seeds) is
+            // legitimately zero-GE value — never auto-hide it, or the entry renders
+            // "No drops recorded yet". Also reverse any earlier auto-hide so these
+            // sources show their loot again.
+            boolean lowValueSource = isPickpocketSource(npcName) || isSkillingSource(npcName);
+
             for (BossKillStats.AggregatedDrop drop : getStorageDropsForBoss(npcName))
             {
                 if (drop.isPet() || drop.getItemId() <= 0) continue;
+
+                if (lowValueSource)
+                {
+                    // Reverse the earlier auto-hide of zero-value thieving/skilling
+                    // loot (coins, coin pouches) so it shows again. Only zero-value
+                    // items are touched, so a manually-hidden valuable stays hidden.
+                    if (drop.getGePrice() <= 0 && drop.getHighAlchValue() <= 0
+                            && isDropHidden(npcName, drop.getItemId()))
+                        unhideDropForNpc(npcName, drop.getItemId());
+                    continue;
+                }
+
                 if (isDropHidden(npcName, drop.getItemId())) continue;
                 if (drop.getGePrice() <= 0 && drop.getHighAlchValue() <= 0)
                 {

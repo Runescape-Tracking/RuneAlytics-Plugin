@@ -27,6 +27,14 @@ public class RuneAlyticsState
     private volatile long lastSyncTime;
 
     /**
+     * Server feature flag ({@code "xp_session"}): when {@code true}, the plugin
+     * POSTs full XP-session snapshots to {@code /api/plugin/xp/session}. Refreshed
+     * from every {@code /plugin/features} fetch. Defaults {@code false} so nothing
+     * is sent until the server explicitly enables it.
+     */
+    private volatile boolean xpSessionSyncEnabled;
+
+    /**
      * Current game mode resolved at the time of the last loot/XP event.
      * Possible values: "regular", "ironman", "leagues", "deadman",
      * "fresh_start", "grid_master".
@@ -78,6 +86,7 @@ public class RuneAlyticsState
         verificationCode = null;
         syncInProgress = false;
         lastSyncTime = 0;
+        xpSessionSyncEnabled = false;
         currentGameMode = "regular";
         currentAccountSubtype = "normal";
         currentLocation = null;
