@@ -86,6 +86,7 @@ class RuneAlyticsXpSessionManager
     // session runtime and every XP/hr figure freeze while logged out and resume
     // on login. pauseStartWall != 0 means we are currently paused (logged out).
     private volatile boolean loggedIn;
+    private volatile boolean manualPaused;
     private volatile long pausedAccumMs;
     private volatile long pauseStartWall;
 
@@ -184,6 +185,7 @@ class RuneAlyticsXpSessionManager
         // A gain implies we're in-game (covers the plugin being enabled
         // mid-session, when no LOGGED_IN event fires), so start the clock running.
         loggedIn             = true;
+        manualPaused         = false;
         pausedAccumMs        = 0L;
         pauseStartWall       = 0L;
         loadToday(acct);
@@ -198,8 +200,32 @@ class RuneAlyticsXpSessionManager
      */
     void setLoggedIn(boolean in)
     {
+        loggedIn = in;
+        applyClockState();
+    }
+
+    /**
+     * Manual pause toggle (the panel's pause/play button). While paused the
+     * active-session clock stops, so XP/hr (and runtime) freeze on every skill;
+     * resuming continues where it left off.
+     */
+    void setManualPaused(boolean paused)
+    {
+        manualPaused = paused;
+        applyClockState();
+    }
+
+    boolean isManualPaused()
+    {
+        return manualPaused;
+    }
+
+    /** The clock runs only while logged in and not manually paused. */
+    private void applyClockState()
+    {
+        boolean running = loggedIn && !manualPaused;
         long now = System.currentTimeMillis();
-        if (in)
+        if (running)
         {
             if (pauseStartWall > 0L)
             {
@@ -211,7 +237,6 @@ class RuneAlyticsXpSessionManager
         {
             pauseStartWall = now;
         }
-        loggedIn = in;
     }
 
     /** Active elapsed session ms (real elapsed minus logged-out spans). */
@@ -344,6 +369,7 @@ class RuneAlyticsXpSessionManager
         sessionLastActiveMs  = 0L;
         sessionAfkPausedMs   = 0L;
         lastRateSampleMs     = 0L;
+        manualPaused         = false;
         pausedAccumMs        = 0L;
         pauseStartWall       = loggedIn ? 0L : sessionStartMs;
         log.debug("[XP-Session] reset (account='{}')", sessionAccountKey);
