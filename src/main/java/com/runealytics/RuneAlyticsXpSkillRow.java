@@ -29,7 +29,6 @@ import static com.runealytics.RuneAlyticsXpTrackerPanel.CARD_BG;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.CARD_BORDER;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.GOLD;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.MUTED;
-import static com.runealytics.RuneAlyticsXpTrackerPanel.TEXT;
 import static com.runealytics.RuneAlyticsXpTrackerPanel.XP_GREEN;
 
 /**
