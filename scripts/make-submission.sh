@@ -17,6 +17,7 @@
 #   - checkstyle.xml            (dev-only quality gate)
 #   - .github/                  (our development CI workflows)
 #   - scripts/                  (this tooling — never needed on submission)
+#   - docs/                     (dev-only reference docs, e.g. backend notes)
 #
 # It also trims from build.gradle ONLY the dev-only additions:
 #   - the `id 'checkstyle'` plugin line, the `checkstyle { ... }` block, and the
@@ -61,6 +62,7 @@ STRIP_PATHS=(
     "checkstyle.xml"
     ".github"
     "scripts"
+    "docs"
 )
 
 info()  { printf '\033[36m[make-submission]\033[0m %s\n' "$*"; }
