@@ -87,6 +87,14 @@
         <property name="message" value="System.out/System.err are forbidden. Use the SLF4J logger instead."/>
     </module>
 
+    <!-- Only log.debug is permitted: trace/info/warn/error clutter the user's
+         client logs and are a Plugin Hub review concern. Convert every other
+         level to log.debug. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="\b(log|logger|LOG|LOGGER)\s*\.\s*(trace|info|warn|error)\s*\("/>
+        <property name="message" value="Only log.debug is permitted (Plugin Hub). Convert log.trace/info/warn/error to log.debug."/>
+    </module>
+
     <!-- Spawning OS processes is a hard Plugin Hub rejection. -->
     <module name="RegexpSingleline">
         <property name="format" value="getRuntime\s*\(\s*\)\s*\.\s*exec\s*\("/>
