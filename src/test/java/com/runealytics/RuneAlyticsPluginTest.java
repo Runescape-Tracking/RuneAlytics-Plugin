@@ -10,9 +10,9 @@ import net.runelite.client.plugins.PluginDescriptor;
 )
 public class RuneAlyticsPluginTest
 {
-	public static void main(String[] args) throws Exception
-	{
-		ExternalPluginManager.loadBuiltin(RuneAlyticsPlugin.class);
-		RuneLite.main(args);
-	}
+    public static void main(String[] args) throws Exception
+    {
+        ExternalPluginManager.loadBuiltin(RuneAlyticsPlugin.class);
+        RuneLite.main(args);
+    }
 }

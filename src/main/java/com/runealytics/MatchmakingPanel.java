@@ -46,10 +46,10 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
 
     // status badge colours
     private static final Color STATUS_PENDING   = new Color(200, 140,   0);
-    private static final Color STATUS_READY     = new Color( 50, 160,  90);
+    private static final Color STATUS_READY     = new Color(50, 160,  90);
     private static final Color STATUS_FIGHTING  = new Color(200,  55,  55);
-    private static final Color STATUS_COMPLETED = new Color( 30, 130, 200);
-    private static final Color STATUS_CANCELED  = new Color( 90,  90,  90);
+    private static final Color STATUS_COMPLETED = new Color(30, 130, 200);
+    private static final Color STATUS_CANCELED  = new Color(90,  90,  90);
 
     // font helper (matches RuneAlyticsUi / RuneAlyticsSettingsPanel)
     private static Font cf(int style, float size)

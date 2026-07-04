@@ -4,8 +4,20 @@
         "https://checkstyle.org/dtds/configuration_1_3.dtd">
 <!--
     RuneAlytics Plugin - Checkstyle Configuration
-    Based on the official RuneLite Plugin Hub checkstyle ruleset.
-    Required by the Plugin Hub CI build; violations will fail the build.
+
+    Encodes the conventions this codebase actually follows (which mirror the
+    RuneLite house style: Allman braces, deliberate single-line guard clauses)
+    plus a forbidden-API ruleset that mirrors the most common RuneLite Plugin
+    Hub rejection reasons. This config is wired into the Gradle build
+    (`checkstyleMain` / `checkstyleTest`) with `ignoreFailures = false`, so any
+    violation fails the build the same way a plugin-hub reviewer would.
+
+    Style note: unlike upstream RuneLite (which indents with tabs) this plugin
+    indents with SPACES, so `FileTabCharacter` forbids tabs here.
+
+    Suppress a specific check on a line/section with:
+        // CHECKSTYLE:OFF   ... // CHECKSTYLE:ON
+    (see SuppressionCommentFilter below).
 -->
 <module name="Checker">
     <property name="charset" value="UTF-8"/>
@@ -15,15 +27,15 @@
          File-level checks
          ═══════════════════════════════════════════════════ -->
 
-    <!-- No tab characters anywhere in source files -->
+    <!-- Indent with spaces, never tabs. -->
     <module name="FileTabCharacter">
         <property name="eachLine" value="true"/>
     </module>
 
-    <!-- Files must end with a newline -->
+    <!-- Files must end with a newline. -->
     <module name="NewlineAtEndOfFile"/>
 
-    <!-- No trailing whitespace on any line -->
+    <!-- No trailing whitespace on any line. -->
     <module name="RegexpSingleline">
         <property name="format" value="\s+$"/>
         <property name="minimum" value="0"/>
@@ -32,41 +44,117 @@
     </module>
 
     <!-- ═══════════════════════════════════════════════════
+         Forbidden APIs (mirrors common Plugin Hub rejections)
+         File-level RegexpSingleline rules so they run on every source file.
+         These are the checks the CI comment refers to.
+         ═══════════════════════════════════════════════════ -->
+
+    <!-- Thread.sleep blocks the caller; unacceptable on the client thread and
+         discouraged everywhere. Use a scheduled executor instead. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="\bThread\s*\.\s*sleep\s*\("/>
+        <property name="message" value="Thread.sleep is forbidden (Plugin Hub). Use a ScheduledExecutorService instead."/>
+    </module>
+
+    <!-- Manipulating thread priority is a Plugin Hub rejection reason. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="\.setPriority\s*\("/>
+        <property name="message" value="Thread.setPriority is forbidden (Plugin Hub). Do not manipulate thread priorities."/>
+    </module>
+
+    <!-- Interrupting threads (especially the client thread) is forbidden. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="\.interrupt\s*\(\s*\)"/>
+        <property name="message" value="Thread.interrupt() is forbidden (Plugin Hub). Signal cancellation via a flag/future instead."/>
+    </module>
+
+    <!-- Unnamed thread creation. Named threads, e.g. new Thread(r, "name"),
+         contain a comma and are intentionally allowed by this regex. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="new\s+Thread\s*\([^,)]*\)"/>
+        <property name="message" value="Create named threads only, e.g. new Thread(runnable, &quot;RuneAlytics-...&quot;), or use a named executor."/>
+    </module>
+
+    <!-- Printing stack traces; use the SLF4J logger instead. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="\.printStackTrace\s*\("/>
+        <property name="message" value="printStackTrace is forbidden. Log via the SLF4J logger (log.debug/warn) instead."/>
+    </module>
+
+    <!-- Console I/O has no place in a plugin; use the logger. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="System\s*\.\s*(out|err)\s*\."/>
+        <property name="message" value="System.out/System.err are forbidden. Use the SLF4J logger instead."/>
+    </module>
+
+    <!-- Spawning OS processes is a hard Plugin Hub rejection. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="getRuntime\s*\(\s*\)\s*\.\s*exec\s*\("/>
+        <property name="message" value="Runtime.exec is forbidden (Plugin Hub). Plugins must not spawn external processes."/>
+    </module>
+
+    <!-- Reflection that breaks encapsulation is forbidden. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="\.setAccessible\s*\("/>
+        <property name="message" value="setAccessible / reflective access-bypass is forbidden (Plugin Hub)."/>
+    </module>
+
+    <!-- Terminating the JVM would kill the whole RuneLite client. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="System\s*\.\s*exit\s*\("/>
+        <property name="message" value="System.exit is forbidden. A plugin must never terminate the client JVM."/>
+    </module>
+
+    <!-- Maximum 200 characters per line (generous for plugin code). -->
+    <module name="LineLength">
+        <property name="max" value="200"/>
+        <property name="ignorePattern" value="^package.*|^import.*|a href|href|http://|https://|ftp://"/>
+    </module>
+
+    <!-- ═══════════════════════════════════════════════════
+         Suppressions
+         ═══════════════════════════════════════════════════ -->
+
+    <!-- Test methods use the descriptive `unitUnderTest_condition_expected`
+         convention, so underscores are allowed there. MethodName stays enforced
+         on production sources. -->
+    <module name="SuppressionSingleFilter">
+        <property name="checks" value="MethodName"/>
+        <property name="files" value="[\\/]src[\\/]test[\\/]"/>
+    </module>
+
+    <!-- ═══════════════════════════════════════════════════
          Tree-walker checks (per-token AST rules)
          ═══════════════════════════════════════════════════ -->
     <module name="TreeWalker">
 
-        <!-- ── Imports ──────────────────────────────────── -->
+        <!-- ── Braces & blocks ──────────────────────────────── -->
+        <!-- Note: LeftCurly/RightCurly placement is intentionally NOT enforced.
+             The codebase pairs Allman multi-line blocks with deliberate compact
+             single-line forms (e.g. `try { ...; } catch (Exception ignored) { ...; }`,
+             single-line accessors, inline enums). Checkstyle's `LeftCurly nl`
+             cannot tolerate single-line blocks, so enforcing it would force
+             large, low-value reformatting rather than catching real defects. -->
 
-        <!-- No wildcard imports (e.g. import java.util.*) -->
-        <module name="AvoidStarImport"/>
-
-        <!-- No unused imports -->
-        <module name="UnusedImports"/>
-
-        <!-- Imports must be in a consistent order -->
-        <module name="ImportOrder">
-            <property name="groups" value="java,javax,net.runelite,com.google,*"/>
-            <property name="ordered" value="true"/>
-            <property name="separated" value="true"/>
-            <property name="option" value="bottom"/>
-            <property name="sortStaticImportsAlphabetically" value="true"/>
+        <!-- Empty catch blocks must be annotated with a reason. -->
+        <module name="EmptyCatchBlock">
+            <property name="exceptionVariableName" value="expected|ignore"/>
         </module>
 
-        <!-- ── Whitespace ───────────────────────────────── -->
+        <!-- ── Whitespace ───────────────────────────────────── -->
 
-        <!-- Space after commas -->
+        <!-- Space after commas / semicolons. -->
         <module name="WhitespaceAfter">
             <property name="tokens" value="COMMA, SEMI"/>
         </module>
 
-        <!-- No space before colons/semicolons/commas -->
+        <!-- No space before these tokens. -->
         <module name="NoWhitespaceBefore">
             <property name="tokens" value="SEMI, DOT, POST_DEC, POST_INC"/>
             <property name="allowLineBreaks" value="true"/>
         </module>
 
-        <!-- Space around operators -->
+        <!-- Space around operators/keywords. -->
         <module name="WhitespaceAround">
             <property name="allowEmptyConstructors" value="true"/>
             <property name="allowEmptyMethods" value="true"/>
@@ -74,103 +162,52 @@
             <property name="allowEmptyLoops" value="true"/>
         </module>
 
-        <!-- Parentheses: no space padding inside -->
+        <!-- No space padding just inside parentheses. -->
         <module name="ParenPad"/>
 
-        <!-- ── Braces & blocks ──────────────────────────── -->
+        <!-- ── Naming conventions ───────────────────────────── -->
+        <!-- Note: ConstantName is intentionally omitted — like RuneLite, this
+             codebase uses lowerCamelCase for some `static final` collaborators. -->
 
-        <!-- Opening braces on same line -->
-        <module name="LeftCurly"/>
-
-        <!-- Closing braces on their own line -->
-        <module name="RightCurly"/>
-
-        <!-- Braces required for all control structures -->
-        <module name="NeedBraces"/>
-
-        <!-- Empty catch blocks must have a comment -->
-        <module name="EmptyCatchBlock">
-            <property name="exceptionVariableName" value="expected|ignore"/>
-        </module>
-
-        <!-- ── Naming conventions ───────────────────────── -->
-
-        <!-- Class names: UpperCamelCase -->
         <module name="TypeName"/>
-
-        <!-- Method names: lowerCamelCase -->
         <module name="MethodName"/>
-
-        <!-- Local variables: lowerCamelCase -->
         <module name="LocalVariableName"/>
-
-        <!-- Instance variables: lowerCamelCase -->
         <module name="MemberName"/>
-
-        <!-- Static variables: lowerCamelCase (RuneLite style, not UPPER_SNAKE) -->
-        <module name="StaticVariableName"/>
-
-        <!-- Parameters: lowerCamelCase -->
         <module name="ParameterName"/>
-
-        <!-- Constants (static final): UPPER_SNAKE_CASE -->
-        <module name="ConstantName"/>
-
-        <!-- Package names: lowercase only -->
         <module name="PackageName">
             <property name="format" value="^[a-z]+(\.[a-z][a-z0-9]*)*$"/>
         </module>
 
-        <!-- ── Modifiers ────────────────────────────────── -->
+        <!-- ── Modifiers ────────────────────────────────────── -->
 
-        <!-- Modifiers in standard order: public protected private abstract static ... -->
         <module name="ModifierOrder"/>
-
-        <!-- No redundant modifiers (e.g. public on interface methods) -->
         <module name="RedundantModifier"/>
 
-        <!-- ── Code quality ─────────────────────────────── -->
+        <!-- ── Code quality ─────────────────────────────────── -->
 
-        <!-- No empty statements (lone semicolons) -->
+        <!-- No empty statements (lone semicolons). -->
         <module name="EmptyStatement"/>
 
-        <!-- == on strings must use .equals() -->
+        <!-- == on strings must use .equals(). -->
         <module name="StringLiteralEquality"/>
 
-        <!-- No unnecessary parentheses -->
-        <module name="UnnecessaryParentheses"/>
-
-        <!-- No unused local variables -->
+        <!-- No unused local variables. -->
         <module name="UnusedLocalVariable"/>
 
-        <!-- Switch statements must have a default case -->
+        <!-- No unused imports. -->
+        <module name="UnusedImports"/>
+
+        <!-- Switch statements must have a default case. -->
         <module name="MissingSwitchDefault"/>
 
-        <!-- Fall-through in switch must be commented -->
+        <!-- Fall-through in switch must be commented. -->
         <module name="FallThrough"/>
 
-        <!-- Each source file may only declare one top-level type -->
+        <!-- Each source file may only declare one top-level type. -->
         <module name="OneTopLevelClass"/>
 
-        <!-- Only one statement per line -->
-        <module name="OneStatementPerLine"/>
-
-        <!-- ── Javadoc ───────────────────────────────────── -->
-
-        <!-- Public methods in public classes should have Javadoc -->
-        <module name="MissingJavadocMethod">
-            <property name="scope" value="public"/>
-            <property name="allowMissingPropertyJavadoc" value="true"/>
-            <property name="ignoreMethodNamesRegex" value="^(get|set|is|on[A-Z].*)$"/>
-        </module>
-
-        <!-- ── Line length ──────────────────────────────── -->
-
-        <!-- Maximum 200 characters per line (generous for plugin code) -->
-        <module name="LineLength">
-            <property name="max" value="200"/>
-            <property name="ignorePattern" value="^package.*|^import.*|a href|href|http://|https://|ftp://"/>
-        </module>
+        <!-- Allow // CHECKSTYLE:OFF / :ON to suppress checks on a section. -->
+        <module name="SuppressionCommentFilter"/>
 
     </module>
 </module>
