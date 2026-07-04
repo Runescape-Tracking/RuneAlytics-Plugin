@@ -45,6 +45,12 @@ public class RuneAlyticsPanel extends PluginPanel
     /** Server-controlled: shows the Match Finder tab. */
     public static final String FEATURE_MATCHES      = "match_finder";
     /**
+     * Server-controlled: gates whether the plugin POSTs full XP-session snapshots
+     * to {@code /api/plugin/xp/session}. Does NOT control a tab — the XP Tracker
+     * tab is always visible; this only enables the server-side session sync.
+     */
+    public static final String FEATURE_XP_SESSION   = "xp_session";
+    /**
      * Locally-controlled pseudo-flag: shows the Settings / Verification tab.
      * Set {@code true} when the account is not verified; {@code false} once verified.
      */

@@ -627,9 +627,10 @@ class RuneAlyticsXpSessionManager
      * @param profileId   RuneLite rsprofile / account id, or {@code null}
      * @param gameMode    current game mode (e.g. "regular", "ironman")
      * @param accountType current account subtype (e.g. "normal", "ironman")
+     * @param ended       {@code true} for the final post of a session
      */
     RuneAlyticsXpSyncPayload buildPayload(String username, String profileId,
-                                          String gameMode, String accountType)
+                                          String gameMode, String accountType, boolean ended)
     {
         long now = System.currentTimeMillis();
         boolean ignoreAfk = config.xpIgnoreAfk();
@@ -653,6 +654,6 @@ class RuneAlyticsXpSessionManager
 
         return new RuneAlyticsXpSyncPayload(
                 username, profileId, gameMode, accountType,
-                startSec, durationSec, totalXpGained(), now / 1_000L, entries);
+                startSec, durationSec, totalXpGained(), ended, entries);
     }
 }

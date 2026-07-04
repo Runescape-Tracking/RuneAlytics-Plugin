@@ -200,3 +200,154 @@ With sessions + per-skill breakdown you can offer:
 - Respond `2xx` on success. On failure the plugin logs at debug and shows a
   small "Sync failed" badge; it never retries aggressively, so transient `5xx`
   is fine.
+
+---
+
+## 7. Why you may be seeing `404 The route api/xp/session could not be found`
+
+The plugin already POSTs to `https://runealytics.com/api/xp/session`, but that
+route isn't registered on the site yet — so Laravel returns 404. The plugin
+handles this gracefully (debug log + "Sync failed" badge, no crash). To start
+receiving data, register the route below. **It is a server-side change only —
+no plugin change is required.**
+
+Use the **same auth** you already use for `POST /api/xp/batch` (the plugin sends
+the identical `Authorization: Bearer <verification_token>` header on both).
+
+### routes/api.php
+
+```php
+use App\Http\Controllers\Api\XpSessionController;
+
+// Mirror whatever middleware/group your existing /xp/batch route uses.
+Route::post('/xp/session', [XpSessionController::class, 'store']);
+```
+
+### Migration
+
+```php
+Schema::create('xp_sessions', function (Blueprint $t) {
+    $t->id();
+    $t->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $t->string('profile_id')->nullable();
+    $t->string('game_mode')->default('regular');
+    $t->string('account_type')->default('normal');
+    $t->unsignedBigInteger('session_start');   // epoch seconds (session key)
+    $t->unsignedInteger('duration_sec')->default(0);
+    $t->unsignedBigInteger('total_xp')->default(0);
+    $t->unsignedBigInteger('last_update');      // epoch seconds
+    $t->timestamps();
+    $t->unique(['user_id', 'session_start']);   // <- makes repeated posts idempotent
+});
+
+Schema::create('xp_session_skills', function (Blueprint $t) {
+    $t->foreignId('xp_session_id')->constrained()->cascadeOnDelete();
+    $t->string('skill');
+    $t->unsignedBigInteger('xp_gained')->default(0);
+    $t->unsignedBigInteger('xp_per_hour')->default(0);
+    $t->unsignedInteger('level')->default(1);
+    $t->unsignedBigInteger('current_xp')->default(0);
+    $t->primary(['xp_session_id', 'skill']);
+});
+```
+
+### Controller (app/Http/Controllers/Api/XpSessionController.php)
+
+```php
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\XpSession;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+
+class XpSessionController extends Controller
+{
+    public function store(Request $request)
+    {
+        // 1) Resolve the user from the bearer token EXACTLY like /xp/batch does.
+        $user = $this->resolveUserFromToken($request); // reuse your existing helper
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        $data = $request->validate([
+            'username'         => 'required|string',
+            'profile_id'       => 'nullable|string',
+            'game_mode'        => 'required|string',
+            'account_type'     => 'required|string',
+            'session_start'    => 'required|integer',
+            'session_duration' => 'required|integer',
+            'total_xp_gained'  => 'required|integer',
+            'timestamp'        => 'required|integer',
+            'skills'                 => 'required|array',
+            'skills.*.skill'         => 'required|string',
+            'skills.*.xp_gained'     => 'required|integer',
+            'skills.*.xp_per_hour'   => 'required|integer',
+            'skills.*.level'         => 'required|integer',
+            'skills.*.current_xp'    => 'required|integer',
+        ]);
+
+        // 2) Only accept the account the token belongs to.
+        if (mb_strtolower(trim($data['username'])) !== mb_strtolower(trim($user->osrs_rsn))) {
+            return response()->json(['message' => 'Username does not match token'], 403);
+        }
+
+        DB::transaction(function () use ($user, $data) {
+            // 3) Idempotent upsert keyed by (user_id, session_start).
+            $session = XpSession::updateOrCreate(
+                ['user_id' => $user->id, 'session_start' => $data['session_start']],
+                [
+                    'profile_id'   => $data['profile_id'] ?? null,
+                    'game_mode'    => $data['game_mode'],
+                    'account_type' => $data['account_type'],
+                    // snapshots grow monotonically within a session — keep the max.
+                    'duration_sec' => max($data['session_duration'], 0),
+                    'total_xp'     => $data['total_xp_gained'],
+                    'last_update'  => $data['timestamp'],
+                ]
+            );
+
+            foreach ($data['skills'] as $s) {
+                $session->skills()->updateOrCreate(
+                    ['skill' => mb_strtolower($s['skill'])],
+                    [
+                        'xp_gained'   => $s['xp_gained'],
+                        'xp_per_hour' => $s['xp_per_hour'],
+                        'level'       => $s['level'],
+                        'current_xp'  => $s['current_xp'],
+                    ]
+                );
+            }
+        });
+
+        return response()->json(['status' => 'ok']);
+    }
+}
+```
+
+### Models
+
+```php
+// app/Models/XpSession.php
+class XpSession extends Model
+{
+    protected $guarded = [];
+    public function skills() { return $this->hasMany(XpSessionSkill::class); }
+    public function user()   { return $this->belongsTo(User::class); }
+}
+
+// app/Models/XpSessionSkill.php
+class XpSessionSkill extends Model
+{
+    protected $guarded = [];
+    public $incrementing = false;
+    protected $primaryKey = null;
+}
+```
+
+> Swap `resolveUserFromToken()` and `$user->osrs_rsn` for whatever your existing
+> `/xp/batch` controller already uses to authenticate and identify the account —
+> the goal is that `/xp/session` authenticates identically. Once this route
+> returns `2xx`, the plugin's "Sync failed" badge becomes "Synced" and the 404s
+> stop.
