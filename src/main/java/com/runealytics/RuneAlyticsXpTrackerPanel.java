@@ -607,9 +607,9 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     private void onResetSession()
     {
         // Flush the finished session's XP/hr to the website BEFORE clearing it, so
-        // clearing a session records its data for analysis.
+        // clearing a session records its data for analysis (ended = true).
         RuneAlyticsPlugin p = plugin;
-        if (p != null) p.syncXpSession(false);
+        if (p != null) p.syncXpSession(false, true);
         sessionManager.reset();
         showMain();
         refresh();

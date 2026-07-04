@@ -1426,6 +1426,7 @@ public class RuneAlyticsPlugin extends Plugin
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
                 boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
                 boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
+                state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
                 if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
                 SwingUtilities.invokeLater(() ->
                         mainPanel.showMainFeatures(true, matchEnabled));
@@ -1722,17 +1723,36 @@ public class RuneAlyticsPlugin extends Plugin
     //  XP SESSION SNAPSHOT SYNC  (XP Tracker tab)
     // ═════════════════════════════════════════════════════════════════════════
 
+    /** Manual / periodic session sync (not an end-of-session post). */
+    public void syncXpSession(boolean userInitiated)
+    {
+        syncXpSession(userInitiated, false);
+    }
+
     /**
-     * Builds and uploads the current account's XP-session snapshot to the website.
+     * Builds and uploads the current account's XP-session snapshot to
+     * {@code /api/plugin/xp/session}.
      *
-     * <p>Sends only the currently logged-in, verified account's session data. Runs
-     * off the client thread and fails gracefully (a visible badge message when
+     * <p>Gated by the server {@code "xp_session"} feature flag — when the flag is
+     * off the call is silently skipped. Sends only the currently logged-in,
+     * verified account's session data, and fails gracefully (a visible badge when
      * user-initiated) — it never throws or crashes the plugin.</p>
      *
      * @param userInitiated {@code true} when triggered by the panel's Sync button
+     * @param ended         {@code true} for the final post of a session
+     *                      (logout / shutdown / reset), {@code false} otherwise
      */
-    public void syncXpSession(boolean userInitiated)
+    public void syncXpSession(boolean userInitiated, boolean ended)
     {
+        // ── Server feature-flag gate ──────────────────────────────────────────
+        if (!state.isXpSessionSyncEnabled())
+        {
+            // Silently skip when the server hasn't enabled xp_session.
+            if (userInitiated && xpTrackerPanel != null)
+                xpTrackerPanel.showSyncMessage("Sync off", false);
+            return;
+        }
+
         if (!config.enableXpTracker())
         {
             if (userInitiated && xpTrackerPanel != null)
@@ -1769,7 +1789,7 @@ public class RuneAlyticsPlugin extends Plugin
         try
         {
             RuneAlyticsXpSyncPayload payload =
-                    xpSessionManager.buildPayload(username, profileId, gameMode, accountType);
+                    xpSessionManager.buildPayload(username, profileId, gameMode, accountType, ended);
             apiClient.syncXpSession(payload);
             if (userInitiated && xpTrackerPanel != null)
                 xpTrackerPanel.showSyncMessage("Synced", true);
@@ -1805,6 +1825,7 @@ public class RuneAlyticsPlugin extends Plugin
      */
     private void flushXpSessionOnLogout()
     {
+        if (!state.isXpSessionSyncEnabled()) return; // server xp_session flag off
         if (!config.enableXpTracker() || !config.xpAutoSync()) return;
         if (!state.isVerified()) return;
         if (xpSessionManager.totalXpGained() <= 0L) return;
@@ -1814,16 +1835,15 @@ public class RuneAlyticsPlugin extends Plugin
         final String gameMode    = state.getCurrentGameMode();
         final String accountType = state.getCurrentAccountSubtype();
 
+        try
         {
-            try
-            {
-                apiClient.syncXpSession(
-                        xpSessionManager.buildPayload(username, profileId, gameMode, accountType));
-            }
-            catch (Exception e)
-            {
-                log.debug("[XP Session] logout flush failed: {}", e.getMessage());
-            }
+            // ended = true: this is the final post of the session.
+            apiClient.syncXpSession(
+                    xpSessionManager.buildPayload(username, profileId, gameMode, accountType, true));
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP Session] logout flush failed: {}", e.getMessage());
         }
     }
 
@@ -1838,10 +1858,11 @@ public class RuneAlyticsPlugin extends Plugin
     )
     public void syncXpSessionScheduled()
     {
+        if (!state.isXpSessionSyncEnabled()) return; // server xp_session flag off
         if (!config.enableXpTracker() || !config.xpAutoSync()) return;
         if (!state.isLoggedIn() || !state.isVerified()) return;
         if (xpSessionManager.totalXpGained() <= 0L) return;
-        syncXpSession(false);
+        syncXpSession(false, false); // periodic mid-session snapshot
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -2033,6 +2054,7 @@ public class RuneAlyticsPlugin extends Plugin
         Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
         boolean lootSync    = flags.getOrDefault(FEATURE_LOOT,    false);
         boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
+        state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
 
         // Only touch the UI when a flag actually changed.
         if (lastLootSyncFlag == null || lastLootSyncFlag != lootSync)
@@ -2284,6 +2306,7 @@ public class RuneAlyticsPlugin extends Plugin
 
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
                 boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
+                state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
 
                 // LOGGED_IN fired before verification completed, so its
                 // setSyncEnabled() call was skipped. Apply the loot flag here so

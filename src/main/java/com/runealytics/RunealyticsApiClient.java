@@ -150,13 +150,13 @@ public class RunealyticsApiClient
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Sends a full XP-session snapshot to {@code /xp/session}.
+     * Sends a full XP-session snapshot to {@code /plugin/xp/session}.
      *
      * <p>Carries only the account named in the payload (built by
      * {@link RuneAlyticsXpSessionManager#buildPayload}, which is scoped to a
      * single account key). Fails gracefully — network / HTTP errors are logged at
-     * debug and never propagate. The auth token is attached as a header, never
-     * logged.</p>
+     * debug and never propagate. The auth token is attached as a {@code Bearer}
+     * header (same token used for the heartbeat and loot sync), never logged.</p>
      *
      * @param payload the session snapshot to send
      */
@@ -182,18 +182,18 @@ public class RunealyticsApiClient
         }
 
         String payloadJson = gson.toJson(payload.toJson());
-        String url         = config.apiUrl() + "/xp/session";
+        String url         = config.apiUrl() + "/plugin/xp/session";
 
         // Log the payload for debugging, but never the token.
-        log.debug("[XP Session] POST {} | skills={} total_xp={} duration={}s payload={}",
-                url, payload.skills.size(), payload.totalXpGained,
-                payload.sessionDurationSec, payloadJson);
+        log.debug("[XP Session] POST {} | skills={} total_xp={} duration={}s ended={} payload={}",
+                url, payload.skills.size(), payload.totalXp,
+                payload.durationSec, payload.ended, payloadJson);
 
         RequestBody body    = RequestBody.create(JSON, payloadJson);
         Request     request = new Request.Builder()
                 .url(url)
                 .post(body)
-                .addHeader("Authorization", "Bearer " + token)
+                .addHeader("Authorization", "Bearer " + token)   // same token as heartbeat / loot sync
                 .addHeader("Content-Type",  "application/json")
                 .addHeader("Accept",        "application/json")
                 .build();
