@@ -100,7 +100,7 @@ public class LootTrackerManager
                     // ── Mid-tier ─────────────────────────────────────────────
                     .put("master farmer",             "Master Farmer")
                     .put("guard",                     "Guard")
-                    .put("bearded pollnivnian bandit","Bandit (Pollnivneach)")
+                    .put("bearded pollnivnian bandit", "Bandit (Pollnivneach)")
                     .put("pollnivnian bandit",        "Bandit (Pollnivneach)")
                     .put("desert bandit",             "Desert Bandit")
                     .put("fremennik citizen",         "Fremennik Citizen")
@@ -2569,7 +2569,7 @@ public class LootTrackerManager
         if (l.contains("artio"))                          return "Artio";
         if (l.contains("callisto"))                       return "Callisto";
         if (l.contains("calvar"))                         return "Calvar'ion";
-        if (l.contains("vet'ion") || l.contains("vetion"))return "Vet'ion";
+        if (l.contains("vet'ion") || l.contains("vetion")) return "Vet'ion";
         if (l.contains("spindel"))                        return "Spindel";
         if (l.contains("venenatis"))                      return "Venenatis";
         if (l.contains("corporeal"))                      return "Corporeal Beast";

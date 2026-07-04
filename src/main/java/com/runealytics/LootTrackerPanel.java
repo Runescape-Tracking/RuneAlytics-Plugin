@@ -40,10 +40,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private static final Color FILTER_ACTIVE_ALL     = new Color(70,  70, 110);
     private static final Color FILTER_ACTIVE_COMBAT  = new Color(110,  40,  40);
-    private static final Color FILTER_ACTIVE_SKILLS  = new Color( 35,  85,  45);
-    private static final Color FILTER_INACTIVE       = new Color( 38,  38,  38);
+    private static final Color FILTER_ACTIVE_SKILLS  = new Color(35,  85,  45);
+    private static final Color FILTER_INACTIVE       = new Color(38,  38,  38);
     private static final Color FILTER_BORDER_ACTIVE  = new Color(180, 180, 220);
-    private static final Color FILTER_BORDER_INACTIVE= new Color( 70,  70,  70);
+    private static final Color FILTER_BORDER_INACTIVE = new Color(70,  70,  70);
 
     private static final String   ALL_SKILLS_LABEL = "All Skills";
     private static final String[] SKILL_OPTIONS    = {
@@ -309,8 +309,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         sortButton.setBackground(new Color(45, 70, 45));
         applyEyeButtonState();
 
-        eyeButton  .addActionListener(e -> toggleHiddenItems());
-        sortButton .addActionListener(e -> cycleSortMode());
+        eyeButton.addActionListener(e -> toggleHiddenItems());
+        sortButton.addActionListener(e -> cycleSortMode());
         clearButton.addActionListener(e -> confirmClearAll());
 
         JButton importBtn = makeIconButton("⬇", "Import from RuneLite Loot Tracker");
@@ -428,8 +428,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     // ── Eye-icon colours ─────────────
     /** Green: all drops are shown (ignored ones included). */
-    private static final Color EYE_BG_ALL_SHOWN  = new Color( 30, 110,  40);
-    private static final Color EYE_BORDER_SHOWN  = new Color( 70, 180,  90);
+    private static final Color EYE_BG_ALL_SHOWN  = new Color(30, 110,  40);
+    private static final Color EYE_BORDER_SHOWN  = new Color(70, 180,  90);
     /** Red: ignored drops are hidden from the panel. */
     private static final Color EYE_BG_HIDING     = new Color(140,  35,  35);
     private static final Color EYE_BORDER_HIDING = new Color(200,  70,  70);
@@ -469,6 +469,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             case RECENT: sortButton.setBackground(new Color(45, 70, 45)); break;
             case VALUE:  sortButton.setBackground(new Color(70, 45, 45)); break;
             case KILLS:  sortButton.setBackground(new Color(45, 45, 70)); break;
+            default: break;
         }
         invalidateFingerprint();
         refreshDisplay();
@@ -1306,6 +1307,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 case RECENT: btn.setBackground(new Color(45, 70, 45)); break;
                 case VALUE:  btn.setBackground(new Color(70, 45, 45)); break;
                 case KILLS:  btn.setBackground(new Color(45, 45, 70)); break;
+                default: break;
             }
         }
         else btn.setBackground(new Color(38, 38, 38));

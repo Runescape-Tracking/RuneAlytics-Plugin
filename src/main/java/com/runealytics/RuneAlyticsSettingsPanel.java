@@ -168,7 +168,9 @@ public class RuneAlyticsSettingsPanel extends JPanel
         bankCard.add(vSpace(6));
 
         bankCard.add(compactLabel(
-                "<i><b><u>Public:</u></b> bank value and contents will be seen by anyone. <br /> <br /><b><u>Friends:</u></b> only people on your OSRS friends list can view your bank value and contents. <br /> <br /><b><u>Private <default>:</u></b> bank data used only for gear crafting and your personal view.</i>",
+                "<i><b><u>Public:</u></b> bank value and contents will be seen by anyone. <br /> <br />"
+                        + "<b><u>Friends:</u></b> only people on your OSRS friends list can view your bank value and contents. <br /> <br />"
+                        + "<b><u>Private <default>:</u></b> bank data used only for gear crafting and your personal view.</i>",
                 DIM_TEXT,
                 cf(Font.ITALIC, 12f)
         ));
@@ -197,7 +199,10 @@ public class RuneAlyticsSettingsPanel extends JPanel
         visCard.add(vSpace(6));
 
         visCard.add(compactLabel(
-                "<i><b><u>Public:</u></b> All users can view your status and live drops.Friends: only friends on your friends list can view your status and live drops.</i> <br /> <br /> <b><u>Friends:</u></b> All users can view your status and live drops. <br /> <br /> <b><u>Private:</u></b> Only <b><u>you</u></b> can see your status and live drops.</i>",
+                "<i><b><u>Public:</u></b> All users can view your status and live drops."
+                        + "Friends: only friends on your friends list can view your status and live drops.</i> <br /> <br /> "
+                        + "<b><u>Friends:</u></b> All users can view your status and live drops. <br /> <br /> "
+                        + "<b><u>Private:</u></b> Only <b><u>you</u></b> can see your status and live drops.</i>",
                 DIM_TEXT,
                 cf(Font.ITALIC, 12f)
         ));
