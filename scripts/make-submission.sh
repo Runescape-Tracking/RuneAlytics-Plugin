@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+#
+# make-submission.sh — regenerate the test-free `submission` branch.
+#
+# The RuneLite Plugin Hub builds (and reviewers read) the exact git commit you
+# point it at. This script derives a clean, production-only commit from the dev
+# tree by stripping everything that must not ship:
+#
+#   - src/test/            (the entire unit-test suite + the dev launcher)
+#   - .github/             (our development CI workflows)
+#
+# It also trims the test-only declarations from build.gradle (the
+# `testImplementation` dependencies and the dev-launcher `shadowJar` task) so
+# the submitted build file matches the stripped tree and contains no dangling
+# reference to the removed launcher. Only the checkstyle wiring and the
+# production `compileOnly` dependencies remain. The dev tree (master) keeps its
+# full build.gradle untouched — the edit happens only in the throwaway worktree.
+#
+# The result is committed onto the `submission` branch, compiled to prove the
+# stripped tree still builds on its own, and the resulting commit SHA is printed
+# for you to paste into the plugin-hub PR.
+#
+# The dev tree (master) is never modified: all work happens in a throwaway git
+# worktree. Re-running simply regenerates `submission` from the current HEAD, so
+# the script is safe to run repeatedly.
+#
+# Usage:
+#   scripts/make-submission.sh [SOURCE_REF]
+#
+#   SOURCE_REF        branch/commit to derive from (default: current HEAD)
+#
+# Environment:
+#   SUBMISSION_BRANCH branch name to (re)create (default: submission)
+#   SKIP_BUILD=1      skip the compile-verification step (e.g. no JDK locally)
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+SOURCE_REF="${1:-$(git rev-parse --abbrev-ref HEAD)}"
+SUBMISSION_BRANCH="${SUBMISSION_BRANCH:-submission}"
+
+# Paths stripped from the submission tree.
+STRIP_PATHS=(
+    "src/test"
+    ".github"
+)
+
+info()  { printf '\033[36m[make-submission]\033[0m %s\n' "$*"; }
+fail()  { printf '\033[31m[make-submission] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Remove test-only declarations from build.gradle in the current directory:
+#   * every `testImplementation` line, and
+#   * the whole `tasks.register('shadowJar', Jar) { ... }` block.
+# The shadowJar block is matched by net-brace counting so the `${...}` sequences
+# inside its strings (which are brace-balanced per line) don't confuse it. A
+# final pass trims trailing blank lines. Groovy validity is guaranteed by the
+# compileJava verification step that follows.
+trim_build_gradle() {
+    awk '
+        /^[[:space:]]*testImplementation/ { next }
+        /tasks\.register\(.shadowJar./    { inShadow=1; depth=0; seenOpen=0 }
+        inShadow {
+            o=gsub(/[{]/,""); c=gsub(/[}]/,""); depth += o - c
+            if (o>0) seenOpen=1
+            if (seenOpen && depth<=0) inShadow=0
+            next
+        }
+        { print }
+    ' build.gradle \
+        | awk 'NF{last=NR} {line[NR]=$0} END{for (i=1;i<=last;i++) print line[i]}' \
+        > build.gradle.tmp
+    mv build.gradle.tmp build.gradle
+}
+
+# 1. Refuse to run against a dirty tree so we can't accidentally bake in
+#    uncommitted changes (or lose them).
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    fail "Working tree has uncommitted changes. Commit or stash them first."
+fi
+
+SOURCE_SHA="$(git rev-parse --verify "${SOURCE_REF}^{commit}")" \
+    || fail "Cannot resolve SOURCE_REF='${SOURCE_REF}'."
+info "Deriving submission from ${SOURCE_REF} (${SOURCE_SHA:0:12})"
+
+# 2. Clean up any stale worktree that still holds the submission branch, so the
+#    branch can be reset below.
+git worktree prune
+EXISTING_WT="$(git worktree list --porcelain \
+    | awk -v b="refs/heads/${SUBMISSION_BRANCH}" \
+        '/^worktree /{wt=$2} $0=="branch "b{print wt}')"
+if [ -n "${EXISTING_WT}" ]; then
+    git worktree remove --force "${EXISTING_WT}"
+fi
+
+# 3. Reset (or create) the submission branch at the source commit.
+git branch -f "${SUBMISSION_BRANCH}" "${SOURCE_SHA}"
+
+WORKTREE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/runealytics-submission.XXXXXX")"
+cleanup() {
+    git worktree remove --force "${WORKTREE_DIR}" >/dev/null 2>&1 || true
+    git worktree prune >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+git worktree add --quiet --force "${WORKTREE_DIR}" "${SUBMISSION_BRANCH}"
+
+# 4. Strip dev/test paths and commit the result.
+(
+    cd "${WORKTREE_DIR}"
+
+    for path in "${STRIP_PATHS[@]}"; do
+        if [ -e "${path}" ]; then
+            git rm -r --quiet -- "${path}"
+        fi
+    done
+
+    # Trim the test-only declarations from build.gradle so it matches the
+    # stripped tree (no test deps, no dev-launcher shadowJar task).
+    trim_build_gradle
+    git add build.gradle
+
+    if git diff --cached --quiet; then
+        info "Nothing to strip — source is already test-free."
+    else
+        git commit --quiet -m "build: strip dev/test tooling for Plugin Hub submission
+
+Auto-generated by scripts/make-submission.sh from ${SOURCE_REF} (${SOURCE_SHA:0:12}).
+Do not commit onto this branch by hand — re-run the script instead."
+    fi
+
+    # 5. Prove the stripped tree still builds on its own.
+    if [ "${SKIP_BUILD:-0}" = "1" ]; then
+        info "SKIP_BUILD=1 — skipping compile verification."
+    else
+        info "Verifying the stripped tree compiles..."
+        ./gradlew --no-daemon --console=plain compileJava >/dev/null \
+            || fail "Stripped submission tree failed to compile."
+    fi
+
+    # 6. Sanity-check: no test sources or test-only build config leaked into the
+    #    submission tree.
+    if [ -d "src/test" ]; then
+        fail "src/test still present in submission tree — strip failed."
+    fi
+    if grep -qE 'testImplementation|shadowJar' build.gradle; then
+        fail "build.gradle still references test-only tooling — trim failed."
+    fi
+)
+
+SUBMISSION_SHA="$(git rev-parse "${SUBMISSION_BRANCH}")"
+
+info "Submission branch '${SUBMISSION_BRANCH}' is ready."
+info "Commit SHA (paste into the plugin-hub PR):"
+echo "${SUBMISSION_SHA}"

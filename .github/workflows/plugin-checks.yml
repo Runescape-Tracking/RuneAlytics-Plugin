@@ -1,0 +1,54 @@
+name: Plugin Hub Checks
+
+# Catches RuneLite Plugin Hub convention violations (e.g. Thread.sleep, thread
+# priority/interrupt, System.out, reflection) and compile errors on our own
+# repo, so we find them before a plugin-hub reviewer does. The forbidden-API
+# rules live in the top-level checkstyle.xml (see its "Forbidden APIs" section).
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Compile (fails on build breakage, like the plugin-hub build)
+        run: ./gradlew --no-daemon compileJava
+
+      - name: Forbidden API / convention checks (main + test)
+        run: ./gradlew --no-daemon checkstyleMain checkstyleTest
+
+      # RuneAlyticsPluginTest is the GUI dev launcher (no @Test methods), so it
+      # is skipped by test discovery and the unit tests run headless.
+      - name: Unit tests
+        run: ./gradlew --no-daemon test
+
+      - name: Upload checkstyle reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkstyle-reports
+          path: build/reports/checkstyle/
+          if-no-files-found: ignore
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: build/reports/tests/
+          if-no-files-found: ignore
