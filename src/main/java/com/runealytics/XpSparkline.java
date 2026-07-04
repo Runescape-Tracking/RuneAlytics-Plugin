@@ -14,22 +14,32 @@ import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
+import java.awt.event.MouseWheelEvent;
 import java.awt.geom.GeneralPath;
 import java.awt.geom.Path2D;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 class XpSparkline extends JComponent
 {
-    private static final Color GRID = new Color(95, 95, 95, 120);
+    private static final Color GRID = new Color(95, 95, 95, 110);
     private static final Color GOLD_LABEL = new Color(198, 166, 52);
     private static final Color LINE_DEFAULT = new Color(120, 90, 255);
     private static final Color MARKER = new Color(235, 238, 245);
+    private static final Color OUTLIER = new Color(255, 190, 80);
 
     private static final int GRID_LINES = 5;
 
     private static final long MIN_INCREMENT = 25_000L;
     private static final long MID_INCREMENT = 50_000L;
     private static final long HIGH_INCREMENT = 100_000L;
+
+    private static final long AXIS_REFRESH_MS = 4_000L;
+    private static final double OUTLIER_MULTIPLIER = 1.65;
+    private static final double ZOOM_STEP = 0.15;
+    private static final double MIN_ZOOM = 1.0;
+    private static final double MAX_ZOOM = 4.0;
 
     private Color lineColor = LINE_DEFAULT;
     private List<RuneAlyticsXpSkillState.Sample> samples = java.util.Collections.emptyList();
@@ -41,6 +51,10 @@ class XpSparkline extends JComponent
     private long gT0, gSpan;
 
     private int hoverIdx = -1;
+
+    private long displayedMaxY = 100_000L;
+    private long lastAxisUpdateMs = 0L;
+    private double zoom = 1.0;
 
     XpSparkline()
     {
@@ -64,6 +78,21 @@ class XpSparkline extends JComponent
             }
         });
 
+        addMouseWheelListener((MouseWheelEvent e) ->
+        {
+            if (e.getWheelRotation() < 0)
+            {
+                zoom = Math.min(MAX_ZOOM, zoom + ZOOM_STEP);
+            }
+            else
+            {
+                zoom = Math.max(MIN_ZOOM, zoom - ZOOM_STEP);
+            }
+
+            displayedMaxY = calculateVisibleMax(samples);
+            repaint();
+        });
+
         addMouseListener(new MouseAdapter()
         {
             @Override public void mouseExited(MouseEvent e)
@@ -71,6 +100,16 @@ class XpSparkline extends JComponent
                 if (hoverIdx != -1)
                 {
                     hoverIdx = -1;
+                    repaint();
+                }
+            }
+
+            @Override public void mouseClicked(MouseEvent e)
+            {
+                if (e.getClickCount() >= 2)
+                {
+                    zoom = 1.0;
+                    displayedMaxY = calculateVisibleMax(samples);
                     repaint();
                 }
             }
@@ -108,6 +147,13 @@ class XpSparkline extends JComponent
         if (hoverIdx >= size)
         {
             hoverIdx = -1;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now - lastAxisUpdateMs >= AXIS_REFRESH_MS || displayedMaxY <= 0)
+        {
+            displayedMaxY = calculateVisibleMax(next);
+            lastAxisUpdateMs = now;
         }
 
         if (size == lastSize && sig == lastSig && hoverIdx < 0)
@@ -163,6 +209,59 @@ class XpSparkline extends JComponent
 
         return "<html><b>" + XpFormat.compactUpper(s.totalGained) + "</b> xp/hr<br>"
                 + "<span style='color:#9aa2b2'>" + when + "</span></html>";
+    }
+
+    private long calculateVisibleMax(List<RuneAlyticsXpSkillState.Sample> data)
+    {
+        if (data == null || data.isEmpty())
+        {
+            return 100_000L;
+        }
+
+        List<Long> values = new ArrayList<>();
+        long rawMax = 1L;
+
+        for (RuneAlyticsXpSkillState.Sample s : data)
+        {
+            long value = Math.max(0L, s.totalGained);
+            values.add(value);
+            rawMax = Math.max(rawMax, value);
+        }
+
+        Collections.sort(values);
+
+        long median = percentile(values, 0.50);
+        long p75 = percentile(values, 0.75);
+        long p90 = percentile(values, 0.90);
+
+        long stableMax = Math.max(p90, Math.max(median, p75));
+
+        if (rawMax > stableMax * OUTLIER_MULTIPLIER && stableMax > 0)
+        {
+            stableMax = Math.max(stableMax, p75);
+        }
+        else
+        {
+            stableMax = rawMax;
+        }
+
+        long zoomedMax = Math.max(25_000L, Math.round(stableMax / zoom));
+        long increment = incrementFor(zoomedMax);
+
+        return roundUpToIncrement(zoomedMax, increment);
+    }
+
+    private static long percentile(List<Long> sorted, double pct)
+    {
+        if (sorted == null || sorted.isEmpty())
+        {
+            return 0L;
+        }
+
+        int index = (int) Math.floor((sorted.size() - 1) * pct);
+        index = Math.max(0, Math.min(sorted.size() - 1, index));
+
+        return sorted.get(index);
     }
 
     private static long incrementFor(long maxValue)
@@ -234,17 +333,11 @@ class XpSparkline extends JComponent
 
             List<RuneAlyticsXpSkillState.Sample> data = samples;
 
-            long rawMax = 1L;
-            for (RuneAlyticsXpSkillState.Sample s : data)
-            {
-                rawMax = Math.max(rawMax, s.totalGained);
-            }
-
-            long increment = incrementFor(rawMax);
-            long maxY = roundUpToIncrement(rawMax, increment);
+            long maxY = displayedMaxY > 0 ? displayedMaxY : calculateVisibleMax(data);
+            long increment = Math.max(1L, maxY / (GRID_LINES - 1));
 
             Font originalFont = g2.getFont();
-            Font labelFont = originalFont.deriveFont(Font.BOLD, 8.5f);
+            Font labelFont = originalFont.deriveFont(Font.BOLD, 7.25f);
             g2.setFont(labelFont);
             FontMetrics fm = g2.getFontMetrics();
 
@@ -272,12 +365,12 @@ class XpSparkline extends JComponent
                 String label = axisLabel(value);
 
                 int labelX = padL + widestLabel - fm.stringWidth(label);
-                int labelY = y - 2;
-                int lineStartX = padL + widestLabel + 8;
+                int labelY = y - 1;
+                int lineStartX = padL + widestLabel + 7;
 
                 if (i == 0)
                 {
-                    labelY = y - 3;
+                    labelY = y - 2;
                 }
                 else if (i == GRID_LINES - 1)
                 {
@@ -325,7 +418,8 @@ class XpSparkline extends JComponent
             for (RuneAlyticsXpSkillState.Sample s : data)
             {
                 double fx = (s.timeMs - t0) / (double) span;
-                double fy = s.totalGained / (double) maxY;
+                double rawFy = s.totalGained / (double) maxY;
+                double fy = Math.min(1.0, rawFy);
 
                 int x = padL + (int) Math.round(fx * plotW);
                 int y = padT + (int) Math.round((1.0 - fy) * plotH);
@@ -341,6 +435,12 @@ class XpSparkline extends JComponent
                 {
                     line.lineTo(x, y);
                     area.lineTo(x, y);
+                }
+
+                if (rawFy > 1.0)
+                {
+                    g2.setColor(OUTLIER);
+                    g2.fillOval(x - 2, padT - 1, 4, 4);
                 }
 
                 lastX = x;
@@ -361,7 +461,7 @@ class XpSparkline extends JComponent
                 RuneAlyticsXpSkillState.Sample s = data.get(hoverIdx);
 
                 double fx = (s.timeMs - t0) / (double) span;
-                double fy = s.totalGained / (double) maxY;
+                double fy = Math.min(1.0, s.totalGained / (double) maxY);
 
                 int x = padL + (int) Math.round(fx * plotW);
                 int y = padT + (int) Math.round((1.0 - fy) * plotH);
