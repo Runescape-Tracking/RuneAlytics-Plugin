@@ -52,9 +52,19 @@ class RuneAlyticsXpSkillRow extends JPanel
     private static final Color HOVER_BG = new Color(34, 41, 60);
     private static final Color DIM_ACCENT = new Color(90, 96, 110);
 
+    /** "LIVE" shows at full opacity for this long after the last XP gain… */
+    private static final long LIVE_WINDOW_MS = 15_000L;
+    /** …then fades out over this long before disappearing. */
+    private static final long LIVE_FADE_MS   = 2_500L;
+
     private final Skill skill;
     private final RunealyticsConfig config;
     private final Color skillColor;
+
+    // LIVE fade state (driven by the panel's animation tick).
+    private long lastGainWallMs = 0L;
+    private boolean hiddenNow = false;
+    private int lastLiveAlpha = -1;
 
     private final JLabel nameLabel   = new JLabel();
     private final JLabel starLabel   = new JLabel("★");
@@ -247,7 +257,7 @@ class RuneAlyticsXpSkillRow extends JPanel
      * @param activeNow active-session-clock ms (pauses when logged out) used for
      *                  all rate/time calculations
      */
-    void update(RuneAlyticsXpSkillState st, long activeNow, boolean live, boolean hidden, boolean favorite)
+    void update(RuneAlyticsXpSkillState st, long activeNow, boolean hidden, boolean favorite)
     {
         boolean ignoreAfk = config.xpIgnoreAfk();
         long afk = Math.max(1, config.xpAfkTimeout()) * 60_000L;
@@ -260,8 +270,11 @@ class RuneAlyticsXpSkillRow extends JPanel
         nameLabel.setForeground(hidden ? MUTED : skillColor);
         bar.setAccent(hidden ? DIM_ACCENT : skillColor);
 
-        boolean showLive = live && !hidden;
-        if (liveLabel.isVisible() != showLive) liveLabel.setVisible(showLive);
+        // LIVE indicator: full for 15s after the last gain, then fades out.
+        this.lastGainWallMs = st.getLastGainWallMs();
+        this.hiddenNow = hidden;
+        applyLiveFade(System.currentTimeMillis());
+
         levelLabel.setText("Lvl. " + st.displayLevel());
         // True XP-gained value (e.g. 1,441,027), never abbreviated.
         gainedLabel.setText(XpFormat.comma(st.getTotalGained()));
@@ -283,6 +296,61 @@ class RuneAlyticsXpSkillRow extends JPanel
             bar.setFraction(st.levelProgress());
             infoLabel.setText(buildInfo(st, activeNow, ignoreAfk, afk));
             infoLabel.setVisible(true);
+        }
+    }
+
+    /**
+     * Animation tick (driven by the panel) that fades the LIVE indicator without
+     * needing a full data refresh — cheap: it no-ops unless the alpha changed.
+     */
+    void tickLiveFade(long nowMs)
+    {
+        applyLiveFade(nowMs);
+    }
+
+    /**
+     * Recomputes the LIVE dot+text opacity: full for {@link #LIVE_WINDOW_MS} after
+     * the last gain, then fading to nothing over {@link #LIVE_FADE_MS}. Hidden rows
+     * never show LIVE.
+     */
+    private void applyLiveFade(long nowMs)
+    {
+        int alpha;
+        if (hiddenNow || lastGainWallMs <= 0L)
+        {
+            alpha = 0;
+        }
+        else
+        {
+            long since = nowMs - lastGainWallMs;
+            if (since < LIVE_WINDOW_MS)
+            {
+                alpha = 255;
+            }
+            else if (since < LIVE_WINDOW_MS + LIVE_FADE_MS)
+            {
+                double t = (since - LIVE_WINDOW_MS) / (double) LIVE_FADE_MS;
+                alpha = (int) Math.round(255.0 * (1.0 - t));
+            }
+            else
+            {
+                alpha = 0;
+            }
+        }
+
+        if (alpha == lastLiveAlpha) return; // nothing changed — skip the repaint
+        lastLiveAlpha = alpha;
+
+        if (alpha <= 0)
+        {
+            if (liveLabel.isVisible()) liveLabel.setVisible(false);
+        }
+        else
+        {
+            liveLabel.setForeground(new Color(
+                    XP_GREEN.getRed(), XP_GREEN.getGreen(), XP_GREEN.getBlue(), alpha));
+            if (!liveLabel.isVisible()) liveLabel.setVisible(true);
+            liveLabel.repaint();
         }
     }
 

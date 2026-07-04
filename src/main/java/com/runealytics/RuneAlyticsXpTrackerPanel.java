@@ -114,10 +114,12 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     private List<Skill> lastOrder = new ArrayList<>();
 
     private JButton syncButton;
+    private JButton pauseButton;
     private JButton eyeButton;
     private boolean showHidden = false;
 
     private Timer refreshTimer;
+    private Timer liveFadeTimer;
     private long syncMessageUntil = 0L;
 
     @Inject
@@ -264,18 +266,39 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         view.add(summary);
         view.add(Box.createRigidArea(new Dimension(0, 8)));
 
-        // Controls: sync + reset
-        JPanel controls = new JPanel(new BorderLayout(6, 0));
+        // Controls: sync | pause/play | reset
+        JPanel controls = new JPanel();
+        controls.setLayout(new BoxLayout(controls, BoxLayout.X_AXIS));
         controls.setOpaque(false);
         controls.setAlignmentX(Component.LEFT_ALIGNMENT);
         controls.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
-        syncButton = accentButton("⟳ Sync Session", new Color(30, 50, 80), new Color(80, 120, 180));
+
+        syncButton = accentButton("⟳ Sync", new Color(30, 50, 80), new Color(80, 120, 180));
         syncButton.addActionListener(e -> onSyncClicked());
-        JButton resetButton = accentButton("Reset Session", new Color(48, 30, 34), new Color(110, 60, 64));
+
+        // Pause/play: freezes XP/hr (and runtime) on all skills; no other effect.
+        pauseButton = accentButton("⏸", new Color(40, 44, 60), new Color(90, 96, 120));
+        pauseButton.setFont(new Font("Dialog", Font.BOLD, 14));
+        pauseButton.setToolTipText("Pause XP/hr");
+        Dimension pauseSize = new Dimension(40, 30);
+        pauseButton.setPreferredSize(pauseSize);
+        pauseButton.setMinimumSize(pauseSize);
+        pauseButton.setMaximumSize(pauseSize);
+        pauseButton.addActionListener(e -> onTogglePause());
+
+        JButton resetButton = accentButton("Reset", new Color(48, 30, 34), new Color(110, 60, 64));
         resetButton.setForeground(new Color(255, 160, 160));
         resetButton.addActionListener(e -> onResetSession());
-        controls.add(syncButton,  BorderLayout.CENTER);
-        controls.add(resetButton, BorderLayout.EAST);
+        Dimension resetSize = new Dimension(84, 30);
+        resetButton.setPreferredSize(resetSize);
+        resetButton.setMinimumSize(resetSize);
+        resetButton.setMaximumSize(resetSize);
+
+        controls.add(syncButton);
+        controls.add(Box.createRigidArea(new Dimension(6, 0)));
+        controls.add(pauseButton);
+        controls.add(Box.createRigidArea(new Dimension(6, 0)));
+        controls.add(resetButton);
         view.add(controls);
         view.add(Box.createRigidArea(new Dimension(0, 8)));
 
@@ -337,7 +360,16 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
             refreshTimer = new Timer(1000, e -> refresh());
             refreshTimer.setRepeats(true);
         }
+        if (liveFadeTimer == null)
+        {
+            // ~15fps animation tick that only fades LIVE indicators (no-op per row
+            // unless its opacity actually changed), so the fade is smooth without
+            // running a full data refresh.
+            liveFadeTimer = new Timer(66, e -> tickLiveFades());
+            liveFadeTimer.setRepeats(true);
+        }
         refreshTimer.start();
+        liveFadeTimer.start();
         refresh();
     }
 
@@ -345,7 +377,19 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     public void removeNotify()
     {
         if (refreshTimer != null) refreshTimer.stop();
+        if (liveFadeTimer != null) liveFadeTimer.stop();
         super.removeNotify();
+    }
+
+    /** Fades the LIVE indicator on every currently-listed skill row. */
+    private void tickLiveFades()
+    {
+        long now = System.currentTimeMillis();
+        for (Skill s : lastOrder)
+        {
+            RuneAlyticsXpSkillRow row = rows.get(s);
+            if (row != null) row.tickLiveFade(now);
+        }
     }
 
     void setPlugin(RuneAlyticsPlugin plugin)
@@ -393,6 +437,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         runtimeVal.setText(XpFormat.duration(sessionManager.runtimeMs(now)));
         updateFeaturedSummary(now, activeNow, liveWindow);
 
+        // Pause/play button reflects the current pause state.
+        boolean paused = sessionManager.isManualPaused();
+        pauseButton.setText(paused ? "▶" : "⏸");
+        pauseButton.setToolTipText(paused ? "Resume XP/hr" : "Pause XP/hr");
+
         // Eye toggle: only meaningful when something is hidden (or we're revealing).
         int hiddenCount = sessionManager.hiddenCount();
         eyeButton.setVisible(hiddenCount > 0 || showHidden);
@@ -419,7 +468,6 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     {
         List<RuneAlyticsXpSkillState> states =
                 sessionManager.snapshotStates(config.xpShowAllSkills(), showHidden);
-        long liveWindow = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
         List<Skill> order = new ArrayList<>(states.size());
         for (RuneAlyticsXpSkillState st : states) order.add(st.getSkill());
@@ -448,11 +496,9 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         {
             RuneAlyticsXpSkillRow row = rows.get(st.getSkill());
             if (row == null) continue;
-            // "LIVE" = still gaining XP; drops off once idle past the AFK window
-            // (real wall time, so it also clears while logged out).
-            boolean live = st.hasGains() && st.getLastGainWallMs() > 0
-                    && (now - st.getLastGainWallMs()) < liveWindow;
-            row.update(st, activeNow, live, sessionManager.isHidden(st.getSkill()),
+            // The row manages its own "LIVE" indicator (15s window + fade) from the
+            // skill's last-gain wall time via the animation tick below.
+            row.update(st, activeNow, sessionManager.isHidden(st.getSkill()),
                     sessionManager.isFavorite(st.getSkill()));
         }
     }
@@ -598,6 +644,12 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     {
         RuneAlyticsPlugin p = plugin;
         if (p != null) p.syncXpSession(true);
+    }
+
+    private void onTogglePause()
+    {
+        sessionManager.setManualPaused(!sessionManager.isManualPaused());
+        refresh();
     }
 
     private void onResetSession()

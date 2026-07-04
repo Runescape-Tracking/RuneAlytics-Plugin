@@ -44,6 +44,8 @@ public class RuneAlyticsPanel extends PluginPanel
     public static final String FEATURE_LOOT         = "loot_tracker";
     /** Server-controlled: shows the Match Finder tab. */
     public static final String FEATURE_MATCHES      = "match_finder";
+    /** Server-controlled: shows the XP Tracker tab. */
+    public static final String FEATURE_XP_TRACKER   = "xp_tracker";
     /**
      * Server-controlled: gates whether the plugin POSTs full XP-session snapshots
      * to {@code /api/plugin/xp/session}. Does NOT control a tab — the XP Tracker
@@ -243,6 +245,15 @@ public class RuneAlyticsPanel extends PluginPanel
         log.debug("Applying feature flags: {}", flags);
         lastAppliedFlags = new HashMap<>(flags); // snapshot for late-registering tabs
 
+        // Remember which tab is showing, so if it gets disabled below we can move
+        // the user to a working tab instead of leaving them on a blank/removed one.
+        Component selectedBefore = tabbedPane.getSelectedComponent();
+        TabEntry selectedEntry = null;
+        for (TabEntry e : tabRegistry)
+        {
+            if (e.content == selectedBefore) { selectedEntry = e; break; }
+        }
+
         for (TabEntry entry : tabRegistry)
         {
             if (entry.featureKey == null)
@@ -283,9 +294,32 @@ public class RuneAlyticsPanel extends PluginPanel
         if (count > 0 && tabbedPane.getSelectedIndex() >= count)
             tabbedPane.setSelectedIndex(count - 1);
 
+        // If the tab the user was viewing was just disabled, switch them to a
+        // working tab — prefer Loot Tracker, then Settings as a last resort.
+        if (selectedEntry != null && !selectedEntry.visible)
+        {
+            int fallback = preferredFallbackIndex();
+            if (fallback >= 0) tabbedPane.setSelectedIndex(fallback);
+        }
+
         // validate() lays out only this subtree, avoiding a full-frame relayout flash.
         tabbedPane.validate();
         tabbedPane.repaint();
+    }
+
+    /**
+     * Index of the tab to fall back to when the active tab is disabled: the Loot
+     * Tracker if visible, otherwise Settings, otherwise the first tab (or -1 when
+     * no tabs remain). Hidden tabs are removed from the pane, so {@code indexOfTab}
+     * returns -1 for them.
+     */
+    private int preferredFallbackIndex()
+    {
+        int loot = tabbedPane.indexOfTab("Loot Tracker");
+        if (loot >= 0) return loot;
+        int settings = tabbedPane.indexOfTab("Settings");
+        if (settings >= 0) return settings;
+        return tabbedPane.getTabCount() > 0 ? 0 : -1;
     }
 
     // ── Convenience helpers — all route through applyFeatureFlags ─────────────
@@ -310,6 +344,7 @@ public class RuneAlyticsPanel extends PluginPanel
         Map<String, Boolean> flags = new HashMap<>();
         flags.put(FEATURE_VERIFICATION, true);
         flags.put(FEATURE_LOOT,         true);   // local tracking always available
+        flags.put(FEATURE_XP_TRACKER,   true);   // shown until server flags say otherwise
         flags.put(FEATURE_MATCHES,      false);  // match finder requires verification
         applyFeatureFlags(flags);
     }
@@ -318,16 +353,18 @@ public class RuneAlyticsPanel extends PluginPanel
      * Called after feature flags are fetched for a verified account.
      *
      * <p>Verification tab stays visible so the player can always access settings.
-     * Loot Tracker / Match Finder visibility is server-controlled.</p>
+     * Loot Tracker / XP Tracker / Match Finder visibility is server-controlled.</p>
      *
      * @param lootEnabled  whether the Loot Tracker tab should be visible
+     * @param xpEnabled    whether the XP Tracker tab should be visible
      * @param matchEnabled whether the Match Finder tab should be visible
      */
-    public void showMainFeatures(boolean lootEnabled, boolean matchEnabled)
+    public void showMainFeatures(boolean lootEnabled, boolean xpEnabled, boolean matchEnabled)
     {
         Map<String, Boolean> flags = new HashMap<>();
         flags.put(FEATURE_VERIFICATION, true);   // always accessible
         flags.put(FEATURE_LOOT,         lootEnabled);
+        flags.put(FEATURE_XP_TRACKER,   xpEnabled);
         flags.put(FEATURE_MATCHES,      matchEnabled);
         applyFeatureFlags(flags);
     }
