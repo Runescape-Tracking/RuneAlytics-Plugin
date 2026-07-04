@@ -251,7 +251,7 @@ class XpSparkline extends JComponent
         return roundUpToIncrement(zoomedMax, increment);
     }
 
-    private static long percentile(List<Long> sorted, double pct)
+    static long percentile(List<Long> sorted, double pct)
     {
         if (sorted == null || sorted.isEmpty())
         {
@@ -264,7 +264,7 @@ class XpSparkline extends JComponent
         return sorted.get(index);
     }
 
-    private static long incrementFor(long maxValue)
+    static long incrementFor(long maxValue)
     {
         if (maxValue > 250_000L)
         {
@@ -279,7 +279,7 @@ class XpSparkline extends JComponent
         return MIN_INCREMENT;
     }
 
-    private static long roundUpToIncrement(long value, long increment)
+    static long roundUpToIncrement(long value, long increment)
     {
         long top = increment * (GRID_LINES - 1);
 
@@ -291,7 +291,7 @@ class XpSparkline extends JComponent
         return Math.max(top, increment);
     }
 
-    private static String axisLabel(long value)
+    static String axisLabel(long value)
     {
         if (value >= 1_000_000L)
         {
