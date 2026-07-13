@@ -510,6 +510,39 @@ public class LootTrackerManager
             .build();
 
     /**
+     * Wave/add NPCs that appear during multi-stage boss encounters but never
+     * carry a loot table of their own (Mokhaiotl Delves, TzHaar Fight Cave,
+     * the Inferno, Fortis Colosseum). Recording their deaths only produces
+     * empty "No drops recorded yet" containers, so they never get one,
+     * regardless of {@code trackAllNpcs}.
+     */
+    private static final Set<String> NON_LOOT_ENCOUNTER_ADDS = ImmutableSet.of(
+            // Mokhaiotl Delves adds
+            "volatile mokhaiotl", "demonic melee", "demonic range", "demonic magic",
+            // TzHaar Fight Cave waves (Fire Cape)
+            "tz-kih", "tz-kek", "tok-xil", "yt-mejkot", "ket-zek",
+            // Fortis Colosseum waves (Sol Heredit's loot comes via widget read)
+            "serpent shaman", "jaguar warrior", "javelin colossus",
+            "manticore", "shockwave colossus", "fremennik seer", "minotaur"
+    );
+
+    /**
+     * @param lowerName already-lowercased, already-normalised NPC name
+     * @return true if this is a known no-drop encounter add (Inferno waves
+     *         are matched by their shared {@code "jal-"} prefix rather than
+     *         an exhaustive name list).
+     */
+    private static boolean isNonLootEncounterAdd(String lowerName)
+    {
+        if (lowerName.startsWith("jal-") || lowerName.startsWith("jaltok")) return true;
+        for (String s : NON_LOOT_ENCOUNTER_ADDS)
+        {
+            if (lowerName.contains(s)) return true;
+        }
+        return false;
+    }
+
+    /**
      * Records an NPC kill that produced no loot.
      *
      * <p>Respects the same filters as {@link #processNpcLoot}:</p>
@@ -517,6 +550,7 @@ public class LootTrackerManager
      *   <li>Loot-tracking config must be enabled</li>
      *   <li>NPC must be a tracked boss <em>or</em> {@code trackAllNpcs} must be on</li>
      *   <li>NPC must not be in {@link #CHEST_LOOT_NPC_IDS}</li>
+     *   <li>NPC must not be a known no-drop encounter add, see {@link #NON_LOOT_ENCOUNTER_ADDS}</li>
      * </ul>
      *
      * <p>Called from {@code RuneAlyticsPlugin} after {@code ActorDeath} on an
@@ -539,6 +573,14 @@ public class LootTrackerManager
         }
 
         String name = normalizeBossName(npc.getName());
+
+        if (isNonLootEncounterAdd(name.toLowerCase()))
+        {
+            log.debug("Zero-loot kill suppressed for known no-drop encounter add '{}' (id={})",
+                    name, npcId);
+            return;
+        }
+
         boolean isBoss = isBoss(npcId, name);
 
         if (!isBoss && !config.trackAllNpcs())
@@ -1601,6 +1643,12 @@ public class LootTrackerManager
         // slow against a large history.
         boolean backfilled = backfillAllMissingDropValues(data);
 
+        // Re-canonicalise storage keys and purge known no-drop encounter adds.
+        // Handles data written before normalizeBossName() stripped <col=...>
+        // markup or gained the Mokhaiotl branch, and before the encounter-add
+        // blacklist existed, so old duplicate/junk containers disappear too.
+        boolean migrated = migrateBossKillKeys(data);
+
         bossKillStats.clear();
 
         List<String> emptyPlaceholderKeys = new ArrayList<>();
@@ -1706,14 +1754,97 @@ public class LootTrackerManager
 
         // Persist once, outside the loop, if any drop's value was backfilled
         // or empty placeholder entries were purged.
-        if (backfilled || purgedPlaceholders)
+        if (backfilled || purgedPlaceholders || migrated)
         {
-            log.debug("[Loot] Backfilled missing GE/alch values and/or purged placeholders — saving");
+            log.debug("[Loot] Backfilled missing GE/alch values and/or purged placeholders "
+                    + "and/or migrated boss keys — saving");
             storageManager.scheduleSave();
         }
 
         log.debug("refreshLootDisplay: {} bosses loaded", bossKillStats.size());
         if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
+    }
+
+    /**
+     * Re-canonicalises every stored boss key through the current
+     * {@link #normalizeBossName} / {@link #isNonLootEncounterAdd} rules,
+     * merging any entry whose stored key no longer matches its canonical
+     * name into the canonical entry, and dropping known no-drop encounter
+     * adds outright. Runs once per load so historical data written under
+     * older (buggier) normalisation rules self-heals.
+     *
+     * @return true if any key was renamed, merged, or removed
+     */
+    private boolean migrateBossKillKeys(LootStorageData data)
+    {
+        Map<String, LootStorageData.BossKillData> bossKills = data.getBossKills();
+        List<String> keysSnapshot = new ArrayList<>(bossKills.keySet());
+        boolean changed = false;
+
+        for (String rawKey : keysSnapshot)
+        {
+            LootStorageData.BossKillData bd = bossKills.get(rawKey);
+            if (bd == null) continue; // already merged away earlier in this pass
+
+            String canonical = normalizeBossName(rawKey);
+
+            if (isNonLootEncounterAdd(canonical.toLowerCase()))
+            {
+                bossKills.remove(rawKey);
+                changed = true;
+                log.debug("[Loot] Purged known no-drop encounter add '{}' from storage", rawKey);
+                continue;
+            }
+
+            if (!canonical.equals(rawKey))
+            {
+                bd.setNpcName(canonical);
+                LootStorageData.BossKillData existing = bossKills.get(canonical);
+                if (existing != null && existing != bd)
+                {
+                    mergeBossKillData(existing, bd);
+                    bossKills.remove(rawKey);
+                }
+                else
+                {
+                    bossKills.remove(rawKey);
+                    bossKills.put(canonical, bd);
+                }
+                changed = true;
+                log.debug("[Loot] Migrated boss key '{}' → '{}'", rawKey, canonical);
+            }
+        }
+
+        return changed;
+    }
+
+    /** Folds {@code from} into {@code into}, summing counts/values and combining drop history. */
+    private static void mergeBossKillData(LootStorageData.BossKillData into, LootStorageData.BossKillData from)
+    {
+        into.setKillCount(into.getKillCount() + from.getKillCount());
+        into.setTotalLootValue(into.getTotalLootValue() + from.getTotalLootValue());
+        into.setPrestige(Math.max(into.getPrestige(), from.getPrestige()));
+
+        if (from.getKills() != null) into.getKills().addAll(from.getKills());
+
+        if (from.getAggregatedDrops() != null)
+        {
+            for (Map.Entry<Integer, LootStorageData.AggregatedDrop> e : from.getAggregatedDrops().entrySet())
+            {
+                LootStorageData.AggregatedDrop existing = into.getAggregatedDrops().get(e.getKey());
+                LootStorageData.AggregatedDrop add = e.getValue();
+                if (existing == null)
+                {
+                    into.getAggregatedDrops().put(e.getKey(), add);
+                }
+                else
+                {
+                    existing.setTotalQuantity(existing.getTotalQuantity() + add.getTotalQuantity());
+                    existing.setDropCount(existing.getDropCount() + add.getDropCount());
+                    existing.setTotalValue(existing.getTotalValue() + add.getTotalValue());
+                }
+            }
+        }
     }
 
     /**
@@ -2532,7 +2663,7 @@ public class LootTrackerManager
     {
         if (name == null) return false;
         String l = name.toLowerCase();
-        return l.contains("duke")        || l.contains("leviathan")
+        return l.contains("mokhaiotl")   || l.contains("duke")        || l.contains("leviathan")
                 || l.contains("vardorvis")   || l.contains("whisperer")
                 || l.contains("zulrah")      || l.contains("vorkath")
                 || l.contains("cerberus")    || l.contains("nightmare")
@@ -2563,14 +2694,31 @@ public class LootTrackerManager
      * @param raw raw name from NPC, widget, or chat
      * @return canonical name, never null
      */
+    private static final Pattern COLOR_TAG_PATTERN = Pattern.compile("</?col[^>]*>", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Strips RuneScape chat-message colour markup (e.g. {@code <col=00ffff>...</col>})
+     * that occasionally leaks into an NPC's display name for certain reflected /
+     * phase-variant monsters.
+     */
+    public static String stripColorTags(String raw)
+    {
+        return raw == null ? null : COLOR_TAG_PATTERN.matcher(raw).replaceAll("");
+    }
+
     public static String normalizeBossName(String raw)
     {
         if (raw == null || raw.isEmpty()) return "Unknown";
+
+        raw = stripColorTags(raw).trim();
+        if (raw.isEmpty()) return "Unknown";
 
         // Pass through already-prefixed pickpocket entries unchanged
         if (raw.startsWith(PICKPOCKET_PREFIX)) return raw;
 
         String l = raw.toLowerCase();
+
+        if (l.contains("doom of mokhaiotl"))              return "Doom of Mokhaiotl";
 
         if (l.contains("corrupted gauntlet"))             return "Corrupted Gauntlet";
         if (l.contains("gauntlet"))                       return "The Gauntlet";

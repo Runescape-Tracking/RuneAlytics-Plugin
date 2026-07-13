@@ -83,6 +83,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         setOpaque(true);
 
         verificationPanel.setVerificationStatusListener(this::handleVerificationStatusChange);
+        add(RuneAlyticsUi.buildStandardHeaderPanel("Settings"), BorderLayout.NORTH);
         add(buildScrollPane(), BorderLayout.CENTER);
     }
 
@@ -131,8 +132,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private JPanel buildVerifiedContent()
     {
         JPanel panel = rootPanel();
-        panel.add(RuneAlyticsUi.buildPanelHeader("Settings"));
-        panel.add(vSpace(10));
         panel.add(buildConnectionStatusCard());
         panel.add(vSpace(14));
         panel.add(sectionHeader("PRIVACY SETTINGS"));
@@ -294,8 +293,6 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private JPanel buildUnverifiedContent()
     {
         JPanel panel = rootPanel();
-        panel.add(RuneAlyticsUi.buildPanelHeader("Settings"));
-        panel.add(vSpace(10));
         panel.add(buildVerificationSection());
         panel.add(vSpace(14));
         panel.add(sectionHeader("RUNEALYTICS BENEFITS"));

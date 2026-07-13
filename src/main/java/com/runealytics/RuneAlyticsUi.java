@@ -348,6 +348,37 @@ public final class RuneAlyticsUi
         return outer;
     }
 
+    /** Header background shared by every tab, canonically the Loot Tracker's. */
+    public static final Color TAB_HEADER_BG = new Color(28, 28, 28);
+    private static final Color TAB_HEADER_SEPARATOR = new Color(55, 55, 55);
+
+    /**
+     * Standard tab header shell: {@link #buildPanelHeader(String)} on the
+     * canonical dark header background, followed by a separator. Every tab
+     * should use this instead of wrapping {@code buildPanelHeader} in its
+     * own ad-hoc container, so the logo/background/padding stay identical
+     * across tabs.
+     */
+    public static JPanel buildStandardHeaderPanel(String tabName)
+    {
+        JPanel header = new JPanel();
+        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
+        header.setBackground(TAB_HEADER_BG);
+        header.setBorder(new EmptyBorder(8, 8, 8, 8));
+        header.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        header.add(buildPanelHeader(tabName));
+        header.add(vSpace(8));
+
+        JSeparator sep = new JSeparator();
+        sep.setForeground(TAB_HEADER_SEPARATOR);
+        sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        sep.setAlignmentX(Component.LEFT_ALIGNMENT);
+        header.add(sep);
+
+        return header;
+    }
+
     private static BufferedImage tryLoadHeaderImage(String resource)
     {
         try

@@ -136,6 +136,12 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
 
         setLayout(new BorderLayout());
 
+        // Fixed, non-scrolling header (matches Loot Tracker): logo/tagline/title
+        // plus the account row, XP-earned-today banner, session summary, and
+        // controls — everything above the chart stays pinned regardless of
+        // whether the skill-list or skill-detail card is showing.
+        add(buildHeader(), BorderLayout.NORTH);
+
         JPanel main = buildMainView();
         chartCard = chartCardHolder; // populated by buildMainView()
 
@@ -161,45 +167,12 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         add(scroll, BorderLayout.CENTER);
     }
 
-    /**
-     * Scroll content that is forced to the viewport's width (never wider), so the
-     * design reflows within the available space and is never clipped by the
-     * always-on vertical scrollbar.
-     */
-    private static final class ScrollableView extends JPanel implements Scrollable
+    private JPanel buildHeader()
     {
-        ScrollableView(LayoutManager layout)
-        {
-            super(layout);
-        }
-
-        @Override public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
-        @Override public int getScrollableUnitIncrement(Rectangle r, int o, int d) { return 16; }
-        @Override public int getScrollableBlockIncrement(Rectangle r, int o, int d) { return Math.max(16, r.height - 16); }
-        @Override public boolean getScrollableTracksViewportWidth()  { return true; }
-        @Override public boolean getScrollableTracksViewportHeight() { return false; }
-    }
-
-    private JPanel buildMainView()
-    {
-        JPanel view = new JPanel();
-        view.setLayout(new BoxLayout(view, BoxLayout.Y_AXIS));
-        view.setBackground(CARD_BG);
-        view.setOpaque(true);
-        view.setBorder(new EmptyBorder(PAD, PAD, PAD, PAD));
-
-        // Shared branding header (logo + tagline + tab name), like every other tab.
-        JComponent branding = RuneAlyticsUi.buildPanelHeader("XP Tracker");
-        branding.setAlignmentX(Component.LEFT_ALIGNMENT);
-        view.add(branding);
-        view.add(Box.createRigidArea(new Dimension(0, 6)));
-
-        JSeparator headerSep = new JSeparator();
-        headerSep.setForeground(new Color(55, 55, 55));
-        headerSep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
-        headerSep.setAlignmentX(Component.LEFT_ALIGNMENT);
-        view.add(headerSep);
-        view.add(Box.createRigidArea(new Dimension(0, 8)));
+        // Standard tab header shell (matches Loot Tracker exactly), then the
+        // account/XP-today/summary/controls block on the same fixed panel.
+        JPanel header = RuneAlyticsUi.buildStandardHeaderPanel("XP Tracker");
+        header.add(Box.createVerticalStrut(8));
 
         // Account + sync badge row
         JPanel acctRow = new JPanel(new BorderLayout());
@@ -213,8 +186,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         syncBadge.setBorder(new EmptyBorder(2, 6, 2, 6));
         acctRow.add(accountLabel, BorderLayout.WEST);
         acctRow.add(syncBadge,    BorderLayout.EAST);
-        view.add(acctRow);
-        view.add(Box.createRigidArea(new Dimension(0, 8)));
+        header.add(acctRow);
+        header.add(Box.createVerticalStrut(8));
 
         // XP earned today (top highlight)
         JPanel today = card();
@@ -235,8 +208,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         todayInner.add(todayCap, BorderLayout.WEST);
         todayInner.add(todayVal, BorderLayout.EAST);
         today.add(todayInner);
-        view.add(today);
-        view.add(Box.createRigidArea(new Dimension(0, 8)));
+        header.add(today);
+        header.add(Box.createVerticalStrut(8));
 
         // Summary card — focused on the featured (highest-output live) skill.
         JPanel summary = card();
@@ -263,8 +236,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         grid.add(statCell("LEVELS GAINED",   levelsVal,  XP_BLUE));
         grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 150));
         summary.add(grid);
-        view.add(summary);
-        view.add(Box.createRigidArea(new Dimension(0, 8)));
+        header.add(summary);
+        header.add(Box.createVerticalStrut(8));
 
         // Controls: sync | pause/play | reset
         JPanel controls = new JPanel();
@@ -299,8 +272,40 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         controls.add(pauseButton);
         controls.add(Box.createRigidArea(new Dimension(6, 0)));
         controls.add(resetButton);
-        view.add(controls);
-        view.add(Box.createRigidArea(new Dimension(0, 8)));
+        header.add(controls);
+
+        return header;
+    }
+
+    /**
+     * Scroll content that is forced to the viewport's width (never wider), so the
+     * design reflows within the available space and is never clipped by the
+     * always-on vertical scrollbar.
+     */
+    private static final class ScrollableView extends JPanel implements Scrollable
+    {
+        ScrollableView(LayoutManager layout)
+        {
+            super(layout);
+        }
+
+        @Override public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
+        @Override public int getScrollableUnitIncrement(Rectangle r, int o, int d) { return 16; }
+        @Override public int getScrollableBlockIncrement(Rectangle r, int o, int d) { return Math.max(16, r.height - 16); }
+        @Override public boolean getScrollableTracksViewportWidth()  { return true; }
+        @Override public boolean getScrollableTracksViewportHeight() { return false; }
+    }
+
+    private JPanel buildMainView()
+    {
+        // Only the scrollable body: chart + skills list. The branding header,
+        // account row, XP-today banner, summary, and controls are all fixed
+        // above this in buildHeader() (added at BorderLayout.NORTH).
+        JPanel view = new JPanel();
+        view.setLayout(new BoxLayout(view, BoxLayout.Y_AXIS));
+        view.setBackground(CARD_BG);
+        view.setOpaque(true);
+        view.setBorder(new EmptyBorder(PAD, PAD, PAD, PAD));
 
         // Chart card (XP/hr over the last hour)
         JPanel chart = card();

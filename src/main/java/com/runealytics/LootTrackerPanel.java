@@ -185,20 +185,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private JPanel buildHeader()
     {
-        JPanel header = new JPanel();
-        header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
-        header.setBackground(new Color(28, 28, 28));
-        header.setBorder(new EmptyBorder(8, 8, 8, 8));
-
-        // ── Shared branding header ────────────────────────────────────────────
-        header.add(RuneAlyticsUi.buildPanelHeader("Loot Tracker"));
-        header.add(Box.createVerticalStrut(8));
-
-        JSeparator topSep = new JSeparator();
-        topSep.setForeground(new Color(55, 55, 55));
-        topSep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
-        topSep.setAlignmentX(Component.LEFT_ALIGNMENT);
-        header.add(topSep);
+        // ── Shared branding header (canonical for all tabs) ─────────────────
+        JPanel header = RuneAlyticsUi.buildStandardHeaderPanel("Loot Tracker");
         header.add(Box.createVerticalStrut(8));
 
         // ── Stats row ────────────────────────────────────────────────────────

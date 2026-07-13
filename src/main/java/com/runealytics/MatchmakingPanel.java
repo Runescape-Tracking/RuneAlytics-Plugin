@@ -149,14 +149,16 @@ public class MatchmakingPanel extends RuneAlyticsPanelBase implements Matchmakin
         setLayout(new BorderLayout());
         setBorder(new EmptyBorder(0, 0, 0, 0));
 
+        // Standard tab header shell (matches Loot Tracker exactly), separate
+        // from the scrollable card content below it.
+        add(RuneAlyticsUi.buildStandardHeaderPanel("Match Finder"), BorderLayout.NORTH);
+
         ScrollableContentPanel content = new ScrollableContentPanel();
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         content.setBackground(BG);
         content.setBorder(new EmptyBorder(10, 12, 10, 12));
         content.setAlignmentX(LEFT_ALIGNMENT);
 
-        content.add(RuneAlyticsUi.buildPanelHeader("Match Finder"));
-        content.add(RuneAlyticsUi.vSpace(8));
         content.add(buildLoadCard());
         content.add(RuneAlyticsUi.vSpace(5));
         content.add(buildMatchCard());
