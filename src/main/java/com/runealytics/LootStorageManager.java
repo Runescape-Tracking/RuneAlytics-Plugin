@@ -92,24 +92,39 @@ public class LootStorageManager
     /**
      * Saves current loot data to disk.
      *
-     * <p>Synchronized so serialisation never races a mutator
-     * ({@link #addKill}, {@link #appendDropsToLastKill}, {@link #mergeServerData})
-     * on another thread. The write is atomic (temp file + rename) so a crash
-     * mid-write leaves the previous file intact.</p>
+     * <p>Only the in-memory JSON serialisation happens under the lock — that's
+     * CPU-only and stays fast even for a large history. The disk write (temp
+     * file + atomic rename) runs afterwards with no lock held, so a kill event
+     * on the client thread ({@link #addKill}) is never blocked waiting on disk
+     * I/O from a background save. Holding a monitor across a blocking file
+     * write is exactly what caused the client to stall during AOE kill bursts
+     * (several {@link #addKill} calls landing back-to-back on the client
+     * thread while a save was mid-write). The write is still atomic (temp
+     * file + rename) so a crash mid-write leaves the previous file intact.</p>
      */
-    public synchronized void saveData()
+    public void saveData()
     {
-        if (currentData == null)
-        {
-            log.debug("No data to save");
-            return;
-        }
+        String username;
+        String json;
+        int bossCount;
 
-        String username = state.getVerifiedUsername();
-        if (username == null || username.isEmpty())
+        synchronized (this)
         {
-            log.debug("No verified username, cannot save loot data");
-            return;
+            if (currentData == null)
+            {
+                log.debug("No data to save");
+                return;
+            }
+
+            username = state.getVerifiedUsername();
+            if (username == null || username.isEmpty())
+            {
+                log.debug("No verified username, cannot save loot data");
+                return;
+            }
+
+            json      = gson.toJson(currentData);
+            bossCount = currentData.getBossKills().size();
         }
 
         File file = getStorageFile(username);
@@ -128,7 +143,7 @@ public class LootStorageManager
             File tmp = new File(file.getParentFile(), file.getName() + ".tmp");
             try (Writer writer = Files.newBufferedWriter(tmp.toPath()))
             {
-                gson.toJson(currentData, writer);
+                writer.write(json);
             }
 
             try
@@ -145,7 +160,7 @@ public class LootStorageManager
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
 
-            log.debug("Saved loot data for {} - {} bosses", username, currentData.getBossKills().size());
+            log.debug("Saved loot data for {} - {} bosses", username, bossCount);
         }
         catch (Exception e)
         {

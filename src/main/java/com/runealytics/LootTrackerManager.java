@@ -1293,10 +1293,16 @@ public class LootTrackerManager
         // HTTP call (see LIVE_SYNC_DEBOUNCE_MS).
         scheduleLiveSync();
 
-        log.debug("Kill recorded: '{}' #{} (gameKC={}) – {} drops, {} gp",
-                npcName, killNumber, gameKC > 0 ? gameKC : "n/a",
-                drops.size(),
-                drops.stream().mapToLong(LootStorageData.DropRecord::getTotalValue).sum());
+        // Guarded: the stream sum below is real work per kill, so it should
+        // never run when debug logging is off (the default), not just have its
+        // formatted message discarded.
+        if (log.isDebugEnabled())
+        {
+            log.debug("Kill recorded: '{}' #{} (gameKC={}) – {} drops, {} gp",
+                    npcName, killNumber, gameKC > 0 ? gameKC : "n/a",
+                    drops.size(),
+                    drops.stream().mapToLong(LootStorageData.DropRecord::getTotalValue).sum());
+        }
     }
 
     /**
