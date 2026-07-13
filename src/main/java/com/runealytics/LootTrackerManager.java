@@ -2887,7 +2887,11 @@ public class LootTrackerManager
             // negative or garbage value.
             long totalValue = (long) gePrice * item.getQuantity();
 
-            if (totalValue < config.minimumLootValue()) continue;
+            // Only the "junk" filter applies here — a genuinely 0-value item
+            // (untradeable / unpriced, e.g. a new or quest-only unique) is real
+            // loot RuneLite just can't price, not clutter to hide, so it's
+            // always kept regardless of the configured threshold.
+            if (totalValue > 0 && totalValue < config.minimumLootValue()) continue;
 
             ItemComposition canonicalComp = itemManager.getItemComposition(itemManager.canonicalize(item.getId()));
 
