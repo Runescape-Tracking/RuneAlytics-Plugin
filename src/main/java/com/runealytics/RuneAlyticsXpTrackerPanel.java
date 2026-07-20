@@ -112,9 +112,6 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     private final Map<Skill, RuneAlyticsXpSkillRow> rows = new LinkedHashMap<>();
     private List<Skill> lastOrder = new ArrayList<>();
 
-    /** "AFK — PAUSED" indicator shown while the session auto-pauses (no XP for the AFK timeout). */
-    private final JLabel afkBadge = new JLabel("⏸ AFK — PAUSED");
-
     private JButton syncButton;
     private JButton pauseButton;
     private JButton eyeButton;
@@ -148,7 +145,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         chartCard = chartCardHolder; // populated by buildMainView()
 
         detailPanel = new RuneAlyticsXpSkillDetailPanel(iconManager, config, sessionManager,
-                this::showMain, this::onResetSkill);
+                this::showMain, this::onResetSkill, this::onResetSkillRate);
 
         cardPanel.setBackground(CARD_BG);
         cardPanel.add(main, CARD_MAIN);
@@ -219,14 +216,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         sumHeader.setOpaque(false);
         sumHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
         sumHeader.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
-        JPanel sumTitle = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        sumTitle.setOpaque(false);
-        sumTitle.add(sectionLabel("SESSION SUMMARY"));
-        afkBadge.setFont(new Font("Calibri", Font.BOLD, 10));
-        afkBadge.setForeground(new Color(235, 170, 80));
-        afkBadge.setVisible(false);
-        sumTitle.add(afkBadge);
-        sumHeader.add(sumTitle, BorderLayout.WEST);
+        sumHeader.add(sectionLabel("SESSION SUMMARY"), BorderLayout.WEST);
         JPanel skillTag = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         skillTag.setOpaque(false);
         summarySkillName.setFont(new Font("Calibri", Font.BOLD, 12));
@@ -450,12 +440,10 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         // and plain logged-in time before the first gain. XP gained / XP-hr /
         // levels + the trend chart are the single featured skill
         // (favorite-if-live, else highest-output live skill).
-        boolean autoPaused = sessionManager.isAutoPaused(now);
         long shownRuntime = (config.xpIgnoreAfk() && sessionManager.hasAnyGains())
                 ? sessionManager.activeTrainingMs(now)
                 : sessionManager.runtimeMs(now);
         runtimeVal.setText(XpFormat.duration(shownRuntime));
-        afkBadge.setVisible(autoPaused);
         updateFeaturedSummary(now, activeNow, liveWindow);
 
         // Pause/play button reflects the current pause state.

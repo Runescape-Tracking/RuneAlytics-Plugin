@@ -8,7 +8,9 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.SwingConstants;
 import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
@@ -64,6 +66,7 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
     private final RunealyticsConfig config;
     private final RuneAlyticsXpSessionManager sessionManager;
     private final Consumer<Skill> onResetSkill;
+    private final Consumer<Skill> onResetSkillRate;
 
     private Skill skill;
 
@@ -83,16 +86,21 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
     private final XpSparkline sparkline = new XpSparkline();
 
     // ── Profit / supplies (per-skill GP economics) ──
-    private final JLabel geRateVal      = new JLabel();
-    private final JLabel geSessionVal   = new JLabel();
-    private final JLabel geBreakdown    = new JLabel();
-    private final JLabel alchRateVal    = new JLabel();
-    private final JLabel alchSessionVal = new JLabel();
-    private final JLabel alchBreakdown  = new JLabel();
+    /** "⏸ AFK — PAUSED" indicator on the right corner of the back-to-skills row. */
+    private final JLabel afkBadge = new JLabel("⏸ AFK — PAUSED");
+    private final JLabel profitRateVal    = new JLabel();
+    private final JLabel profitSessionVal = new JLabel();
+    private final JLabel profitBreakdown  = new JLabel();
+    private final JButton gePricesBtn;
+    private final JButton highAlchBtn;
+    /** Which valuation the profit card shows; toggled by the two tab buttons. */
+    private boolean showAlchPrices = false;
+    /** Last economy snapshot + active ms, cached so a tab click re-renders instantly. */
+    private SkillEconomyTracker.Snapshot lastEcon = SkillEconomyTracker.Snapshot.EMPTY;
+    private long lastEconActiveMs = 0L;
     private final JPanel suppliesSessionList = new JPanel();
     private final JPanel suppliesTodayList   = new JPanel();
-    private final JPanel geCard;
-    private final JPanel alchCard;
+    private final JPanel profitCard;
     private final JPanel suppliesCard;
     private long lastSuppliesSignature = Long.MIN_VALUE;
 
@@ -104,12 +112,14 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
 
     RuneAlyticsXpSkillDetailPanel(SkillIconManager iconManager, RunealyticsConfig config,
                                   RuneAlyticsXpSessionManager sessionManager,
-                                  Runnable onBack, Consumer<Skill> onResetSkill)
+                                  Runnable onBack, Consumer<Skill> onResetSkill,
+                                  Consumer<Skill> onResetSkillRate)
     {
-        this.iconManager    = iconManager;
-        this.config         = config;
-        this.sessionManager = sessionManager;
-        this.onResetSkill   = onResetSkill;
+        this.iconManager      = iconManager;
+        this.config           = config;
+        this.sessionManager   = sessionManager;
+        this.onResetSkill     = onResetSkill;
+        this.onResetSkillRate = onResetSkillRate;
 
         setLayout(new BorderLayout());
         setBackground(DARK_GRAY_COLOR);
@@ -121,18 +131,27 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         content.setOpaque(true);
         content.setBorder(new EmptyBorder(6, 6, 6, 6));
 
-        // ── Back link ──
+        // ── Back link row (AFK badge pinned to its right corner) ──
+        JPanel backRow = new JPanel(new BorderLayout());
+        backRow.setOpaque(false);
+        backRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        backRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+        backRow.setBorder(new EmptyBorder(2, 2, 6, 2));
         JLabel back = new JLabel("←  Back to Skills");
         back.setFont(new Font("Calibri", Font.BOLD, 12));
         back.setForeground(TEAL);
-        back.setAlignmentX(Component.LEFT_ALIGNMENT);
         back.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        back.setBorder(new EmptyBorder(2, 2, 6, 2));
         back.addMouseListener(new MouseAdapter()
         {
             @Override public void mouseClicked(MouseEvent e) { if (onBack != null) onBack.run(); }
         });
-        content.add(back);
+        afkBadge.setFont(new Font("Calibri", Font.BOLD, 10));
+        afkBadge.setForeground(new Color(235, 170, 80));
+        afkBadge.setHorizontalAlignment(SwingConstants.RIGHT);
+        afkBadge.setVisible(false);
+        backRow.add(back, BorderLayout.WEST);
+        backRow.add(afkBadge, BorderLayout.EAST);
+        content.add(backRow);
 
         // ── Header card ──
         JPanel header = card();
@@ -163,6 +182,7 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         toNextLabel.setForeground(MUTED);
         toNextLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
         header.add(toNextLabel);
+        installResetMenu(header, headerTop, titleCol, iconLabel, nameLabel, levelLabel);
         content.add(header);
         content.add(Box.createRigidArea(new Dimension(0, 8)));
 
@@ -180,13 +200,13 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         content.add(grid);
         content.add(Box.createRigidArea(new Dimension(0, 8)));
 
-        // ── Profit cards: GE prices + high alch (session GP economics) ──
-        geCard = profitCard("PROFIT (GE PRICES)", geRateVal, geSessionVal, geBreakdown);
-        content.add(geCard);
-        content.add(Box.createRigidArea(new Dimension(0, 8)));
-
-        alchCard = profitCard("PROFIT (HIGH ALCH)", alchRateVal, alchSessionVal, alchBreakdown);
-        content.add(alchCard);
+        // ── Profit card: tabbed between GE prices and high alch ──
+        gePricesBtn = tabButton("GE Prices");
+        highAlchBtn = tabButton("High Alch");
+        gePricesBtn.addActionListener(e -> setProfitMode(false));
+        highAlchBtn.addActionListener(e -> setProfitMode(true));
+        profitCard = buildProfitCard();
+        content.add(profitCard);
         content.add(Box.createRigidArea(new Dimension(0, 8)));
 
         // ── Supplies used (session + today, GE valued) ──
@@ -289,6 +309,9 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         boolean ignoreAfk = config.xpIgnoreAfk();
         long afk = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
+        // AFK auto-pause indicator, pinned to the right of the back-link row.
+        afkBadge.setVisible(sessionManager.isAutoPaused(wallNow));
+
         levelLabel.setText("Lvl. " + st.displayLevel());
         headerBar.setFraction(st.levelProgress());
 
@@ -318,8 +341,8 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
     // ── Profit / supplies (per-skill GP economics) ────────────────────────────
 
     /**
-     * Refreshes the GE-profit, alch-profit and supplies-used cards from the
-     * per-skill economy snapshot. The GP/hr denominators are the skill's own
+     * Refreshes the tabbed profit card and the supplies-used card from the
+     * per-skill economy snapshot. The GP/hr denominator is the skill's own
      * active training time — the same clock XP/hr uses — so both rates pause
      * and resume together during AFK.
      */
@@ -336,27 +359,41 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
             econ = SkillEconomyTracker.Snapshot.EMPTY;
         }
 
+        lastEcon = econ;
+        lastEconActiveMs = st.activeMillis(activeNow, ignoreAfk, afk);
+
         boolean show = econ.hasSessionData() || econ.hasTodayData();
-        geCard.setVisible(show);
-        alchCard.setVisible(show);
+        profitCard.setVisible(show);
         suppliesCard.setVisible(show && (!econ.sessionSupplies.isEmpty() || !econ.todaySupplies.isEmpty()));
         if (!show) return;
 
-        long activeMs = st.activeMillis(activeNow, ignoreAfk, afk);
-
-        setRate(geRateVal, econ.sessionProfitGe(), activeMs);
-        setProfit(geSessionVal, econ.sessionProfitGe());
-        geBreakdown.setText("Made " + XpFormat.compactUpper(econ.sessionOutputGe)
-                + "  ·  Spent " + XpFormat.compactUpper(econ.sessionInputGe)
-                + "  ·  Today " + signedCompact(econ.todayProfitGe()));
-
-        setRate(alchRateVal, econ.sessionProfitAlch(), activeMs);
-        setProfit(alchSessionVal, econ.sessionProfitAlch());
-        alchBreakdown.setText("Made " + XpFormat.compactUpper(econ.sessionOutputAlch)
-                + "  ·  Spent " + XpFormat.compactUpper(econ.sessionInputAlch)
-                + "  ·  Today " + signedCompact(econ.todayProfitAlch()));
-
+        renderProfit();
         updateSupplies(econ);
+    }
+
+    /** Switches the profit card between GE and high-alch valuation (tab buttons). */
+    private void setProfitMode(boolean alch)
+    {
+        if (showAlchPrices == alch) return;
+        showAlchPrices = alch;
+        styleTabButtons();
+        renderProfit();
+    }
+
+    /** Renders the profit card from the cached snapshot in the selected valuation. */
+    private void renderProfit()
+    {
+        SkillEconomyTracker.Snapshot econ = lastEcon;
+        long profit  = showAlchPrices ? econ.sessionProfitAlch() : econ.sessionProfitGe();
+        long made    = showAlchPrices ? econ.sessionOutputAlch   : econ.sessionOutputGe;
+        long spent   = showAlchPrices ? econ.sessionInputAlch    : econ.sessionInputGe;
+        long today   = showAlchPrices ? econ.todayProfitAlch()   : econ.todayProfitGe();
+
+        setRate(profitRateVal, profit, lastEconActiveMs);
+        setProfit(profitSessionVal, profit);
+        profitBreakdown.setText("Made " + XpFormat.compactUpper(made)
+                + "  ·  Spent " + XpFormat.compactUpper(spent)
+                + "  ·  Today " + signedCompact(today));
     }
 
     /** GP/hr cell: signed compact rate, green for profit, red for loss, "—" when unknown. */
@@ -537,29 +574,124 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
     // ── Small builders ────────────────────────────────────────────────────────
 
     /**
-     * Builds one profit card: section title, a 1×2 grid (PROFIT / HR and
-     * SESSION cells) and a muted made/spent/today breakdown line.
+     * Builds the tabbed profit card: section title, the GE-Prices / High-Alch
+     * tab buttons, a 1×2 grid (PROFIT / HR and SESSION cells) and a muted
+     * made/spent/today breakdown line. The tab buttons switch which valuation
+     * every figure on the card uses.
      */
-    private JPanel profitCard(String title, JLabel rateLabel, JLabel sessionLabel, JLabel breakdownLabel)
+    private JPanel buildProfitCard()
     {
         JPanel p = card();
-        p.add(sectionLabel(title));
+        p.add(sectionLabel("PROFIT"));
+        p.add(Box.createRigidArea(new Dimension(0, 6)));
+
+        JPanel tabs = new JPanel(new GridLayout(1, 2, 6, 0));
+        tabs.setOpaque(false);
+        tabs.setAlignmentX(Component.LEFT_ALIGNMENT);
+        tabs.add(gePricesBtn);
+        tabs.add(highAlchBtn);
+        tabs.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        p.add(tabs);
+        styleTabButtons();
         p.add(Box.createRigidArea(new Dimension(0, 6)));
 
         JPanel grid = new JPanel(new GridLayout(1, 2, 6, 6));
         grid.setOpaque(false);
         grid.setAlignmentX(Component.LEFT_ALIGNMENT);
-        grid.add(statCell("PROFIT / HR", rateLabel, PROFIT_POS));
-        grid.add(statCell("SESSION", sessionLabel, PROFIT_POS));
+        grid.add(statCell("PROFIT / HR", profitRateVal, PROFIT_POS));
+        grid.add(statCell("SESSION", profitSessionVal, PROFIT_POS));
         grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 64));
         p.add(grid);
         p.add(Box.createRigidArea(new Dimension(0, 4)));
 
-        breakdownLabel.setFont(DROP_FONT);
-        breakdownLabel.setForeground(MUTED);
-        breakdownLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.add(breakdownLabel);
+        profitBreakdown.setFont(DROP_FONT);
+        profitBreakdown.setForeground(MUTED);
+        profitBreakdown.setAlignmentX(Component.LEFT_ALIGNMENT);
+        p.add(profitBreakdown);
         return p;
+    }
+
+    /**
+     * Builds one profit tab button in the same style as the panel's Sync /
+     * Reset buttons (Calibri bold, filled background, rounded line border).
+     */
+    private JButton tabButton(String text)
+    {
+        JButton b = new JButton(text);
+        b.setFont(new Font("Calibri", Font.BOLD, 12));
+        b.setFocusPainted(false);
+        b.setOpaque(true);
+        b.setContentAreaFilled(true);
+        b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        b.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        return b;
+    }
+
+    /** Selected tab gets the Sync-button blue; the other gets the muted pause-button grey. */
+    private void styleTabButtons()
+    {
+        styleTab(gePricesBtn, !showAlchPrices);
+        styleTab(highAlchBtn, showAlchPrices);
+    }
+
+    private static void styleTab(JButton b, boolean selected)
+    {
+        b.setForeground(selected ? Color.WHITE : MUTED);
+        b.setBackground(selected ? new Color(30, 50, 80) : new Color(40, 44, 60));
+        b.setBorder(new CompoundBorder(
+                new LineBorder(selected ? new Color(80, 120, 180) : new Color(90, 96, 120), 1, true),
+                new EmptyBorder(5, 8, 5, 8)));
+    }
+
+    /**
+     * Installs the right-click reset menu on the skill header card (and its
+     * child components, so the click lands anywhere on the card): reset this
+     * skill's session XP, reset only its XP/hr timing, or both.
+     */
+    private void installResetMenu(JComponent... targets)
+    {
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem title = new JMenuItem("Reset…");
+        title.setEnabled(false);
+        menu.add(title);
+        menu.addSeparator();
+
+        JMenuItem resetRate = new JMenuItem("Reset XP/hr");
+        resetRate.addActionListener(e ->
+        {
+            if (skill != null && onResetSkillRate != null) onResetSkillRate.accept(skill);
+        });
+        JMenuItem resetSession = new JMenuItem("Reset session XP");
+        resetSession.addActionListener(e ->
+        {
+            if (skill != null && onResetSkill != null) onResetSkill.accept(skill);
+        });
+        JMenuItem resetBoth = new JMenuItem("Reset both");
+        resetBoth.addActionListener(e ->
+        {
+            if (skill == null) return;
+            if (onResetSkillRate != null) onResetSkillRate.accept(skill);
+            if (onResetSkill != null) onResetSkill.accept(skill);
+        });
+        menu.add(resetRate);
+        menu.add(resetSession);
+        menu.add(resetBoth);
+
+        MouseAdapter popup = new MouseAdapter()
+        {
+            @Override public void mousePressed(MouseEvent e) { maybeShow(e); }
+
+            @Override public void mouseReleased(MouseEvent e) { maybeShow(e); }
+
+            private void maybeShow(MouseEvent e)
+            {
+                if (e.isPopupTrigger()) menu.show(e.getComponent(), e.getX(), e.getY());
+            }
+        };
+        for (JComponent target : targets)
+        {
+            target.addMouseListener(popup);
+        }
     }
 
     private JLabel subSectionLabel(String text)
