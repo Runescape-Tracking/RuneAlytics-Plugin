@@ -1,5 +1,6 @@
 package com.runealytics;
 
+import com.google.gson.Gson;
 import lombok.Getter;
 import net.runelite.api.Experience;
 import net.runelite.api.Skill;
@@ -107,15 +108,43 @@ class RuneAlyticsXpSessionManager
     private static final String FAVORITE_KEY = "xpFavoriteSkills";
     private final java.util.Set<Skill> favoriteSkills = ConcurrentHashMap.newKeySet();
 
+    /**
+     * Per-skill training economics (GP made / supplies consumed, session +
+     * today, GE and alch valued). Fed by the plugin's skilling inventory
+     * diff; scoped to the same account as the XP session.
+     */
+    private final SkillEconomyTracker economy;
+
+    /** Wall-clock ms of the most recent XP gain in ANY skill (0 = none yet). */
+    private volatile long sessionLastGainWallMs;
+
     @Inject
     RuneAlyticsXpSessionManager(RunealyticsConfig config, CurrentPlayerIdentityService identity,
-                                ConfigManager configManager)
+                                ConfigManager configManager, Gson gson)
     {
         this.config        = config;
         this.identity      = identity;
         this.configManager = configManager;
+        this.economy       = new SkillEconomyTracker(new SkillEconomyTracker.Store()
+        {
+            @Override public String get(String key)
+            {
+                return configManager.getConfiguration(CFG_GROUP, key);
+            }
+
+            @Override public void put(String key, String value)
+            {
+                configManager.setConfiguration(CFG_GROUP, key, value);
+            }
+        }, gson);
         loadHidden();
         loadFavorites();
+    }
+
+    /** The per-skill GP/supplies tracker, scoped to the active account. */
+    SkillEconomyTracker economy()
+    {
+        return economy;
     }
 
     // ── Ingest (client thread) ────────────────────────────────────────────────
@@ -153,6 +182,7 @@ class RuneAlyticsXpSessionManager
         {
             addToday(gained, now, acct);
             onSessionGain(activeNow);
+            sessionLastGainWallMs = now;
         }
     }
 
@@ -188,7 +218,9 @@ class RuneAlyticsXpSessionManager
         manualPaused         = false;
         pausedAccumMs        = 0L;
         pauseStartWall       = 0L;
+        sessionLastGainWallMs = 0L;
         loadToday(acct);
+        economy.setAccount(acct);
         log.debug("[XP-Session] started for account '{}'", acct);
     }
 
@@ -202,6 +234,8 @@ class RuneAlyticsXpSessionManager
     {
         loggedIn = in;
         applyClockState();
+        // Persist pending day economics on logout so "today" survives restarts.
+        if (!in) economy.flush();
     }
 
     /**
@@ -245,6 +279,53 @@ class RuneAlyticsXpSessionManager
         if (sessionStartMs == 0L) return 0L;
         long paused = pausedAccumMs + (pauseStartWall > 0L ? Math.max(0L, wallNow - pauseStartWall) : 0L);
         return Math.max(0L, (wallNow - sessionStartMs) - paused);
+    }
+
+    // ── AFK auto-pause ────────────────────────────────────────────────────────
+
+    /**
+     * True while the session trackers are automatically paused because no XP
+     * has been gained in any skill for the configured AFK timeout (default
+     * 5 minutes). Resumes by itself on the next XP gain — the rate math and
+     * {@link #activeTrainingMs} both stop accumulating idle time beyond the
+     * timeout, so XP/hr and the displayed session time freeze while this is
+     * true. Only reported when AFK smoothing is enabled and no stronger pause
+     * (logout / manual pause) is already in effect.
+     *
+     * @param wallNow real wall-clock ms
+     */
+    boolean isAutoPaused(long wallNow)
+    {
+        return config.xpIgnoreAfk()
+                && sessionStarted
+                && loggedIn
+                && !manualPaused
+                && sessionLastGainWallMs > 0L
+                && wallNow - sessionLastGainWallMs >= afkTimeoutMs();
+    }
+
+    /**
+     * Active <em>training</em> time: the session clock minus logged-out spans
+     * and — when AFK smoothing is on — minus idle time beyond the AFK timeout.
+     * This is the session-level counterpart of
+     * {@link RuneAlyticsXpSkillState#activeMillis} and the exact denominator
+     * used by {@link #overallXpPerHour}, so the displayed session time and the
+     * XP/hr figure pause and resume together.
+     */
+    long activeTrainingMs(long wallNow)
+    {
+        if (!sessionStarted) return 0L;
+
+        long activeNow = activeElapsed(wallNow);
+        long elapsed = activeNow - sessionFirstActiveMs;
+        if (config.xpIgnoreAfk())
+        {
+            long paused = sessionAfkPausedMs;
+            long idle = activeNow - sessionLastActiveMs;
+            if (idle > afkTimeoutMs()) paused += (idle - afkTimeoutMs());
+            elapsed -= paused;
+        }
+        return Math.max(0L, elapsed);
     }
 
     // ── "Today" total ─────────────────────────────────────────────────────────
@@ -372,13 +453,19 @@ class RuneAlyticsXpSessionManager
         manualPaused         = false;
         pausedAccumMs        = 0L;
         pauseStartWall       = loggedIn ? 0L : sessionStartMs;
+        sessionLastGainWallMs = 0L;
+        economy.resetSession();
         log.debug("[XP-Session] reset (account='{}')", sessionAccountKey);
     }
 
     /** Removes a single skill's session state; it re-baselines on its next gain. */
     void resetSkill(Skill skill)
     {
-        if (skill != null) states.remove(skill);
+        if (skill != null)
+        {
+            states.remove(skill);
+            economy.resetSkill(skill.getName());
+        }
     }
 
     /** Resets only a single skill's XP/hr timing, keeping its gained XP. */

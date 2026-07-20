@@ -96,6 +96,25 @@ public class RuneAlyticsPlugin extends Plugin
             Skill.COOKING,     Skill.SMITHING, Skill.CRAFTING
     );
 
+    /**
+     * Skills tracked for GP economics only, never for loot: they consume
+     * materials without producing an inventory item (burning logs, offering
+     * bones), so the cost side matters but a loot entry would be noise.
+     */
+    private static final Set<Skill> ECONOMY_ONLY_SKILLS = java.util.EnumSet.of(
+            Skill.FIREMAKING, Skill.PRAYER
+    );
+
+    /** Skill display names eligible for the skilling LOOT diff (not economy-only). */
+    private static final Set<String> SKILLING_LOOT_NAMES = buildSkillingLootNames();
+
+    private static Set<String> buildSkillingLootNames()
+    {
+        Set<String> names = new java.util.HashSet<>();
+        for (Skill s : SKILLING_TRACKED) names.add(s.getName());
+        return java.util.Collections.unmodifiableSet(names);
+    }
+
     /** Menu options that grant XP without producing a skilling drop. */
     private static final Set<String> LAMP_XP_MENU_OPTIONS = java.util.Set.of(
             "rub", "read", "open", "use", "claim", "activate", "tear"
@@ -843,8 +862,11 @@ public class RuneAlyticsPlugin extends Plugin
             // ── Equip/unequip detection (must run first) ──────────────────────
             // Find items that just left equipment; their ids are subtracted from
             // every inventory gain below so an unequip isn't mistaken for a drop.
+            // Items that just ENTERED equipment are likewise subtracted from the
+            // consumption side so equipping gear isn't costed as a used supply.
             List<ItemStack> currentEquipment = getCurrentEquipment();
             List<ItemStack> justUnequipped   = diffInventory(currentEquipment, equipmentSnapshot);
+            List<ItemStack> justEquipped     = diffInventory(equipmentSnapshot, currentEquipment);
             equipmentSnapshot = currentEquipment;
 
             // ── Impling jar loot (no XP, so the skilling diff misses it) ──────
@@ -894,7 +916,12 @@ public class RuneAlyticsPlugin extends Plugin
                 }
             }
 
-            // ── Skilling loot (runs regardless of pickpocket state) ───────────
+            // ── Skilling loot + economy (runs regardless of pickpocket state) ──
+            // The gained side feeds the loot tracker (production skills only);
+            // gained + consumed together feed the per-skill GP economics so
+            // material inputs are costed — fletching logs into bows nets the
+            // bow value against the logs, and pure sinks (vale offerings,
+            // burning logs, offering bones) show as a complete loss.
             if (!skillingSnapshot.isEmpty() && config.enableLootTracking())
             {
                 List<ItemStack> inv = getCurrentInventory();
@@ -910,12 +937,16 @@ public class RuneAlyticsPlugin extends Plugin
                     }
                     List<ItemStack> snap = skillingSnapshot.get(skill);
                     if (snap == null) continue;
-                    List<ItemStack> items = excludeEquipmentMovement(diffInventory(snap, inv), justUnequipped);
-                    if (!items.isEmpty())
+                    List<ItemStack> gained   = excludeEquipmentMovement(diffInventory(snap, inv), justUnequipped);
+                    List<ItemStack> consumed = excludeEquipmentMovement(diffInventory(inv, snap), justEquipped);
+                    if (gained.isEmpty() && consumed.isEmpty()) continue;
+
+                    if (!gained.isEmpty() && SKILLING_LOOT_NAMES.contains(skill))
                     {
-                        lootManager.processSkillLoot(skill, new ArrayList<>(items));
-                        skillingSnapshot.put(skill, inv);
+                        lootManager.processSkillLoot(skill, new ArrayList<>(gained));
                     }
+                    recordSkillEconomy(skill, gained, consumed);
+                    skillingSnapshot.put(skill, inv);
                 }
             }
 
@@ -1752,7 +1783,10 @@ public class RuneAlyticsPlugin extends Plugin
 
         // ── Skilling loot snapshot ────────────────────────────────────────────
         // Skipped while the lamp/book suppression window is active.
-        if (SKILLING_TRACKED.contains(skill) && gameTickCount >= lampXpSuppressUntilTick)
+        // Economy-only skills (Firemaking, Prayer) also open a window so their
+        // material consumption is costed, but they never produce loot entries.
+        if ((SKILLING_TRACKED.contains(skill) || ECONOMY_ONLY_SKILLS.contains(skill))
+                && gameTickCount >= lampXpSuppressUntilTick)
         {
             String key = skill.getName();
             clientThread.invokeLater(() -> {
@@ -2191,6 +2225,68 @@ public class RuneAlyticsPlugin extends Plugin
             if (item != null && item.getId() > 0 && item.getQuantity() > 0)
                 items.add(new ItemStack(item.getId(), item.getQuantity()));
         return items;
+    }
+
+    /**
+     * Records one skilling inventory delta into the per-skill GP economics
+     * tracker. Exception-isolated: economics must never break loot or XP
+     * handling. MUST run on the client thread (item value resolution).
+     */
+    private void recordSkillEconomy(String skillName, List<ItemStack> gained, List<ItemStack> consumed)
+    {
+        try
+        {
+            xpSessionManager.economy().record(
+                    skillName,
+                    toValuedStacks(gained),
+                    toValuedStacks(consumed),
+                    System.currentTimeMillis());
+        }
+        catch (Exception e)
+        {
+            log.debug("[XP-Econ] record failed for {}: {}", skillName, e.getMessage());
+        }
+    }
+
+    /**
+     * Resolves item names plus per-item GE and high-alch values for an
+     * inventory delta. MUST run on the client thread (ItemManager reads).
+     */
+    private List<SkillEconomyTracker.ValuedStack> toValuedStacks(List<ItemStack> items)
+    {
+        if (items == null || items.isEmpty()) return Collections.emptyList();
+
+        List<SkillEconomyTracker.ValuedStack> out = new ArrayList<>(items.size());
+        for (ItemStack item : items)
+        {
+            String name = "Item " + item.getId();
+            long alch = 0L;
+            try
+            {
+                ItemComposition comp = itemManager.getItemComposition(item.getId());
+                if (comp != null)
+                {
+                    name = comp.getName();
+                    alch = comp.getHaPrice();
+                }
+            }
+            catch (Exception ignored)
+            {
+                /* keep fallback name / zero alch */
+            }
+
+            long ge = ItemValueResolver.perItemGeValue(itemManager, item.getId());
+            if (item.getId() == ITEM_ID_COINS)
+            {
+                // Coins are worth exactly face value under both schemes.
+                ge = 1L;
+                alch = 1L;
+            }
+
+            out.add(new SkillEconomyTracker.ValuedStack(
+                    item.getId(), name, item.getQuantity(), ge, alch));
+        }
+        return out;
     }
 
     /**

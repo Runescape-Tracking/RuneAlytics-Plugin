@@ -53,8 +53,16 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
     private static final Font SECTION_FONT = new Font("Calibri", Font.BOLD, 13);
     private static final Font DROP_FONT    = new Font("Calibri", Font.PLAIN, 11);
 
+    /** Positive-profit accent (matches XP green). */
+    private static final Color PROFIT_POS = XP_GREEN;
+    /** Negative-profit accent. */
+    private static final Color PROFIT_NEG = new Color(235, 110, 110);
+    /** Max supply rows rendered per scope (session / today). */
+    private static final int MAX_SUPPLY_ROWS = 8;
+
     private final SkillIconManager iconManager;
     private final RunealyticsConfig config;
+    private final RuneAlyticsXpSessionManager sessionManager;
     private final Consumer<Skill> onResetSkill;
 
     private Skill skill;
@@ -74,6 +82,20 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
 
     private final XpSparkline sparkline = new XpSparkline();
 
+    // ── Profit / supplies (per-skill GP economics) ──
+    private final JLabel geRateVal      = new JLabel();
+    private final JLabel geSessionVal   = new JLabel();
+    private final JLabel geBreakdown    = new JLabel();
+    private final JLabel alchRateVal    = new JLabel();
+    private final JLabel alchSessionVal = new JLabel();
+    private final JLabel alchBreakdown  = new JLabel();
+    private final JPanel suppliesSessionList = new JPanel();
+    private final JPanel suppliesTodayList   = new JPanel();
+    private final JPanel geCard;
+    private final JPanel alchCard;
+    private final JPanel suppliesCard;
+    private long lastSuppliesSignature = Long.MIN_VALUE;
+
     private final JPanel dropsList = new JPanel();
     private final JPanel dropsCard;
     private final JButton resetBtn;
@@ -81,11 +103,13 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
     private int lastDropSignature = -1;
 
     RuneAlyticsXpSkillDetailPanel(SkillIconManager iconManager, RunealyticsConfig config,
+                                  RuneAlyticsXpSessionManager sessionManager,
                                   Runnable onBack, Consumer<Skill> onResetSkill)
     {
-        this.iconManager  = iconManager;
-        this.config       = config;
-        this.onResetSkill = onResetSkill;
+        this.iconManager    = iconManager;
+        this.config         = config;
+        this.sessionManager = sessionManager;
+        this.onResetSkill   = onResetSkill;
 
         setLayout(new BorderLayout());
         setBackground(DARK_GRAY_COLOR);
@@ -156,6 +180,33 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         content.add(grid);
         content.add(Box.createRigidArea(new Dimension(0, 8)));
 
+        // ── Profit cards: GE prices + high alch (session GP economics) ──
+        geCard = profitCard("PROFIT (GE PRICES)", geRateVal, geSessionVal, geBreakdown);
+        content.add(geCard);
+        content.add(Box.createRigidArea(new Dimension(0, 8)));
+
+        alchCard = profitCard("PROFIT (HIGH ALCH)", alchRateVal, alchSessionVal, alchBreakdown);
+        content.add(alchCard);
+        content.add(Box.createRigidArea(new Dimension(0, 8)));
+
+        // ── Supplies used (session + today, GE valued) ──
+        suppliesCard = card();
+        suppliesCard.add(sectionLabel("SUPPLIES USED"));
+        suppliesCard.add(Box.createRigidArea(new Dimension(0, 6)));
+        suppliesCard.add(subSectionLabel("THIS SESSION"));
+        suppliesSessionList.setLayout(new BoxLayout(suppliesSessionList, BoxLayout.Y_AXIS));
+        suppliesSessionList.setOpaque(false);
+        suppliesSessionList.setAlignmentX(Component.LEFT_ALIGNMENT);
+        suppliesCard.add(suppliesSessionList);
+        suppliesCard.add(Box.createRigidArea(new Dimension(0, 6)));
+        suppliesCard.add(subSectionLabel("TODAY"));
+        suppliesTodayList.setLayout(new BoxLayout(suppliesTodayList, BoxLayout.Y_AXIS));
+        suppliesTodayList.setOpaque(false);
+        suppliesTodayList.setAlignmentX(Component.LEFT_ALIGNMENT);
+        suppliesCard.add(suppliesTodayList);
+        content.add(suppliesCard);
+        content.add(Box.createRigidArea(new Dimension(0, 8)));
+
         // ── Sparkline card (XP/hr over the last hour) ──
         JPanel chartCard = card();
         chartCard.add(sectionLabel("XP / HOUR"));
@@ -202,6 +253,7 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
     {
         this.skill = skill;
         lastDropSignature = -1;
+        lastSuppliesSignature = Long.MIN_VALUE;
         Color accent = SkillColors.of(skill);
         nameLabel.setText(RuneAlyticsXpSkillRow.prettyName(skill));
         nameLabel.setForeground(accent);
@@ -259,7 +311,153 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
 
         sparkline.setSamples(st.rateHistorySnapshot());
 
+        updateEconomy(st, activeNow, ignoreAfk, afk);
         updateDrops(st, wallNow);
+    }
+
+    // ── Profit / supplies (per-skill GP economics) ────────────────────────────
+
+    /**
+     * Refreshes the GE-profit, alch-profit and supplies-used cards from the
+     * per-skill economy snapshot. The GP/hr denominators are the skill's own
+     * active training time — the same clock XP/hr uses — so both rates pause
+     * and resume together during AFK.
+     */
+    private void updateEconomy(RuneAlyticsXpSkillState st, long activeNow,
+                               boolean ignoreAfk, long afk)
+    {
+        SkillEconomyTracker.Snapshot econ;
+        try
+        {
+            econ = sessionManager.economy().snapshot(skill != null ? skill.getName() : null);
+        }
+        catch (Exception e)
+        {
+            econ = SkillEconomyTracker.Snapshot.EMPTY;
+        }
+
+        boolean show = econ.hasSessionData() || econ.hasTodayData();
+        geCard.setVisible(show);
+        alchCard.setVisible(show);
+        suppliesCard.setVisible(show && (!econ.sessionSupplies.isEmpty() || !econ.todaySupplies.isEmpty()));
+        if (!show) return;
+
+        long activeMs = st.activeMillis(activeNow, ignoreAfk, afk);
+
+        setRate(geRateVal, econ.sessionProfitGe(), activeMs);
+        setProfit(geSessionVal, econ.sessionProfitGe());
+        geBreakdown.setText("Made " + XpFormat.compactUpper(econ.sessionOutputGe)
+                + "  ·  Spent " + XpFormat.compactUpper(econ.sessionInputGe)
+                + "  ·  Today " + signedCompact(econ.todayProfitGe()));
+
+        setRate(alchRateVal, econ.sessionProfitAlch(), activeMs);
+        setProfit(alchSessionVal, econ.sessionProfitAlch());
+        alchBreakdown.setText("Made " + XpFormat.compactUpper(econ.sessionOutputAlch)
+                + "  ·  Spent " + XpFormat.compactUpper(econ.sessionInputAlch)
+                + "  ·  Today " + signedCompact(econ.todayProfitAlch()));
+
+        updateSupplies(econ);
+    }
+
+    /** GP/hr cell: signed compact rate, green for profit, red for loss, "—" when unknown. */
+    private static void setRate(JLabel label, long profitGp, long activeMs)
+    {
+        if (activeMs < 3_000L)
+        {
+            label.setText("—");
+            label.setForeground(MUTED);
+            return;
+        }
+        long rate = profitGp * 3_600_000L / activeMs;
+        label.setText(signedCompact(rate) + "/hr");
+        label.setForeground(rate < 0 ? PROFIT_NEG : PROFIT_POS);
+    }
+
+    /** Session-profit cell: signed compact total with profit/loss colouring. */
+    private static void setProfit(JLabel label, long profitGp)
+    {
+        label.setText(signedCompact(profitGp) + " gp");
+        label.setForeground(profitGp < 0 ? PROFIT_NEG : PROFIT_POS);
+    }
+
+    private static String signedCompact(long gp)
+    {
+        return gp < 0 ? "-" + XpFormat.compactUpper(-gp) : "+" + XpFormat.compactUpper(gp);
+    }
+
+    private void updateSupplies(SkillEconomyTracker.Snapshot econ)
+    {
+        // Cheap change signature so the lists aren't rebuilt on every refresh tick.
+        long signature = 17L;
+        for (SkillEconomyTracker.ItemFlow f : econ.sessionSupplies)
+        {
+            signature = signature * 31L + f.getItemId() * 1_000_003L + f.getQuantity();
+        }
+        for (SkillEconomyTracker.ItemFlow f : econ.todaySupplies)
+        {
+            signature = signature * 31L + f.getItemId() * 7_000_003L + f.getQuantity();
+        }
+        if (signature == lastSuppliesSignature) return;
+        lastSuppliesSignature = signature;
+
+        fillSupplyList(suppliesSessionList, econ.sessionSupplies);
+        fillSupplyList(suppliesTodayList, econ.todaySupplies);
+    }
+
+    private void fillSupplyList(JPanel list, java.util.List<SkillEconomyTracker.ItemFlow> flows)
+    {
+        list.removeAll();
+        if (flows.isEmpty())
+        {
+            JLabel none = new JLabel("No supplies used yet");
+            none.setFont(DROP_FONT);
+            none.setForeground(MUTED);
+            none.setAlignmentX(Component.LEFT_ALIGNMENT);
+            list.add(none);
+        }
+        else
+        {
+            long totalGe = 0L;
+            int shown = Math.min(flows.size(), MAX_SUPPLY_ROWS);
+            for (int i = 0; i < shown; i++)
+            {
+                SkillEconomyTracker.ItemFlow f = flows.get(i);
+                list.add(supplyRow(
+                        f.getItemName() + "  ×" + XpFormat.comma(f.getQuantity()),
+                        XpFormat.compactUpper(f.getGeGp()) + " gp",
+                        TEXT));
+            }
+            for (SkillEconomyTracker.ItemFlow f : flows) totalGe += f.getGeGp();
+            if (flows.size() > shown)
+            {
+                list.add(supplyRow("… " + (flows.size() - shown) + " more", "", MUTED));
+            }
+            list.add(supplyRow("Total", XpFormat.compactUpper(totalGe) + " gp", GOLD));
+        }
+        list.revalidate();
+        list.repaint();
+    }
+
+    private JPanel supplyRow(String left, String right, Color leftColor)
+    {
+        JPanel row = new JPanel(new BorderLayout());
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setBorder(new EmptyBorder(2, 0, 2, 0));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 18));
+
+        JLabel l = new JLabel(left);
+        l.setFont(DROP_FONT);
+        l.setForeground(leftColor);
+
+        JLabel r = new JLabel(right);
+        r.setFont(DROP_FONT);
+        r.setForeground(MUTED);
+        r.setHorizontalAlignment(SwingConstants.RIGHT);
+
+        row.add(l, BorderLayout.WEST);
+        row.add(r, BorderLayout.EAST);
+        return row;
     }
 
     private void updateDrops(RuneAlyticsXpSkillState st, long nowMs)
@@ -337,6 +535,41 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
     }
 
     // ── Small builders ────────────────────────────────────────────────────────
+
+    /**
+     * Builds one profit card: section title, a 1×2 grid (PROFIT / HR and
+     * SESSION cells) and a muted made/spent/today breakdown line.
+     */
+    private JPanel profitCard(String title, JLabel rateLabel, JLabel sessionLabel, JLabel breakdownLabel)
+    {
+        JPanel p = card();
+        p.add(sectionLabel(title));
+        p.add(Box.createRigidArea(new Dimension(0, 6)));
+
+        JPanel grid = new JPanel(new GridLayout(1, 2, 6, 6));
+        grid.setOpaque(false);
+        grid.setAlignmentX(Component.LEFT_ALIGNMENT);
+        grid.add(statCell("PROFIT / HR", rateLabel, PROFIT_POS));
+        grid.add(statCell("SESSION", sessionLabel, PROFIT_POS));
+        grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 64));
+        p.add(grid);
+        p.add(Box.createRigidArea(new Dimension(0, 4)));
+
+        breakdownLabel.setFont(DROP_FONT);
+        breakdownLabel.setForeground(MUTED);
+        breakdownLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        p.add(breakdownLabel);
+        return p;
+    }
+
+    private JLabel subSectionLabel(String text)
+    {
+        JLabel l = new JLabel(text);
+        l.setFont(LBL_FONT);
+        l.setForeground(MUTED);
+        l.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return l;
+    }
 
     private JPanel card()
     {
