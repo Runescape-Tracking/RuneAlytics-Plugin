@@ -325,6 +325,75 @@ public class LootStorageManager
     }
 
     /**
+     * Records the last authoritative in-game kill count for a boss.
+     * Raise-only: a lower value never overwrites a higher one (stale or
+     * out-of-order KC messages must not regress the stored floor).
+     */
+    public synchronized void recordLastGameKc(String npcName, int gameKC)
+    {
+        if (npcName == null || gameKC <= 0) return;
+        if (currentData == null) currentData = loadData();
+        if (currentData == null) return;
+
+        if (currentData.getLastGameKcByBoss() == null)
+        {
+            // Files written by pre-2.0.6 versions deserialize without the map.
+            currentData.setLastGameKcByBoss(new HashMap<>());
+        }
+
+        Integer existing = currentData.getLastGameKcByBoss().get(npcName);
+        if (existing != null && existing >= gameKC) return;
+
+        currentData.getLastGameKcByBoss().put(npcName, gameKC);
+        scheduleSave();
+    }
+
+    /**
+     * Relabels the most recent kill record for {@code npcName} with the
+     * authoritative game kill count that arrived in chat just after the kill
+     * was recorded. Rename-only — never adds or removes a kill.
+     *
+     * @return {@code true} if the record was relabeled; {@code false} when
+     *         there is no eligible record (none exists, the last kill already
+     *         carries an equal/higher number, or it already synced to the
+     *         server — relabeling a synced kill would re-upload it as a
+     *         duplicate)
+     */
+    public synchronized boolean relabelLastKill(String npcName, int killNumber)
+    {
+        if (currentData == null || npcName == null || killNumber <= 0) return false;
+
+        LootStorageData.BossKillData bossData = currentData.getBossKills().get(npcName);
+        if (bossData == null || bossData.getKills().isEmpty()) return false;
+
+        LootStorageData.KillRecord lastKill =
+                bossData.getKills().get(bossData.getKills().size() - 1);
+
+        if (lastKill.getKillNumber() >= killNumber) return false;
+        if (lastKill.isSyncedToServer()) return false;
+
+        lastKill.setKillNumber(killNumber);
+        if (killNumber > bossData.getKillCount())
+        {
+            bossData.setKillCount(killNumber);
+        }
+
+        if (currentData.getLastGameKcByBoss() == null)
+        {
+            currentData.setLastGameKcByBoss(new HashMap<>());
+        }
+        Integer existing = currentData.getLastGameKcByBoss().get(npcName);
+        if (existing == null || existing < killNumber)
+        {
+            currentData.getLastGameKcByBoss().put(npcName, killNumber);
+        }
+
+        scheduleSave();
+        log.debug("Relabeled last '{}' kill to game KC {}", npcName, killNumber);
+        return true;
+    }
+
+    /**
      * Mark kills as synced to server
      */
     public synchronized void markKillsSynced(String npcName, long fromTimestamp, long toTimestamp)

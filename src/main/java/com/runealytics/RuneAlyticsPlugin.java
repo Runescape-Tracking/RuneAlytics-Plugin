@@ -116,6 +116,14 @@ public class RuneAlyticsPlugin extends Plugin
      */
     private List<ItemStack> equipmentSnapshot = Collections.emptyList();
 
+    /**
+     * Suppresses inventory-diff loot attribution (skilling, pickpocket,
+     * impling, crate diffs) while a bank / GE / shop / trade / vault interface
+     * is open, so withdrawals and trades are never recorded as loot. Plain
+     * field (not injected): only this class feeds and reads it.
+     */
+    private final InventoryDiffGuard inventoryDiffGuard = new InventoryDiffGuard();
+
     // ═════════════════════════════════════════════════════════════════════════
     //  INJECTED FIELDS
     // ═════════════════════════════════════════════════════════════════════════
@@ -514,6 +522,9 @@ public class RuneAlyticsPlugin extends Plugin
         damagedNpcs.clear();
         pendingDeaths.clear();
         recentZeroLootFlushes.clear();
+
+        // Clear interface-open suppression state
+        inventoryDiffGuard.reset();
     }
 
     @Provides
@@ -688,6 +699,9 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Death recovery guard: detect gravestone / Death's Office UI ───────
         deathRecoveryGuard.onWidgetLoaded(event);
 
+        // ── Inventory-diff guard: bank/GE/shop/trade interfaces opening ───────
+        inventoryDiffGuard.onWidgetLoaded(event.getGroupId());
+
         if (!config.enableLootTracking()) return;
 
         int gid = event.getGroupId();
@@ -739,6 +753,17 @@ public class RuneAlyticsPlugin extends Plugin
             lastChestSource = src.displayName;
             lootManager.readReward(src, gid);
         }
+    }
+
+    /**
+     * Feeds interface closes to the {@link InventoryDiffGuard} so its
+     * suppression window ends (after a short cooldown) once the player leaves
+     * the bank / GE / shop / trade screen.
+     */
+    @Subscribe
+    public void onWidgetClosed(WidgetClosed event)
+    {
+        inventoryDiffGuard.onWidgetClosed(event.getGroupId());
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -801,6 +826,17 @@ public class RuneAlyticsPlugin extends Plugin
             if (deathRecoveryGuard.shouldSuppressLootEvent())
             {
                 log.debug("[death-guard] Inventory diff suppressed during recovery mode");
+                return;
+            }
+
+            // ── Bank / GE / shop / trade guard ────────────────────────────────
+            // While one of these interfaces is open (or just closed), every
+            // inventory gain is a transfer, not loot — skip all diff-based
+            // attribution. Confirmed loot paths (NpcLootReceived, reward
+            // container/widget reads) are unaffected.
+            if (inventoryDiffGuard.shouldSuppressInventoryDiff())
+            {
+                log.debug("[diff-guard] Inventory diff suppressed (bank/GE/shop/trade interface active)");
                 return;
             }
 
@@ -1215,7 +1251,11 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         // ── Generic KC parser ────────────────────────────────────────────────
-        if (lower.contains("kill count is"))
+        // Widened from "kill count is": the game reports authoritative KCs in
+        // several forms ("chest count is", "completion count is", "Your
+        // completed X count is", "Your subdued X count is"). All of them are
+        // routed to the KillCountResolver via the manager.
+        if (lower.contains("count is"))
             lootManager.parseKillCountMessage(msg);
 
         // ── Chest detection fallback ─────────────────────────────────────────

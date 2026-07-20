@@ -31,6 +31,15 @@ public class LootStorageData
     @SerializedName("hidden_bosses")
     private Set<String> hiddenBosses = new HashSet<>();
 
+    /**
+     * Last authoritative in-game kill count observed per boss (from KC chat
+     * messages), keyed by normalised boss name. Raise-only. Survives restarts
+     * so the real game KC can be audited against the local counter; absent in
+     * files written by older plugin versions (Gson leaves the default).
+     */
+    @SerializedName("last_game_kc_by_boss")
+    private Map<String, Integer> lastGameKcByBoss = new HashMap<>();
+
     @Data
     public static class BossKillData
     {

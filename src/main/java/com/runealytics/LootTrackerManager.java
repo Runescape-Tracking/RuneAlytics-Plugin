@@ -17,8 +17,6 @@ import java.util.*;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Central coordinator for all loot tracking.
@@ -50,10 +48,6 @@ import java.util.regex.Pattern;
 @Singleton
 public class LootTrackerManager
 {
-    // ── KC chat message pattern ───────────────────────────────────────────────
-    private static final Pattern KC_PATTERN =
-            Pattern.compile("Your (.+?) kill count is: (\\d+)", Pattern.CASE_INSENSITIVE);
-
     // ── Deduplication window (player / chest loot only) ───────────────────────
     private static final long PLAYER_LOOT_DEDUP_MS = 2_000;
 
@@ -80,7 +74,7 @@ public class LootTrackerManager
      *
      * <p>Example stored key: {@code "Pickpocket: Master Farmer"}</p>
      */
-    public static final String PICKPOCKET_PREFIX = "Pickpocket: ";
+    public static final String PICKPOCKET_PREFIX = BossNames.PICKPOCKET_PREFIX;
 
     /**
      * Canonical display names for common thieving targets.
@@ -327,6 +321,30 @@ public class LootTrackerManager
      * NOT used for NpcLootReceived or pickpocket paths.
      */
     private final Map<String, Long> lastPlayerLootTime = new ConcurrentHashMap<>();
+
+    /**
+     * Authoritative game-KC correlation (chat "kill count / chest count /
+     * completion count" messages → kill records). Session-scoped; cleared in
+     * {@link #resetForLogout()} so KC never leaks across accounts.
+     */
+    private final KillCountResolver killCountResolver =
+            new KillCountResolver(BossNames::normalize);
+
+    /**
+     * Second dedup layer for chest/widget rewards: canonical batch
+     * fingerprints over a 90s window, catching reopened reward interfaces
+     * that slip past the 2-second name lock. Inventory-diff sources bypass it
+     * (identical consecutive batches are legitimate there).
+     */
+    private final RewardBatchDeduplicator rewardBatchDeduplicator = new RewardBatchDeduplicator();
+
+    /**
+     * How long after a kill record a late-arriving chat KC may still relabel
+     * it. Kept below the live-sync debounce ({@link #LIVE_SYNC_DEBOUNCE_MS})
+     * so a relabel can never race an already-uploaded kill into a duplicate
+     * server insert.
+     */
+    private static final long LATE_KC_APPLY_WINDOW_MS = 2_000L;
 
     // ─────────────────────────────────────────────────────────────────────────
     //  LIVE-SYNC DEBOUNCE
@@ -610,6 +628,20 @@ public class LootTrackerManager
      */
     public void processPlayerLoot(String source, List<ItemStack> items)
     {
+        processPlayerLootInternal(source, items, true);
+    }
+
+    /**
+     * @param batchDedupe when {@code true}, the reward batch is additionally
+     *                    checked against {@link RewardBatchDeduplicator} —
+     *                    used for chest/widget sources where the same reward
+     *                    can be re-read (interface reopened, container event
+     *                    repeated). Inventory-diff callers pass {@code false}
+     *                    because identical consecutive batches are legitimate
+     *                    for them.
+     */
+    private void processPlayerLootInternal(String source, List<ItemStack> items, boolean batchDedupe)
+    {
         if (items == null || items.isEmpty())
         {
             log.debug("processPlayerLoot: empty items – source='{}'", source);
@@ -624,6 +656,13 @@ public class LootTrackerManager
         {
             log.debug("processPlayerLoot: dedup suppressed '{}' ({}ms ago)",
                     name, now - last);
+            return;
+        }
+
+        if (batchDedupe && rewardBatchDeduplicator.isDuplicate(name, items, now))
+        {
+            log.debug("processPlayerLoot: identical reward batch for '{}' already "
+                    + "recorded recently (interface re-read) — suppressed", name);
             return;
         }
 
@@ -1114,7 +1153,9 @@ public class LootTrackerManager
     {
         if (newItems == null || newItems.isEmpty()) return;
         log.debug("Inventory diff '{}': {} new items", sourceName, newItems.size());
-        processPlayerLoot(sourceName, newItems);
+        // batchDedupe=false: two consecutive crate openings can legitimately
+        // yield identical batches, so only the 2s name window applies here.
+        processPlayerLootInternal(sourceName, newItems, false);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1214,6 +1255,13 @@ public class LootTrackerManager
             return;
         }
 
+        if (rewardBatchDeduplicator.isDuplicate(name, items, now))
+        {
+            log.debug("processPlayerLootWithGameKC: identical reward batch for '{}' already "
+                    + "recorded recently — suppressed", name);
+            return;
+        }
+
         lastPlayerLootTime.put(name, now);
 
         int npcId = BOSS_NAME_TO_ID.getOrDefault(name, 0);
@@ -1243,6 +1291,29 @@ public class LootTrackerManager
             String npcName, int npcId, int combatLevel, int world,
             List<LootStorageData.DropRecord> drops, int gameKC)
     {
+        // 0. Correlate with the authoritative game KC parsed from chat. The
+        //    KC message and the loot event fire within ticks of each other in
+        //    either order; when the message came first, claim it here so this
+        //    kill is numbered by the game's own counter instead of the local
+        //    one. An observation is consumed exactly once, so a second kill
+        //    can never reuse it. When the caller already supplies a gameKC
+        //    (e.g. the Whisperer flow), the pending observation is discarded
+        //    so it cannot leak onto a later kill.
+        long nowMs = System.currentTimeMillis();
+        if (gameKC <= 0)
+        {
+            Integer chatKC = killCountResolver.consume(npcName, nowMs);
+            if (chatKC != null)
+            {
+                gameKC = chatKC;
+                log.debug("Game KC {} from chat applied to '{}' kill", gameKC, npcName);
+            }
+        }
+        else
+        {
+            killCountResolver.consume(npcName, nowMs);
+        }
+
         // 1. Get or create the UI statistics container
         BossKillStats stats = bossKillStats.computeIfAbsent(
                 npcName, k -> new BossKillStats(npcName, npcId));
@@ -1285,6 +1356,14 @@ public class LootTrackerManager
         storageManager.addKill(
                 npcName, npcId, combatLevel, killNumber,
                 world, state.getPrestige(), drops, location);
+
+        // Persist the authoritative game KC (raise-only) so the last known
+        // real KC per boss survives restarts and can be audited against the
+        // local counter.
+        if (gameKC > 0)
+        {
+            storageManager.recordLastGameKc(npcName, gameKC);
+        }
 
         notifyListeners(stats, killRecord);
 
@@ -1609,6 +1688,13 @@ public class LootTrackerManager
         hiddenDrops.clear();
         hiddenBosses.clear();
         loadedAccount = null;
+
+        // Account isolation: pending KC observations and reward fingerprints
+        // belong to the account that just left and must never apply to the
+        // next login.
+        killCountResolver.clear();
+        rewardBatchDeduplicator.clear();
+        lastPlayerLootTime.clear();
 
         if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
         log.debug("Loot tracker reset for logout");
@@ -2684,7 +2770,14 @@ public class LootTrackerManager
                 || l.contains("thermonuclear")
                 || l.contains("grotesque")   || l.contains("kalphite")
                 || l.contains("dagannoth")   || l.contains("corporeal")
-                || l.contains("tormented demon");
+                || l.contains("tormented demon")
+                // Bosses previously only covered by the trackAllNpcs fallback —
+                // name-matched so they stay tracked as bosses even when
+                // trackAllNpcs is off (their NPC ids are not whitelisted).
+                || l.contains("muspah")      || l.contains("sarachnis")
+                || l.contains("obor")        || l.contains("bryophyta")
+                || l.contains("giant mole")  || l.contains("king black dragon")
+                || l.contains("chaos elemental");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -2692,134 +2785,105 @@ public class LootTrackerManager
     // ═════════════════════════════════════════════════════════════════════════
 
     /**
-     * Maps variant NPC / source names to a single canonical display name.
-     *
-     * <p>Pickpocket-prefixed names pass through unchanged so that stored
-     * thieving entries survive across normalisation calls.</p>
-     *
-     * @param raw raw name from NPC, widget, or chat
-     * @return canonical name, never null
-     */
-    private static final Pattern COLOR_TAG_PATTERN = Pattern.compile("</?col[^>]*>", Pattern.CASE_INSENSITIVE);
-
-    /**
-     * Strips RuneScape chat-message colour markup (e.g. {@code <col=00ffff>...</col>})
-     * that occasionally leaks into an NPC's display name for certain reflected /
-     * phase-variant monsters.
+     * Strips RuneScape chat-message colour markup. Delegates to
+     * {@link BossNames#stripColorTags(String)}; kept as a public alias for
+     * existing callers.
      */
     public static String stripColorTags(String raw)
     {
-        return raw == null ? null : COLOR_TAG_PATTERN.matcher(raw).replaceAll("");
+        return BossNames.stripColorTags(raw);
     }
 
+    /**
+     * Maps variant NPC / source names to a single canonical display name.
+     * The rule body lives in the dependency-free {@link BossNames} so pure
+     * components ({@link KillCountResolver}) and tests can share it; this
+     * alias preserves the long-standing public API.
+     */
     public static String normalizeBossName(String raw)
     {
-        if (raw == null || raw.isEmpty()) return "Unknown";
-
-        raw = stripColorTags(raw).trim();
-        if (raw.isEmpty()) return "Unknown";
-
-        // Pass through already-prefixed pickpocket entries unchanged
-        if (raw.startsWith(PICKPOCKET_PREFIX)) return raw;
-
-        String l = raw.toLowerCase();
-
-        if (l.contains("doom of mokhaiotl"))              return "Doom of Mokhaiotl";
-
-        if (l.contains("corrupted gauntlet"))             return "Corrupted Gauntlet";
-        if (l.contains("gauntlet"))                       return "The Gauntlet";
-        if (l.contains("chambers") || l.contains("cox"))  return "Chambers of Xeric";
-        if (l.contains("theatre") || l.contains("tob"))   return "Theatre of Blood";
-        if (l.contains("tombs") || l.contains("toa"))     return "Tombs of Amascut";
-
-        if (l.contains("zilyana"))                        return "Commander Zilyana";
-        if (l.contains("graardor"))                       return "General Graardor";
-        if (l.contains("kree"))                           return "Kree'arra";
-        if (l.contains("kril"))                           return "K'ril Tsutsaroth";
-        if (l.equals("nex"))                              return "Nex";
-
-        if (l.contains("artio"))                          return "Artio";
-        if (l.contains("callisto"))                       return "Callisto";
-        if (l.contains("calvar"))                         return "Calvar'ion";
-        if (l.contains("vet'ion") || l.contains("vetion")) return "Vet'ion";
-        if (l.contains("spindel"))                        return "Spindel";
-        if (l.contains("venenatis"))                      return "Venenatis";
-        if (l.contains("corporeal"))                      return "Corporeal Beast";
-        if (l.contains("chaos fanatic"))                  return "Chaos Fanatic";
-        if (l.contains("scorpia"))                        return "Scorpia";
-        if (l.contains("crazy archaeologist"))            return "Crazy Archaeologist";
-
-        if (l.contains("duke") || l.contains("sucellus")) return "Duke Sucellus";
-        if (l.contains("leviathan"))                      return "The Leviathan";
-        if (l.contains("vardorvis"))                      return "Vardorvis";
-        if (l.contains("whisperer"))                      return "The Whisperer";
-
-        if (l.contains("royal titans") || l.contains("eldric") || l.contains("branda"))
-            return "Royal Titans";
-        if (l.contains("hueycoatl"))                      return "The Hueycoatl";
-        if (l.contains("moons of peril") || l.contains("blue moon")
-                || l.contains("blood moon") || l.contains("eclipse moon"))
-            return "Moons of Peril";
-        if (l.contains("yama"))                           return "Yama";
-        if (l.contains("araxxor"))                        return "Araxxor";
-        if (l.contains("scurrius"))                       return "Scurrius";
-        if (l.contains("amoxliatl"))                      return "Amoxliatl";
-        if (l.contains("tormented demon"))                return "Tormented Demon";
-        if (l.contains("colosseum") || l.contains("fortis"))
-            return "Fortis Colosseum";
-
-        if (l.contains("zulrah"))                         return "Zulrah";
-        if (l.contains("vorkath"))                        return "Vorkath";
-        if (l.contains("hydra"))                          return "Alchemical Hydra";
-        if (l.contains("cerberus"))                       return "Cerberus";
-        if (l.contains("abyssal sire"))                   return "Abyssal Sire";
-        if (l.contains("kraken"))                         return "Kraken";
-        if (l.contains("smoke devil") || l.contains("thermonuclear")) return "Smoke Devil";
-        if (l.contains("phosani"))                        return "Phosani's Nightmare";
-        if (l.contains("nightmare"))                      return "The Nightmare";
-        if (l.contains("grotesque"))                      return "Grotesque Guardians";
-        if (l.contains("kalphite queen"))                 return "Kalphite Queen";
-        if (l.contains("kbd") || l.contains("king black dragon")) return "King Black Dragon";
-        if (l.contains("dagannoth prime"))                return "Dagannoth Prime";
-        if (l.contains("dagannoth rex"))                  return "Dagannoth Rex";
-        if (l.contains("dagannoth supreme"))              return "Dagannoth Supreme";
-        if (l.contains("skotizo"))                        return "Skotizo";
-        if (l.contains("hespori"))                        return "Hespori";
-
-        if (l.contains("barrows"))                        return "Barrows";
-        if (l.contains("tempoross"))                      return "Tempoross";
-        if (l.contains("wintertodt"))                     return "Wintertodt";
-        if (l.contains("zalcano"))                        return "Zalcano";
-
-        if (l.contains("beginner clue") || (l.contains("beginner") && l.contains("clue")))
-            return "Beginner Clue";
-        if (l.contains("easy clue") || (l.contains("easy") && l.contains("clue")))
-            return "Easy Clue";
-        if (l.contains("medium clue") || (l.contains("medium") && l.contains("clue")))
-            return "Medium Clue";
-        if (l.contains("hard clue") || (l.contains("hard") && l.contains("clue")))
-            return "Hard Clue";
-        if (l.contains("elite clue") || (l.contains("elite") && l.contains("clue")))
-            return "Elite Clue";
-        if (l.contains("master clue") || (l.contains("master") && l.contains("clue")))
-            return "Master Clue";
-
-        return raw.trim();
+        return BossNames.normalize(raw);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  UTILITY – CHAT MESSAGE PARSING
     // ═════════════════════════════════════════════════════════════════════════
 
+    /**
+     * Feeds a game chat message into the {@link KillCountResolver}.
+     *
+     * <p>Handles both orderings of the KC-message / loot-event race:</p>
+     * <ul>
+     *   <li><b>Message first:</b> the observation waits as pending state and
+     *       is consumed by the next {@code recordKill} for the same boss.</li>
+     *   <li><b>Loot first:</b> the kill was already recorded with the local
+     *       counter — {@link #applyLateGameKc} relabels that kill in place
+     *       (never adds a second kill) when it is recent and still unsynced.</li>
+     * </ul>
+     */
     public void parseKillCountMessage(String message)
     {
-        Matcher m = KC_PATTERN.matcher(message);
-        if (m.find())
+        try
         {
-            String boss = normalizeBossName(m.group(1));
-            int    kc   = Integer.parseInt(m.group(2));
-            log.debug("KC from chat: '{}' = {}", boss, kc);
+            KillCountResolver.KcObservation obs =
+                    killCountResolver.observe(message, System.currentTimeMillis());
+            if (obs == null) return;
+
+            log.debug("KC from chat: '{}' = {}", obs.getBossName(), obs.getKillCount());
+            applyLateGameKc(obs.getBossName(), obs.getKillCount());
         }
+        catch (Exception e)
+        {
+            // Chat parsing must never take down the message pipeline.
+            log.debug("parseKillCountMessage failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Relabels the just-recorded kill for {@code npcName} with the
+     * authoritative game KC when the chat message arrived <em>after</em> the
+     * loot event. Strictly a rename of the existing record — the kill count
+     * of kills is never changed here, so chat + death + widget signals can
+     * never produce two increments for one kill.
+     *
+     * <p>Skipped when the last kill is older than
+     * {@value #LATE_KC_APPLY_WINDOW_MS} ms (the observation then stays pending
+     * for the next kill) or when it already synced to the server (relabeling
+     * a synced record would re-upload it as a new kill).</p>
+     */
+    private void applyLateGameKc(String npcName, int gameKC)
+    {
+        BossKillStats stats = bossKillStats.get(npcName);
+        if (stats == null || stats.getKillHistory().isEmpty()) return;
+
+        LootStorageData.KillRecord lastKill =
+                stats.getKillHistory().get(stats.getKillHistory().size() - 1);
+
+        long ageMs = System.currentTimeMillis() - lastKill.getTimestamp();
+        if (ageMs > LATE_KC_APPLY_WINDOW_MS) return;
+
+        // A kill this recent is the one this KC belongs to — claim the
+        // observation NOW, before any early return below, so it can never
+        // leak onto the next kill of the same boss.
+        killCountResolver.consume(npcName, System.currentTimeMillis());
+
+        if (lastKill.getKillNumber() >= gameKC) return; // already correct or ahead
+        if (lastKill.isSyncedToServer()) return;        // too late — avoid dup upload
+
+        if (!storageManager.relabelLastKill(npcName, gameKC))
+        {
+            return; // storage-side record already synced/ahead — keep in sync
+        }
+
+        lastKill.setKillNumber(gameKC);
+        if (gameKC > stats.getKillCount())
+        {
+            stats.setKillCount(gameKC);
+        }
+
+        notifyListeners(stats, lastKill);
+        log.debug("Late game KC {} applied to last '{}' kill ({}ms after record)",
+                gameKC, npcName, ageMs);
     }
 
     public String detectChestSource(String lower)
