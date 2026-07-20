@@ -31,6 +31,7 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.LayoutManager;
 import java.awt.Rectangle;
 import java.util.ArrayList;
@@ -200,7 +201,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         todayInner.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
         JLabel todayCap = new JLabel("XP EARNED TODAY");
         todayCap.setFont(new Font("Calibri", Font.BOLD, 12));
-        todayCap.setForeground(MUTED);
+        todayCap.setForeground(Color.WHITE);
         todayVal.setFont(new Font("Calibri", Font.BOLD, 15));
         todayVal.setForeground(GOLD);
         todayVal.setHorizontalAlignment(SwingConstants.RIGHT);
@@ -245,7 +246,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         controls.setAlignmentX(Component.LEFT_ALIGNMENT);
         controls.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
 
-        syncButton = accentButton("⟳ Sync", new Color(30, 50, 80), new Color(80, 120, 180));
+        syncButton = accentButton("Sync", new Color(30, 50, 80), new Color(80, 120, 180));
         syncButton.addActionListener(e -> onSyncClicked());
 
         // Pause/play: freezes XP/hr (and runtime) on all skills; no other effect.
@@ -417,9 +418,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         long activeNow = sessionManager.activeElapsed(now);
         long liveWindow = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
-        // Account + sync badge
+        // Account + sync badge ("Account:" label white, the name itself green)
         String acct = sessionManager.getSessionAccountKey();
-        accountLabel.setText(acct != null ? "Account: " + prettyAccount(acct) : "Not logged in");
+        accountLabel.setText(acct != null
+                ? "<html>Account: <font color='#69dc8c'>" + prettyAccount(acct) + "</font></html>"
+                : "Not logged in");
         updateSyncBadge(now);
 
         // Compact mode toggles the chart card off.
@@ -773,6 +776,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         b.setBorder(new CompoundBorder(new LineBorder(border, 1, true), new EmptyBorder(5, 8, 5, 8)));
         b.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        b.setHorizontalAlignment(SwingConstants.CENTER);
+        b.setMargin(new Insets(0, 0, 0, 0));
         return b;
     }
 

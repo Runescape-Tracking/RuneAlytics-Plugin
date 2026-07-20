@@ -22,6 +22,7 @@ import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.List;
@@ -195,7 +196,7 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         grid.add(statCell("ACTIONS / HOUR",   actionsVal, TEXT));
         grid.add(statCell("TIME TO LEVEL",    ttlVal,    TEXT));
         grid.add(statCell("XP TO NEXT LEVEL", toNextVal, TEXT));
-        grid.add(statCell("EST. TIME",        estVal,    TEXT));
+        grid.add(statCell("ACTIONS REMAINING", estVal,   TEXT));
         grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 210));
         content.add(grid);
         content.add(Box.createRigidArea(new Dimension(0, 8)));
@@ -250,6 +251,8 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         // ── Reset this skill ──
         resetBtn = new JButton("Reset Skill XP");
         resetBtn.setFont(new Font("Calibri", Font.BOLD, 12));
+        resetBtn.setHorizontalAlignment(SwingConstants.CENTER);
+        resetBtn.setMargin(new Insets(0, 0, 0, 0));
         resetBtn.setForeground(new Color(255, 150, 150));
         resetBtn.setBackground(new Color(60, 30, 34));
         resetBtn.setFocusPainted(false);
@@ -330,7 +333,16 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
 
         long ttlMs = st.timeToNextLevelMs(activeNow, ignoreAfk, afk);
         ttlVal.setText(XpFormat.timeToLevel(ttlMs));
-        estVal.setText(ttlMs <= 0 ? "—" : XpFormat.duration(ttlMs));
+
+        long actionsLeft = actionsRemaining(st, toNext);
+        estVal.setText(actionsLeft > 0 ? XpFormat.comma(actionsLeft) : "—");
+
+        // Inside the final 25% of the level, the "almost there" stats go
+        // gold; they revert automatically once a new level starts.
+        Color closeColor = st.levelProgress() >= 0.75 ? GOLD : TEXT;
+        ttlVal.setForeground(closeColor);
+        estVal.setForeground(closeColor);
+        toNextVal.setForeground(closeColor);
 
         sparkline.setSamples(st.rateHistorySnapshot());
 
@@ -391,9 +403,28 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
 
         setRate(profitRateVal, profit, lastEconActiveMs);
         setProfit(profitSessionVal, profit);
-        profitBreakdown.setText("Made " + XpFormat.compactUpper(made)
-                + "  ·  Spent " + XpFormat.compactUpper(spent)
-                + "  ·  Today " + signedCompact(today));
+        // HTML so the "Today" value can carry its own profit/loss colour while
+        // the labels stay white (the JLabel's base colour).
+        String todayHex = today < 0 ? "#eb6e6e" : "#69dc8c";
+        profitBreakdown.setText("<html>Used <font color='#969eb2'>"
+                + XpFormat.compactUpper(made)
+                + "</font> &nbsp;·&nbsp; Spent <font color='#969eb2'>"
+                + XpFormat.compactUpper(spent)
+                + "</font> &nbsp;·&nbsp; Today <font color='" + todayHex + "'>"
+                + signedCompact(today) + "</font></html>");
+    }
+
+    /**
+     * Actions until the next level, from this session's average XP per action:
+     * {@code ceil(xpToNext / (totalGained / actions))}. Returns 0 when there is
+     * no session data to average yet.
+     */
+    private static long actionsRemaining(RuneAlyticsXpSkillState st, long xpToNext)
+    {
+        long gained = st.getTotalGained();
+        long actions = st.getActions();
+        if (xpToNext <= 0 || gained <= 0 || actions <= 0) return 0L;
+        return (xpToNext * actions + gained - 1) / gained;
     }
 
     /** GP/hr cell: signed compact rate, green for profit, red for loss, "—" when unknown. */
@@ -605,7 +636,9 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         p.add(Box.createRigidArea(new Dimension(0, 4)));
 
         profitBreakdown.setFont(DROP_FONT);
-        profitBreakdown.setForeground(MUTED);
+        // White base = the Used/Spent/Today labels; values are coloured
+        // inline via HTML in renderProfit().
+        profitBreakdown.setForeground(Color.WHITE);
         profitBreakdown.setAlignmentX(Component.LEFT_ALIGNMENT);
         p.add(profitBreakdown);
         return p;
@@ -624,6 +657,8 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         b.setContentAreaFilled(true);
         b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         b.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        b.setHorizontalAlignment(SwingConstants.CENTER);
+        b.setMargin(new Insets(0, 0, 0, 0));
         return b;
     }
 
@@ -697,8 +732,9 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
     private JLabel subSectionLabel(String text)
     {
         JLabel l = new JLabel(text);
-        l.setFont(LBL_FONT);
-        l.setForeground(MUTED);
+        l.setFont(new Font("Calibri", Font.BOLD, 11));
+        // Same teal as the "KNOW MORE. PLAY SMARTER." tagline, for visibility.
+        l.setForeground(TEAL);
         l.setAlignmentX(Component.LEFT_ALIGNMENT);
         return l;
     }
