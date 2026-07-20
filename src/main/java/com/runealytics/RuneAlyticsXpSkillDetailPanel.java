@@ -196,7 +196,7 @@ class RuneAlyticsXpSkillDetailPanel extends JPanel
         grid.add(statCell("ACTIONS / HOUR",   actionsVal, TEXT));
         grid.add(statCell("TIME TO LEVEL",    ttlVal,    TEXT));
         grid.add(statCell("XP TO NEXT LEVEL", toNextVal, TEXT));
-        grid.add(statCell("ACTIONS REMAINING", estVal,   TEXT));
+        grid.add(statCell("ACTIONS LEFT", estVal,   TEXT));
         grid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 210));
         content.add(grid);
         content.add(Box.createRigidArea(new Dimension(0, 8)));
