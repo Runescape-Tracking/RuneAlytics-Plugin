@@ -1,6 +1,5 @@
 plugins {
 	id 'java'
-	id 'checkstyle'
 }
 
 repositories {
@@ -22,8 +21,6 @@ dependencies {
 	annotationProcessor 'org.projectlombok:lombok:1.18.30'
 
 	testImplementation 'junit:junit:4.13.2'
-	testImplementation 'org.mockito:mockito-core:5.12.0'
-	testImplementation 'com.squareup.okhttp3:mockwebserver:3.14.9'
 	testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion
 	testImplementation group: 'net.runelite', name:'jshell', version: runeLiteVersion
 }
@@ -35,12 +32,6 @@ tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'
 	options.release.set(11)
 }
-
-checkstyle {
-	toolVersion = '10.12.7'
-	configFile = file('checkstyle.xml')
-}
-configurations.checkstyle { exclude group: 'com.google.collections', module: 'google-collections' }
 
 tasks.register('shadowJar', Jar) {
 	dependsOn configurations.testRuntimeClasspath
