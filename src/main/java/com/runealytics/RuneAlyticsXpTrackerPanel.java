@@ -31,6 +31,7 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.LayoutManager;
 import java.awt.Rectangle;
 import java.util.ArrayList;
@@ -112,9 +113,6 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
     private final Map<Skill, RuneAlyticsXpSkillRow> rows = new LinkedHashMap<>();
     private List<Skill> lastOrder = new ArrayList<>();
 
-    /** "AFK — PAUSED" indicator shown while the session auto-pauses (no XP for the AFK timeout). */
-    private final JLabel afkBadge = new JLabel("⏸ AFK — PAUSED");
-
     private JButton syncButton;
     private JButton pauseButton;
     private JButton eyeButton;
@@ -148,7 +146,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         chartCard = chartCardHolder; // populated by buildMainView()
 
         detailPanel = new RuneAlyticsXpSkillDetailPanel(iconManager, config, sessionManager,
-                this::showMain, this::onResetSkill);
+                this::showMain, this::onResetSkill, this::onResetSkillRate);
 
         cardPanel.setBackground(CARD_BG);
         cardPanel.add(main, CARD_MAIN);
@@ -203,7 +201,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         todayInner.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
         JLabel todayCap = new JLabel("XP EARNED TODAY");
         todayCap.setFont(new Font("Calibri", Font.BOLD, 12));
-        todayCap.setForeground(MUTED);
+        todayCap.setForeground(Color.WHITE);
         todayVal.setFont(new Font("Calibri", Font.BOLD, 15));
         todayVal.setForeground(GOLD);
         todayVal.setHorizontalAlignment(SwingConstants.RIGHT);
@@ -219,14 +217,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         sumHeader.setOpaque(false);
         sumHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
         sumHeader.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
-        JPanel sumTitle = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        sumTitle.setOpaque(false);
-        sumTitle.add(sectionLabel("SESSION SUMMARY"));
-        afkBadge.setFont(new Font("Calibri", Font.BOLD, 10));
-        afkBadge.setForeground(new Color(235, 170, 80));
-        afkBadge.setVisible(false);
-        sumTitle.add(afkBadge);
-        sumHeader.add(sumTitle, BorderLayout.WEST);
+        sumHeader.add(sectionLabel("SESSION SUMMARY"), BorderLayout.WEST);
         JPanel skillTag = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         skillTag.setOpaque(false);
         summarySkillName.setFont(new Font("Calibri", Font.BOLD, 12));
@@ -255,7 +246,7 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         controls.setAlignmentX(Component.LEFT_ALIGNMENT);
         controls.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
 
-        syncButton = accentButton("⟳ Sync", new Color(30, 50, 80), new Color(80, 120, 180));
+        syncButton = accentButton("Sync", new Color(30, 50, 80), new Color(80, 120, 180));
         syncButton.addActionListener(e -> onSyncClicked());
 
         // Pause/play: freezes XP/hr (and runtime) on all skills; no other effect.
@@ -427,9 +418,11 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         long activeNow = sessionManager.activeElapsed(now);
         long liveWindow = Math.max(1, config.xpAfkTimeout()) * 60_000L;
 
-        // Account + sync badge
+        // Account + sync badge ("Account:" label white, the name itself green)
         String acct = sessionManager.getSessionAccountKey();
-        accountLabel.setText(acct != null ? "Account: " + prettyAccount(acct) : "Not logged in");
+        accountLabel.setText(acct != null
+                ? "<html>Account: <font color='#69dc8c'>" + prettyAccount(acct) + "</font></html>"
+                : "Not logged in");
         updateSyncBadge(now);
 
         // Compact mode toggles the chart card off.
@@ -450,12 +443,10 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         // and plain logged-in time before the first gain. XP gained / XP-hr /
         // levels + the trend chart are the single featured skill
         // (favorite-if-live, else highest-output live skill).
-        boolean autoPaused = sessionManager.isAutoPaused(now);
         long shownRuntime = (config.xpIgnoreAfk() && sessionManager.hasAnyGains())
                 ? sessionManager.activeTrainingMs(now)
                 : sessionManager.runtimeMs(now);
         runtimeVal.setText(XpFormat.duration(shownRuntime));
-        afkBadge.setVisible(autoPaused);
         updateFeaturedSummary(now, activeNow, liveWindow);
 
         // Pause/play button reflects the current pause state.
@@ -785,6 +776,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         b.setBorder(new CompoundBorder(new LineBorder(border, 1, true), new EmptyBorder(5, 8, 5, 8)));
         b.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        b.setHorizontalAlignment(SwingConstants.CENTER);
+        b.setMargin(new Insets(0, 0, 0, 0));
         return b;
     }
 
