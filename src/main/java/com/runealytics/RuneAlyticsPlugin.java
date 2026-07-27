@@ -718,6 +718,25 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onWidgetLoaded(WidgetLoaded event)
     {
+        // ── Clan tracking: parse member list from clan widgets ────────────────
+        if (state.isLoggedIn() && clanManager.getCurrentClan() != null)
+        {
+            // Try to find clan member list widget by searching common group IDs
+            // Clan interface is typically in widget groups 589-595
+            int groupId = event.getGroupId();
+            if (groupId >= 589 && groupId <= 595)
+            {
+                // Check if this widget might contain the member list
+                Widget candidate = client.getWidget(groupId, 0);
+                if (candidate != null && candidate.getName() != null
+                        && candidate.getName().toLowerCase().contains("member"))
+                {
+                    final Widget widget = candidate;
+                    clientThread.invokeLater(() -> parseClanMemberList(widget));
+                }
+            }
+        }
+
         // ── Death recovery guard: detect gravestone / Death's Office UI ───────
         deathRecoveryGuard.onWidgetLoaded(event);
 
@@ -1836,35 +1855,6 @@ public class RuneAlyticsPlugin extends Plugin
     // ═════════════════════════════════════════════════════════════════════════
     //  CLAN TRACKING
     // ═════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Parses the clan member list from the clan info widget when it's loaded.
-     * This is called when the player opens the clan member list UI.
-     *
-     * Note: This is a best-effort approach. Widget IDs can vary by RuneLite version,
-     * so we gracefully skip if the widget is unavailable. Members are still recorded
-     * from clan chat messages regardless.
-     */
-    @Subscribe
-    public void onWidgetLoadedForClan(WidgetLoaded event)
-    {
-        if (!state.isLoggedIn() || clanManager.getCurrentClan() == null) return;
-
-        // Try to find clan member list widget by searching common group IDs
-        // Clan interface is typically in widget groups 589-595
-        for (int groupId = 589; groupId <= 595; groupId++)
-        {
-            Widget candidate = client.getWidget(groupId, 0);
-            if (candidate != null && candidate.getName() != null
-                    && candidate.getName().toLowerCase().contains("member"))
-            {
-                // Create a final reference for use in lambda
-                final Widget widget = candidate;
-                clientThread.invokeLater(() -> parseClanMemberList(widget));
-                return;
-            }
-        }
-    }
 
     /**
      * Attempts to detect the player's current clan from game state and records it.
