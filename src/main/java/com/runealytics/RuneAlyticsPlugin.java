@@ -10,6 +10,7 @@ import net.runelite.api.*;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.*;
 import net.runelite.api.vars.AccountType;
+import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 import java.util.EnumSet;
 import net.runelite.client.callback.ClientThread;
