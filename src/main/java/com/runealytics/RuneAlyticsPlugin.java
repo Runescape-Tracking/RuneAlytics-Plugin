@@ -169,6 +169,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private CurrentPlayerIdentityService currentPlayerIdentity;
     @Inject private LootSyncMergeService     lootSyncMergeService;
     @Inject private DeathRecoveryGuard       deathRecoveryGuard;
+    @Inject private ClanManager              clanManager;
 
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
@@ -1444,6 +1445,7 @@ public class RuneAlyticsPlugin extends Plugin
             lastXpTrackerFlag    = null;
 
             matchmakingManager.reset(); // clear any active match on logout
+            clanManager.reset();         // clear clan membership on logout
             // Back to the neutral "unknown" state — the next login re-fetches the
             // flag rather than leaving a stale "turned off" message behind.
             if (lootTrackerPanel != null) lootTrackerPanel.setSyncChecking();
@@ -1660,6 +1662,9 @@ public class RuneAlyticsPlugin extends Plugin
      * <p>When location visibility is private, the real coordinates are replaced
      * with a decoy here (client-side) before the payload is built; the real
      * location is never serialized or sent.</p>
+     *
+     * <p>Also syncs clan data if the player is in a clan and the data is dirty
+     * (has changed since last sync), avoiding unnecessary repeated sends.</p>
      */
     private void sendHeartbeatTick()
     {
@@ -1688,9 +1693,25 @@ public class RuneAlyticsPlugin extends Plugin
             // Non-authoritative preview of the in-progress 30s XP batch window.
             final Map<String, Integer> xpPreview = xpTrackerManager.peekPendingGains();
 
-            executorService.execute(() ->
-                    apiClient.sendHeartbeat(location, friends, ignores, visibility,
-                            equipment, inventory, gearVisibility, xpPreview));
+            // Capture clan state if player is in a clan and data is dirty.
+            final ClanInfo clan = clanManager.getCurrentClan();
+            final boolean clanDataDirty = clanManager.hasDirtyData();
+
+            executorService.execute(() -> {
+                // Sync clan data separately if it's dirty (changed since last sync).
+                // This is done before heartbeat to keep clan data fresh.
+                if (clan != null && clanDataDirty)
+                {
+                    log.debug("[Clan Heartbeat] Syncing dirty clan data");
+                    apiClient.syncClanInfo(clan);
+                    apiClient.syncClanMembers(clan);
+                    clanManager.markSynced();
+                }
+
+                // Send the standard heartbeat.
+                apiClient.sendHeartbeat(location, friends, ignores, visibility,
+                        equipment, inventory, gearVisibility, xpPreview);
+            });
         });
     }
 
@@ -1794,6 +1815,155 @@ public class RuneAlyticsPlugin extends Plugin
                     skillingSnapshot.put(key, getCurrentInventory());
                 skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
             });
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  CLAN TRACKING
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Detects when a player sends a message in clan chat.
+     * Records the sender as a clan member for tracking purposes.
+     */
+    @Subscribe
+    public void onClanChat(ChatMessage event)
+    {
+        if (event.getType() != ChatMessageType.CLAN) return;
+        if (!state.isLoggedIn()) return;
+
+        String username = event.getName();
+        if (username == null || username.isEmpty()) return;
+
+        // Record this player as a clan member (we don't know if they use RuneAlytics yet)
+        clanManager.recordMember(username, false);
+    }
+
+    /**
+     * Detects clan membership changes and updates clan status.
+     * Called on login to detect initial clan, and on logout to clear clan state.
+     */
+    @Subscribe
+    public void onGameStateChangedForClan(GameStateChanged event)
+    {
+        GameState gs = event.getGameState();
+
+        if (gs == GameState.LOGGED_IN && state.isLoggedIn())
+        {
+            // Try to detect clan on login
+            clientThread.invokeLater(this::detectAndRecordCurrentClan);
+        }
+        else if (gs == GameState.LOGIN_SCREEN)
+        {
+            // Clan state is cleared by the main onGameStateChanged handler
+        }
+    }
+
+    /**
+     * Parses the clan member list from the clan info widget when it's loaded.
+     * This is called when the player opens the clan member list UI.
+     */
+    @Subscribe
+    public void onWidgetLoadedForClan(WidgetLoaded event)
+    {
+        if (!state.isLoggedIn() || clanManager.getCurrentClan() == null) return;
+
+        // Clan member list is typically in the clan widget group
+        // Widget IDs for clan are: CLAN_MEMBER_LIST (can vary by game version)
+        // We attempt to extract member names from the widget if it's available
+        Widget widget = client.getWidget(ComponentID.CLAN_MEMBER_LIST);
+        if (widget != null)
+        {
+            clientThread.invokeLater(() -> parseClanMemberList(widget));
+        }
+    }
+
+    /**
+     * Attempts to detect the player's current clan from game state and records it.
+     * Safe to call multiple times; idempotent.
+     */
+    private void detectAndRecordCurrentClan()
+    {
+        Player local = client.getLocalPlayer();
+        if (local == null) return;
+
+        // Check if player is in a clan by reading the player's clan info
+        // This is a best-effort attempt; exact method may vary by RuneLite version
+        try
+        {
+            // Get clan info from local player if available
+            String clanName = null;
+            String clanTag = null;
+
+            // RuneLite's Player object may expose clan information
+            // Fallback: check if we can read from the clan chat widget
+            Widget clanWidget = client.getWidget(ComponentID.CLAN_MEMBER_LIST);
+            if (clanWidget != null)
+            {
+                // Try to extract clan name from widget title
+                String text = clanWidget.getName();
+                if (text != null && !text.isEmpty())
+                {
+                    clanName = text;
+                    log.debug("[Clan] Detected clan from widget: {}", clanName);
+                }
+            }
+
+            // If we found a clan, record it
+            if (clanName != null && !clanName.isEmpty())
+            {
+                clanManager.onClanJoined(clanName, clanTag);
+            }
+        }
+        catch (Exception e)
+        {
+            log.debug("[Clan] Error detecting current clan: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Extracts clan member names from the clan member list widget.
+     * Parses the text content to build a list of member names.
+     */
+    private void parseClanMemberList(Widget widget)
+    {
+        List<String> members = new ArrayList<>();
+
+        try
+        {
+            if (widget.getChild(0) != null)
+            {
+                Widget[] children = widget.getChild(0).getDynamicChildren();
+                if (children != null)
+                {
+                    for (Widget child : children)
+                    {
+                        if (child == null) continue;
+                        String text = child.getText();
+                        if (text != null && !text.isEmpty())
+                        {
+                            // Member list items typically show: "Name (rank)"
+                            // Extract just the username part
+                            String username = text.split("\\(")[0].trim();
+                            if (!username.isEmpty())
+                            {
+                                members.add(username);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            log.debug("[Clan] Error parsing member list widget: {}", e.getMessage());
+            return;
+        }
+
+        if (!members.isEmpty())
+        {
+            log.debug("[Clan] Parsed {} members from widget", members.size());
+            clanManager.updateMemberList(members);
         }
     }
 
