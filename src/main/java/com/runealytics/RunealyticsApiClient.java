@@ -649,4 +649,182 @@ public class RunealyticsApiClient
             return false;
         }
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  CLAN SYNC
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Sends clan information to {@code /plugin/clan} endpoint.
+     * Includes clan name, tag, player rank, and member count.
+     * Full member list is sent separately via {@link #syncClanMembers}.
+     *
+     * <p>Called periodically during heartbeat only if clan data is dirty.</p>
+     *
+     * @param clan the current clan info to sync
+     */
+    public void syncClanInfo(ClanInfo clan)
+    {
+        String token    = state.getVerificationCode();
+        String username = state.getVerifiedUsername();
+
+        if (token == null || token.isEmpty())
+        {
+            log.debug("[Clan] Skipping info sync — no verification token");
+            return;
+        }
+        if (username == null || username.isEmpty())
+        {
+            log.debug("[Clan] Skipping info sync — no username");
+            return;
+        }
+        if (clan == null)
+        {
+            log.debug("[Clan] Skipping info sync — no clan info");
+            return;
+        }
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("username",     username);
+        payload.add("clan", clan.toJson());
+        payload.addProperty("timestamp",    System.currentTimeMillis() / 1000);
+
+        String payloadJson = gson.toJson(payload);
+        String url         = config.apiUrl() + "/plugin/clan";
+
+        log.debug("[Clan] POST {} | clan={} members={} payload={}",
+                url, clan.getClanName(), clan.getMemberCount(), payloadJson);
+
+        RequestBody body    = RequestBody.create(JSON, payloadJson);
+        Request     request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("Authorization", "Bearer " + token)
+                .addHeader("Content-Type",  "application/json")
+                .addHeader("Accept",        "application/json")
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback()
+        {
+            @Override
+            @SuppressWarnings("NullableProblems")
+            public void onFailure(Call call, IOException e)
+            {
+                log.debug("[Clan] Network failure: {}", e.getMessage());
+            }
+
+            @Override
+            @SuppressWarnings("NullableProblems")
+            public void onResponse(Call call, Response response)
+            {
+                try
+                {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (response.isSuccessful())
+                    {
+                        log.debug("[Clan] OK HTTP {} — {}", response.code(), responseBody);
+                    }
+                    else
+                    {
+                        log.debug("[Clan] FAILED HTTP {} — {}", response.code(), responseBody);
+                    }
+                }
+                catch (IOException e)
+                {
+                    log.debug("[Clan] Could not read response body: {}", e.getMessage());
+                }
+                finally
+                {
+                    response.close();
+                }
+            }
+        });
+    }
+
+    /**
+     * Sends the clan member list to {@code /plugin/clan/members} endpoint.
+     * Separate from clan info to avoid oversizing the heartbeat.
+     * Called when member list updates or on periodic sync if members are dirty.
+     *
+     * @param clan the current clan with members to sync
+     */
+    public void syncClanMembers(ClanInfo clan)
+    {
+        String token    = state.getVerificationCode();
+        String username = state.getVerifiedUsername();
+
+        if (token == null || token.isEmpty())
+        {
+            log.debug("[Clan Members] Skipping — no verification token");
+            return;
+        }
+        if (username == null || username.isEmpty())
+        {
+            log.debug("[Clan Members] Skipping — no username");
+            return;
+        }
+        if (clan == null || clan.getMemberCount() == 0)
+        {
+            log.debug("[Clan Members] Skipping — no clan or members");
+            return;
+        }
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("username",       username);
+        payload.addProperty("clan_name",      clan.getClanName());
+        payload.add("members",                clan.membersToJsonArray());
+        payload.addProperty("member_count",   clan.getMemberCount());
+        payload.addProperty("timestamp",      System.currentTimeMillis() / 1000);
+
+        String payloadJson = gson.toJson(payload);
+        String url         = config.apiUrl() + "/plugin/clan/members";
+
+        log.debug("[Clan Members] POST {} | clan={} count={} payload_size={}",
+                url, clan.getClanName(), clan.getMemberCount(), payloadJson.length());
+
+        RequestBody body    = RequestBody.create(JSON, payloadJson);
+        Request     request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("Authorization", "Bearer " + token)
+                .addHeader("Content-Type",  "application/json")
+                .addHeader("Accept",        "application/json")
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback()
+        {
+            @Override
+            @SuppressWarnings("NullableProblems")
+            public void onFailure(Call call, IOException e)
+            {
+                log.debug("[Clan Members] Network failure: {}", e.getMessage());
+            }
+
+            @Override
+            @SuppressWarnings("NullableProblems")
+            public void onResponse(Call call, Response response)
+            {
+                try
+                {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (response.isSuccessful())
+                    {
+                        log.debug("[Clan Members] OK HTTP {} — {}", response.code(), responseBody);
+                    }
+                    else
+                    {
+                        log.debug("[Clan Members] FAILED HTTP {} — {}", response.code(), responseBody);
+                    }
+                }
+                catch (IOException e)
+                {
+                    log.debug("[Clan Members] Could not read response body: {}", e.getMessage());
+                }
+                finally
+                {
+                    response.close();
+                }
+            }
+        });
+    }
 }
