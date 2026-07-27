@@ -1877,21 +1877,17 @@ public class RuneAlyticsPlugin extends Plugin
 
         // Try to find clan member list widget by searching common group IDs
         // Clan interface is typically in widget groups 589-595
-        Widget widget = null;
         for (int groupId = 589; groupId <= 595; groupId++)
         {
             Widget candidate = client.getWidget(groupId, 0);
             if (candidate != null && candidate.getName() != null
                     && candidate.getName().toLowerCase().contains("member"))
             {
-                widget = candidate;
-                break;
+                // Create a final reference for use in lambda
+                final Widget widget = candidate;
+                clientThread.invokeLater(() -> parseClanMemberList(widget));
+                return;
             }
-        }
-
-        if (widget != null)
-        {
-            clientThread.invokeLater(() -> parseClanMemberList(widget));
         }
     }
 
