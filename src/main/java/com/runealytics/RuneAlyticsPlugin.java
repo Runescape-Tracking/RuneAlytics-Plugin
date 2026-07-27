@@ -1827,9 +1827,12 @@ public class RuneAlyticsPlugin extends Plugin
     /**
      * Detects when a player sends a message in clan chat (identified as FRIENDSCHAT in RuneLite).
      * Records the sender as a clan member for tracking purposes.
+     *
+     * Note: Method must be named onChatMessage to follow RuneLite's event naming convention.
+     * The clan chat filter is applied inside.
      */
     @Subscribe
-    public void onClanChat(ChatMessage event)
+    public void onChatMessage(ChatMessage event)
     {
         // Clan chat is identified as FRIENDSCHAT in RuneLite's ChatMessageType
         if (event.getType() != ChatMessageType.FRIENDSCHAT) return;
