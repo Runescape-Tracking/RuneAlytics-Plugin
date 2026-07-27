@@ -1865,16 +1865,30 @@ public class RuneAlyticsPlugin extends Plugin
     /**
      * Parses the clan member list from the clan info widget when it's loaded.
      * This is called when the player opens the clan member list UI.
+     *
+     * Note: This is a best-effort approach. Widget IDs can vary by RuneLite version,
+     * so we gracefully skip if the widget is unavailable. Members are still recorded
+     * from clan chat messages regardless.
      */
     @Subscribe
     public void onWidgetLoadedForClan(WidgetLoaded event)
     {
         if (!state.isLoggedIn() || clanManager.getCurrentClan() == null) return;
 
-        // Clan member list is typically in the clan widget group
-        // Widget IDs for clan are: CLAN_MEMBER_LIST (can vary by game version)
-        // We attempt to extract member names from the widget if it's available
-        Widget widget = client.getWidget(ComponentID.CLAN_MEMBER_LIST);
+        // Try to find clan member list widget by searching common group IDs
+        // Clan interface is typically in widget groups 589-595
+        Widget widget = null;
+        for (int groupId = 589; groupId <= 595; groupId++)
+        {
+            Widget candidate = client.getWidget(groupId, 0);
+            if (candidate != null && candidate.getName() != null
+                    && candidate.getName().toLowerCase().contains("member"))
+            {
+                widget = candidate;
+                break;
+            }
+        }
+
         if (widget != null)
         {
             clientThread.invokeLater(() -> parseClanMemberList(widget));
