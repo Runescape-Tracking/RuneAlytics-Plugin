@@ -1154,6 +1154,16 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onChatMessage(ChatMessage event)
     {
+        // ── Clan chat tracking: record members from clan messages ──────────────
+        if (state.isLoggedIn() && event.getType() == ChatMessageType.FRIENDSCHAT)
+        {
+            String username = event.getName();
+            if (username != null && !username.isEmpty())
+            {
+                clanManager.recordMember(username, false);
+            }
+        }
+
         // ── Death recovery guard: detect death messages ───────────────────────
         deathRecoveryGuard.onChatMessage(event);
 
@@ -1823,27 +1833,6 @@ public class RuneAlyticsPlugin extends Plugin
     // ═════════════════════════════════════════════════════════════════════════
     //  CLAN TRACKING
     // ═════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Detects when a player sends a message in clan chat (identified as FRIENDSCHAT in RuneLite).
-     * Records the sender as a clan member for tracking purposes.
-     *
-     * Note: Method must be named onChatMessage to follow RuneLite's event naming convention.
-     * The clan chat filter is applied inside.
-     */
-    @Subscribe
-    public void onChatMessage(ChatMessage event)
-    {
-        // Clan chat is identified as FRIENDSCHAT in RuneLite's ChatMessageType
-        if (event.getType() != ChatMessageType.FRIENDSCHAT) return;
-        if (!state.isLoggedIn()) return;
-
-        String username = event.getName();
-        if (username == null || username.isEmpty()) return;
-
-        // Record this player as a clan member (we don't know if they use RuneAlytics yet)
-        clanManager.recordMember(username, false);
-    }
 
     /**
      * Detects clan membership changes and updates clan status.
