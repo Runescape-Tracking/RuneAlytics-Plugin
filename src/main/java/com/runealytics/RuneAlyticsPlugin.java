@@ -1898,38 +1898,40 @@ public class RuneAlyticsPlugin extends Plugin
     /**
      * Attempts to detect the player's current clan from game state and records it.
      * Safe to call multiple times; idempotent.
+     *
+     * Note: This uses best-effort widget searching since widget IDs vary by RuneLite version.
+     * If detection fails, clan membership will be recorded when players message in clan chat.
      */
     private void detectAndRecordCurrentClan()
     {
         Player local = client.getLocalPlayer();
         if (local == null) return;
 
-        // Check if player is in a clan by reading the player's clan info
-        // This is a best-effort attempt; exact method may vary by RuneLite version
         try
         {
-            // Get clan info from local player if available
             String clanName = null;
-            String clanTag = null;
 
-            // RuneLite's Player object may expose clan information
-            // Fallback: check if we can read from the clan chat widget
-            Widget clanWidget = client.getWidget(ComponentID.CLAN_MEMBER_LIST);
-            if (clanWidget != null)
+            // Try to find clan widget by searching common group IDs (589-595)
+            for (int groupId = 589; groupId <= 595; groupId++)
             {
-                // Try to extract clan name from widget title
-                String text = clanWidget.getName();
-                if (text != null && !text.isEmpty())
+                Widget candidate = client.getWidget(groupId, 0);
+                if (candidate != null && candidate.getName() != null)
                 {
-                    clanName = text;
-                    log.debug("[Clan] Detected clan from widget: {}", clanName);
+                    String name = candidate.getName().toLowerCase();
+                    // Look for clan-related widget titles
+                    if (name.contains("clan") || name.contains("member"))
+                    {
+                        clanName = candidate.getName();
+                        log.debug("[Clan] Detected clan from widget: {}", clanName);
+                        break;
+                    }
                 }
             }
 
             // If we found a clan, record it
             if (clanName != null && !clanName.isEmpty())
             {
-                clanManager.onClanJoined(clanName, clanTag);
+                clanManager.onClanJoined(clanName, null);
             }
         }
         catch (Exception e)
