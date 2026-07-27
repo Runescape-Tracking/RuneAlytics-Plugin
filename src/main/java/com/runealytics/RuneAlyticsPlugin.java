@@ -1482,6 +1482,9 @@ public class RuneAlyticsPlugin extends Plugin
             // Idempotent; the heartbeat waits until the account is verified.
             startHeartbeat();
 
+            // ── Clan detection: attempt to detect and record current clan ────────
+            clientThread.invokeLater(this::detectAndRecordCurrentClan);
+
             // Resolve the player's RSN, falling back to the stored verified
             // username (getLocalPlayer() can briefly be null during early LOGGED_IN).
             String username = client.getLocalPlayer() != null
@@ -1833,26 +1836,6 @@ public class RuneAlyticsPlugin extends Plugin
     // ═════════════════════════════════════════════════════════════════════════
     //  CLAN TRACKING
     // ═════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Detects clan membership changes and updates clan status.
-     * Called on login to detect initial clan, and on logout to clear clan state.
-     */
-    @Subscribe
-    public void onGameStateChangedForClan(GameStateChanged event)
-    {
-        GameState gs = event.getGameState();
-
-        if (gs == GameState.LOGGED_IN && state.isLoggedIn())
-        {
-            // Try to detect clan on login
-            clientThread.invokeLater(this::detectAndRecordCurrentClan);
-        }
-        else if (gs == GameState.LOGIN_SCREEN)
-        {
-            // Clan state is cleared by the main onGameStateChanged handler
-        }
-    }
 
     /**
      * Parses the clan member list from the clan info widget when it's loaded.
