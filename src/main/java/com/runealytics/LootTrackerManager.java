@@ -194,6 +194,7 @@ public class LootTrackerManager
                     .put("Nex",                 11278)
                     .put("Royal Titans",        13751)
                     .put("The Hueycoatl",       14000)
+                    .put("Doom of Mokhaiotl",   14707)
                     .put("Moons of Peril",      13010)
                     .put("Yama",                12821)
                     .put("Araxxor",             13668)
@@ -337,6 +338,16 @@ public class LootTrackerManager
      * (identical consecutive batches are legitimate there).
      */
     private final RewardBatchDeduplicator rewardBatchDeduplicator = new RewardBatchDeduplicator();
+
+    /**
+     * Pending Doom of Mokhaiotl loot that has been earned (chest appears) but
+     * not yet claimed. Cleared when the player claims the loot or dies. Used to
+     * separate "earned" from "claimed" drops so users can see what they earned
+     * even if they lost it on death.
+     *
+     * <p>Key = "Doom of Mokhaiotl"; value = list of drops found in the chest.</p>
+     */
+    private final Map<String, List<LootStorageData.DropRecord>> pendingMokhaiotlLoot = new ConcurrentHashMap<>();
 
     /**
      * How long after a kill record a late-arriving chat KC may still relabel
@@ -676,6 +687,72 @@ public class LootTrackerManager
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
         if (drops.isEmpty()) return;
 
+        recordKill(name, npcId, 0, client.getWorld(), drops);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  PENDING LOOT – DOOM OF MOKHAIOTL (earned vs. claimed)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Stores loot from a Doom of Mokhaiotl chest as "pending" (earned but not
+     * yet claimed). This separates the "what was earned" from "what was kept"
+     * so users can see earnings even if they die or don't claim the loot.
+     *
+     * @param items the drops found in the chest
+     */
+    public void storePendingMokhaiotlLoot(List<ItemStack> items)
+    {
+        if (items == null || items.isEmpty()) return;
+
+        List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
+        if (drops.isEmpty()) return;
+
+        pendingMokhaiotlLoot.put("Doom of Mokhaiotl", drops);
+        log.debug("Pending Mokhaiotl loot stored: {} items", drops.size());
+    }
+
+    /**
+     * Clears pending Mokhaiotl loot without recording it (e.g., on player death).
+     */
+    public void clearPendingMokhaiotlLoot()
+    {
+        if (pendingMokhaiotlLoot.containsKey("Doom of Mokhaiotl"))
+        {
+            List<LootStorageData.DropRecord> cleared = pendingMokhaiotlLoot.remove("Doom of Mokhaiotl");
+            log.debug("Pending Mokhaiotl loot cleared (died): {} items", cleared.size());
+        }
+    }
+
+    /**
+     * Retrieves and clears pending Mokhaiotl loot, moving it to actual tracking
+     * when the player claims it (either to bank or inventory).
+     *
+     * @return the pending loot, or empty list if none was pending
+     */
+    public List<LootStorageData.DropRecord> claimPendingMokhaiotlLoot()
+    {
+        List<LootStorageData.DropRecord> drops = pendingMokhaiotlLoot.remove("Doom of Mokhaiotl");
+        if (drops != null && !drops.isEmpty())
+        {
+            log.debug("Claiming pending Mokhaiotl loot: {} items", drops.size());
+            return drops;
+        }
+        return new ArrayList<>();
+    }
+
+    /**
+     * Records claimed Mokhaiotl loot (from pending to actual tracking).
+     * Called when PlayerLootReceived fires after the player claims chest loot.
+     *
+     * @param drops the previously pending drops to record
+     */
+    public void recordClaimedMokhaiotlLoot(List<LootStorageData.DropRecord> drops)
+    {
+        if (drops == null || drops.isEmpty()) return;
+
+        String name = "Doom of Mokhaiotl";
+        int npcId = BOSS_NAME_TO_ID.get(name);
         recordKill(name, npcId, 0, client.getWorld(), drops);
     }
 
@@ -1072,6 +1149,38 @@ public class LootTrackerManager
 
             log.debug("Widget loot '{}' (group {}): {} items", sourceName, groupId, items.size());
             processPlayerLoot(sourceName, items);
+
+        }), delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Reads Doom of Mokhaiotl chest and stores the loot as pending (earned but
+     * not yet claimed). Pending loot is recorded only when the player claims it
+     * or cleared if they die.
+     */
+    public void readPendingMokhaiotlLoot()
+    {
+        long delayMs = 300L;
+
+        executorService.schedule(() -> clientThread.invokeLater(() ->
+        {
+            List<ItemStack> items = new ArrayList<>();
+
+            for (int i = 0; i < 150; i++)
+            {
+                Widget w = client.getWidget(RewardSources.WIDGET_DOOM_OF_MOKHAIOTL, i);
+                if (w == null) continue;
+                collectWidgetItemsDeep(w, items, WIDGET_ITEM_SEARCH_DEPTH);
+            }
+
+            if (items.isEmpty())
+            {
+                log.debug("readPendingMokhaiotlLoot: no items found in chest");
+                return;
+            }
+
+            log.debug("Mokhaiotl chest found: {} items (stored as pending)", items.size());
+            storePendingMokhaiotlLoot(items);
 
         }), delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
@@ -1691,12 +1800,13 @@ public class LootTrackerManager
         hiddenBosses.clear();
         loadedAccount = null;
 
-        // Account isolation: pending KC observations and reward fingerprints
-        // belong to the account that just left and must never apply to the
-        // next login.
+        // Account isolation: pending KC observations, reward fingerprints,
+        // and pending loot belong to the account that just left and must never
+        // apply to the next login.
         killCountResolver.clear();
         rewardBatchDeduplicator.clear();
         lastPlayerLootTime.clear();
+        pendingMokhaiotlLoot.clear();
 
         if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
         log.debug("Loot tracker reset for logout");

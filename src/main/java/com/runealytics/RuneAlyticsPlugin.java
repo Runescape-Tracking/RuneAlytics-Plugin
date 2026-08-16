@@ -650,6 +650,13 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Death recovery guard: detect local player death ───────────────────
         deathRecoveryGuard.onActorDeath(event);
 
+        // ── Clear pending Mokhaiotl loot if player dies ────────────────────────
+        // When the player dies, any pending chest loot is deleted, so clear it.
+        if (actor instanceof Player && ((Player) actor).getName().equals(client.getLocalPlayer().getName()))
+        {
+            lootManager.clearPendingMokhaiotlLoot();
+        }
+
         // ── Matchmaking: report player deaths to server ───────────────────────
         if (actor instanceof Player)
         {
@@ -705,6 +712,20 @@ public class RuneAlyticsPlugin extends Plugin
         List<ItemStack> items = new ArrayList<>();
         for (net.runelite.client.game.ItemStack i : rlItems)
             items.add(new ItemStack(i.getId(), i.getQuantity()));
+
+        // ── Special handling for Mokhaiotl: move pending loot to actual tracking ─
+        if ("Doom of Mokhaiotl".equals(source))
+        {
+            List<LootStorageData.DropRecord> pendingDrops = lootManager.claimPendingMokhaiotlLoot();
+            if (!pendingDrops.isEmpty())
+            {
+                // Use pending loot as authoritative (chest contents), ignore PlayerLootReceived items
+                // since they might be partial if interface was closed early
+                log.debug("Claiming Mokhaiotl pending loot: {} items from chest", pendingDrops.size());
+                lootManager.recordClaimedMokhaiotlLoot(pendingDrops);
+            }
+            return;
+        }
 
         lootManager.processPlayerLoot(source, items);
     }
@@ -768,10 +789,9 @@ public class RuneAlyticsPlugin extends Plugin
         if (gid == WIDGET_DOOM_OF_MOKHAIOTL)
         {
             lastChestSource = "Doom of Mokhaiotl";
-            // Mokhaiotl chest widget needs aggressive reading with longer delay to
-            // capture all items reliably. Read immediately and via tree walk to
-            // ensure no drops are missed whether claimed to bank or inventory.
-            lootManager.readWidgetLoot("Doom of Mokhaiotl", WIDGET_DOOM_OF_MOKHAIOTL, 150);
+            // Mokhaiotl chest: store as pending loot (earned but not yet claimed).
+            // Loot is recorded only when claimed, cleared if player dies.
+            lootManager.readPendingMokhaiotlLoot();
             return;
         }
 
