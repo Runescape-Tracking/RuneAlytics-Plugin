@@ -742,6 +742,21 @@ public class LootTrackerManager
     }
 
     /**
+     * Returns the total GP value of pending Mokhaiotl loot.
+     *
+     * @return total GP value, or 0 if no pending loot
+     */
+    public long getPendingMokhaiotlLootValue()
+    {
+        List<LootStorageData.DropRecord> drops = pendingMokhaiotlLoot.get("Doom of Mokhaiotl");
+        if (drops == null || drops.isEmpty()) return 0L;
+
+        return drops.stream()
+                .mapToLong(LootStorageData.DropRecord::getTotalValue)
+                .sum();
+    }
+
+    /**
      * Records claimed Mokhaiotl loot (from pending to actual tracking).
      * Called when PlayerLootReceived fires after the player claims chest loot.
      *

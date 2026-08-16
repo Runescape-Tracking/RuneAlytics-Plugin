@@ -654,6 +654,7 @@ public class RuneAlyticsPlugin extends Plugin
         // When the player dies, any pending chest loot is deleted, so clear it.
         if (actor instanceof Player && ((Player) actor).getName().equals(client.getLocalPlayer().getName()))
         {
+            sendMokhaiotlDeathMessage();
             lootManager.clearPendingMokhaiotlLoot();
         }
 
@@ -792,6 +793,9 @@ public class RuneAlyticsPlugin extends Plugin
             // Mokhaiotl chest: store as pending loot (earned but not yet claimed).
             // Loot is recorded only when claimed, cleared if player dies.
             lootManager.readPendingMokhaiotlLoot();
+
+            // Display the chest value when it appears (delayed to ensure loot is read first)
+            executorService.schedule(this::sendMokhaiotlWaveMessage, 400, TimeUnit.MILLISECONDS);
             return;
         }
 
@@ -2573,6 +2577,39 @@ public class RuneAlyticsPlugin extends Plugin
         state.setCurrentAccountSubtype(determineAccountSubtype());
         log.debug("[GameMode] mode={} subtype={} world={}",
                 state.getCurrentGameMode(), state.getCurrentAccountSubtype(), client.getWorld());
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  MOKHAIOTL MESSAGE NOTIFICATIONS
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Sends a chat message showing the current pending Mokhaiotl chest value.
+     * Called at the start of each wave to inform the player of their earnings.
+     */
+    private void sendMokhaiotlWaveMessage()
+    {
+        long chestValue = lootManager.getPendingMokhaiotlLootValue();
+        if (chestValue <= 0) return;
+
+        String formattedValue = String.format("%,d", chestValue);
+        String message = String.format("<col=ff6b35>Mokhaiotl Chest: <col=ffffff>%s gp", formattedValue);
+        client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null);
+    }
+
+    /**
+     * Sends a chat message showing the GP value lost when dying to Mokhaiotl.
+     * Called when the player dies while having pending chest loot.
+     */
+    private void sendMokhaiotlDeathMessage()
+    {
+        long lostValue = lootManager.getPendingMokhaiotlLootValue();
+        if (lostValue <= 0) return;
+
+        String formattedValue = String.format("%,d", lostValue);
+        String message = String.format("<col=ff0000>Lost <col=ffffff>%s gp <col=ff0000>dying to Doom", formattedValue);
+        client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null);
+        log.debug("Mokhaiotl death loss: {} gp", lostValue);
     }
 
     private BufferedImage loadPluginIcon()
