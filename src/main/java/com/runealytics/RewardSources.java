@@ -95,7 +95,7 @@ public final class RewardSources
             .put(WIDGET_ZALCANO,            new Source("Zalcano",            CONTAINER_ZALCANO,   0))
             .put(WIDGET_ROYAL_TITANS,       new Source("Royal Titans",       null, 100))
             .put(WIDGET_YAMA,               new Source("Yama",               null, 100))
-            .put(WIDGET_DOOM_OF_MOKHAIOTL,  new Source("Doom of Mokhaiotl",  null, 100))
+            .put(WIDGET_DOOM_OF_MOKHAIOTL,  new Source("Doom of Mokhaiotl",  null, 150))
             .put(WIDGET_COLOSSEUM,          new Source("Fortis Colosseum",   null, 150))
             .put(WIDGET_HESPORI,            new Source("Hespori",            null,  60))
             .put(WIDGET_TEMPOROSS,          new Source("Tempoross",          null,  80))

@@ -53,10 +53,11 @@ public class RuneAlyticsPlugin extends Plugin
     //  Aliases for the widgets that need bespoke handling in onWidgetLoaded.
     //  Canonical values live in RewardSources.
     // ═════════════════════════════════════════════════════════════════════════
-    static final int WIDGET_WHISPERER  = RewardSources.WIDGET_WHISPERER;
-    static final int WIDGET_WINTERTODT = RewardSources.WIDGET_WINTERTODT;
-    static final int WIDGET_NIGHTMARE  = RewardSources.WIDGET_NIGHTMARE;
-    static final int WIDGET_CLUE       = RewardSources.WIDGET_CLUE;
+    static final int WIDGET_WHISPERER           = RewardSources.WIDGET_WHISPERER;
+    static final int WIDGET_WINTERTODT          = RewardSources.WIDGET_WINTERTODT;
+    static final int WIDGET_NIGHTMARE           = RewardSources.WIDGET_NIGHTMARE;
+    static final int WIDGET_CLUE                = RewardSources.WIDGET_CLUE;
+    static final int WIDGET_DOOM_OF_MOKHAIOTL   = RewardSources.WIDGET_DOOM_OF_MOKHAIOTL;
 
     // ── Timing ────────────────────────────────────────────────────────────────
     /** ms after a kill during which spawning ground items are attributed to it */
@@ -762,6 +763,15 @@ public class RuneAlyticsPlugin extends Plugin
             String src = (lastChestSource != null) ? lastChestSource : "Clue Scroll";
             lastChestSource = null;
             lootManager.readClueReward(src);
+            return;
+        }
+        if (gid == WIDGET_DOOM_OF_MOKHAIOTL)
+        {
+            lastChestSource = "Doom of Mokhaiotl";
+            // Mokhaiotl chest widget needs aggressive reading with longer delay to
+            // capture all items reliably. Read immediately and via tree walk to
+            // ensure no drops are missed whether claimed to bank or inventory.
+            lootManager.readWidgetLoot("Doom of Mokhaiotl", WIDGET_DOOM_OF_MOKHAIOTL, 150);
             return;
         }
 
