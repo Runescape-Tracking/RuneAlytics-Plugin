@@ -96,7 +96,7 @@ public class LogConfiguration
 
         try
         {
-            JsonObject root = com.google.gson.JsonParser.parseString(responseJson).getAsJsonObject();
+            JsonObject root = com.google.gson.JsonParser.parse(responseJson).getAsJsonObject();
             if (!root.has("log_config")) return;
 
             JsonObject logConfig = root.getAsJsonObject("log_config");
