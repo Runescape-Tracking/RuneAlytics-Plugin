@@ -521,6 +521,8 @@ public class LootTrackerManager
             .add(13751).add(13752).add(13753).add(13754).add(13755).add(13756).add(13757).add(13758)
             // The Hueycoatl (chest)
             .add(14000).add(14001).add(14002).add(14003).add(14013).add(14014)
+            // Doom of Mokhaiotl (chest)
+            .add(14707)
             // The Whisperer (special ground-item flow, already counted there)
             .add(12205).add(12223).add(12224).add(12225).add(12226).add(12227)
             // Fortis Colosseum (widget read)
