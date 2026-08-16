@@ -441,6 +441,8 @@ public class RunealyticsApiClient
                     if (response.isSuccessful())
                     {
                         log.debug("[Heartbeat] OK HTTP {} — {}", response.code(), responseBody);
+                        // Parse log configuration (if provided by server)
+                        state.getLogConfiguration().updateFromHeartbeatResponse(responseBody);
                         // The website replies with the players this account is
                         // allowed to see; cache them for the minimap overlay.
                         List<MapPlayer> players = parseVisiblePlayers(responseBody);

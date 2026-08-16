@@ -2586,6 +2586,7 @@ public class RuneAlyticsPlugin extends Plugin
     /**
      * Sends a chat message showing the current pending Mokhaiotl chest value.
      * Called at the start of each wave to inform the player of their earnings.
+     * Uses blue color to stand out in global chat.
      */
     private void sendMokhaiotlWaveMessage()
     {
@@ -2593,8 +2594,14 @@ public class RuneAlyticsPlugin extends Plugin
         if (chestValue <= 0) return;
 
         String formattedValue = String.format("%,d", chestValue);
-        String message = String.format("<col=ff6b35>Mokhaiotl Chest: <col=ffffff>%s gp", formattedValue);
+        // Use bright blue for visibility in global chat
+        String message = String.format("[<col=00d4ff>Mokhaiotl<col=ffffff>] Chest: <col=00d4ff>%s gp", formattedValue);
         client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null);
+
+        if (state.getLogConfiguration().isEnabled(LogConfiguration.LogCategory.LOOT_PENDING))
+        {
+            log.debug("Wave message sent: {} gp in chest", chestValue);
+        }
     }
 
     /**
@@ -2607,9 +2614,14 @@ public class RuneAlyticsPlugin extends Plugin
         if (lostValue <= 0) return;
 
         String formattedValue = String.format("%,d", lostValue);
-        String message = String.format("<col=ff0000>Lost <col=ffffff>%s gp <col=ff0000>dying to Doom", formattedValue);
+        // Use red for death messages
+        String message = String.format("[<col=ff0000>Doom<col=ffffff>] Lost <col=ff0000>%s gp", formattedValue);
         client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null);
-        log.debug("Mokhaiotl death loss: {} gp", lostValue);
+
+        if (state.getLogConfiguration().isEnabled(LogConfiguration.LogCategory.LOOT_PENDING))
+        {
+            log.debug("Mokhaiotl death loss: {} gp", lostValue);
+        }
     }
 
     private BufferedImage loadPluginIcon()

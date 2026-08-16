@@ -66,6 +66,13 @@ public class RuneAlyticsState
     private volatile List<MapPlayer> visibleMapPlayers = Collections.emptyList();
 
     /**
+     * Server-provided logging configuration, updated from each
+     * {@code /plugin/heartbeat} response. Specifies which categories of logs
+     * should be enabled. Defaults to all enabled.
+     */
+    private final LogConfiguration logConfiguration = new LogConfiguration();
+
+    /**
      * Stores an unmodifiable snapshot so the client-thread overlay can iterate
      * {@link #visibleMapPlayers} without risk of the writing thread mutating the
      * backing list mid-render. Defined explicitly so Lombok's {@code @Setter}
