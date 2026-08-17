@@ -1790,11 +1790,23 @@ public class RuneAlyticsPlugin extends Plugin
                 && gameTickCount >= lampXpSuppressUntilTick)
         {
             String key = skill.getName();
-            clientThread.invokeLater(() -> {
+            // Farming items appear very quickly after XP gain, so take snapshot
+            // immediately rather than deferring to next client thread iteration.
+            // Other skills can defer safely as their items appear more slowly.
+            if (skill == Skill.FARMING)
+            {
                 if (!skillingSnapshot.containsKey(key))
                     skillingSnapshot.put(key, getCurrentInventory());
                 skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
-            });
+            }
+            else
+            {
+                clientThread.invokeLater(() -> {
+                    if (!skillingSnapshot.containsKey(key))
+                        skillingSnapshot.put(key, getCurrentInventory());
+                    skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
+                });
+            }
         }
     }
 
