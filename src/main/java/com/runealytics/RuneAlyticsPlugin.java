@@ -75,9 +75,10 @@ public class RuneAlyticsPlugin extends Plugin
     private static final long PICKPOCKET_WINDOW_MS = 1_800;
     /**
      * Window (ms) an open skilling-snapshot stays live for inventory diffs to be
-     * attributed to the skill that opened it.
+     * attributed to the skill that opened it. Set to 3000ms to accommodate slower
+     * skills like Farming where items can take ~2s to appear after XP gain.
      */
-    private static final long SKILLING_SESSION_MS  = 1_500;
+    private static final long SKILLING_SESSION_MS  = 3_000;
 
     /**
      * Tick window after a lamp/book menu click during which XP gains skip the
