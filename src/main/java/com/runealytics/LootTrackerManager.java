@@ -548,7 +548,10 @@ public class LootTrackerManager
             // Theatre of Blood adds (loot comes from chest, not individual mobs)
             "nylocas vasilias", "nylocas", "bloat", "pestilent",
             // Tombs of Amascut adds (loot comes from chest, not individual mobs)
-            "scabarite", "cursed", "scarab", "soul"
+            "scabarite", "cursed", "scarab", "soul",
+            // Corrupted Gauntlet adds (loot comes from chest, not individual mobs)
+            "corrupted wolf", "corrupted spider", "corrupted scorpion",
+            "corrupted ogre", "corrupted unicorn", "corrupted bat"
     );
 
     /**

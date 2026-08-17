@@ -942,8 +942,18 @@ public class RuneAlyticsPlugin extends Plugin
                     List<ItemStack> consumed = excludeEquipmentMovement(diffInventory(inv, snap), justEquipped);
                     if (gained.isEmpty() && consumed.isEmpty()) continue;
 
+                    if (skill.equals("Farming"))
+                    {
+                        log.debug("[Farming] Inventory diff: gained={} items, consumed={} items",
+                                gained.size(), consumed.size());
+                        if (!gained.isEmpty())
+                            log.debug("[Farming] Gained items: {}", gained);
+                    }
+
                     if (!gained.isEmpty() && SKILLING_LOOT_NAMES.contains(skill))
                     {
+                        log.debug("[Loot] Recording {} loot for '{}': {} items",
+                                skill, skill, gained.size());
                         lootManager.processSkillLoot(skill, new ArrayList<>(gained));
                     }
                     recordSkillEconomy(skill, gained, consumed);
@@ -1796,8 +1806,13 @@ public class RuneAlyticsPlugin extends Plugin
             if (skill == Skill.FARMING)
             {
                 if (!skillingSnapshot.containsKey(key))
-                    skillingSnapshot.put(key, getCurrentInventory());
+                {
+                    List<ItemStack> snap = getCurrentInventory();
+                    skillingSnapshot.put(key, snap);
+                    log.debug("Farming snapshot taken immediately: {} slots", snap.size());
+                }
                 skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
+                log.debug("Farming session opened: expires in {}ms", SKILLING_SESSION_MS);
             }
             else
             {
