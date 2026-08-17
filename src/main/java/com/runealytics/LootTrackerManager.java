@@ -2910,6 +2910,9 @@ public class LootTrackerManager
         if (lower.contains("gauntlet") && lower.contains("complete"))
             return lower.contains("corrupted") ? "Corrupted Gauntlet" : "The Gauntlet";
 
+        if (lower.contains("mokhaiotl"))
+            return "Doom of Mokhaiotl";
+
         if (lower.contains("phosani") && lower.contains("defeated"))
             return "Phosani's Nightmare";
         if (lower.contains("nightmare") && lower.contains("defeated"))
