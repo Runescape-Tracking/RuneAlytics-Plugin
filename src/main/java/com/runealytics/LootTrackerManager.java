@@ -541,7 +541,14 @@ public class LootTrackerManager
             "tz-kih", "tz-kek", "tok-xil", "yt-mejkot", "ket-zek",
             // Fortis Colosseum waves (Sol Heredit's loot comes via widget read)
             "serpent shaman", "jaguar warrior", "javelin colossus",
-            "manticore", "shockwave colossus", "fremennik seer", "minotaur"
+            "manticore", "shockwave colossus", "fremennik seer", "minotaur",
+            // Chambers of Xeric adds (loot comes from chest, not individual mobs)
+            "guardian", "muttadile", "tekton", "ice demon", "lizardman shaman",
+            "scout", "soldier",
+            // Theatre of Blood adds (loot comes from chest, not individual mobs)
+            "nylocas vasilias", "nylocas", "bloat", "pestilent",
+            // Tombs of Amascut adds (loot comes from chest, not individual mobs)
+            "scabarite", "cursed", "scarab", "soul"
     );
 
     /**
