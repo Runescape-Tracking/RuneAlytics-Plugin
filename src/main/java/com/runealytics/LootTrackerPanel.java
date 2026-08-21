@@ -1126,29 +1126,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         rightPanel.setOpaque(false);
 
-        // Add unhide button if there are hidden items
-        if (hiddenItemCount > 0)
-        {
-            JButton unhideButton = new JButton("Unhide (" + hiddenItemCount + ")");
-            unhideButton.setFont(CALIBRI_PLAIN);
-            unhideButton.setForeground(new Color(200, 160, 80));
-            unhideButton.setBackground(new Color(50, 40, 20));
-            unhideButton.setBorder(BorderFactory.createLineBorder(new Color(100, 80, 40), 1));
-            unhideButton.setFocusPainted(false);
-            unhideButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-            unhideButton.setPreferredSize(new Dimension(100, 18));
-            unhideButton.addActionListener(e -> {
-                for (BossKillStats.AggregatedDrop drop : drops)
-                {
-                    if (lootManager.isDropHidden(npcName, drop.getItemId()))
-                        lootManager.unhideDropForNpc(npcName, drop.getItemId());
-                }
-                invalidateFingerprint();
-                refreshDisplay();
-            });
-            rightPanel.add(unhideButton);
-        }
-
         rightPanel.add(valueLabel);
 
         headerRow.add(nameLabel,  BorderLayout.WEST);
@@ -1177,6 +1154,42 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             refreshDisplay();
         });
         headerMenu.add(toggleBossHide);
+        headerMenu.addSeparator();
+
+        // Add "Hide Items" option if there are visible items
+        long visibleItemCount = drops.stream()
+                .filter(d -> !lootManager.isDropHidden(npcName, d.getItemId()))
+                .count();
+        if (visibleItemCount > 0)
+        {
+            JMenuItem hideItems = new JMenuItem("Hide Items (" + visibleItemCount + ")");
+            hideItems.addActionListener(e -> {
+                for (BossKillStats.AggregatedDrop drop : drops)
+                {
+                    if (!lootManager.isDropHidden(npcName, drop.getItemId()))
+                        lootManager.hideDropForNpc(npcName, drop.getItemId());
+                }
+                invalidateFingerprint();
+                refreshDisplay();
+            });
+            headerMenu.add(hideItems);
+        }
+
+        // Add "Unhide Items" option if there are hidden items
+        if (hiddenItemCount > 0)
+        {
+            JMenuItem unhideItems = new JMenuItem("Unhide Items (" + hiddenItemCount + ")");
+            unhideItems.addActionListener(e -> {
+                for (BossKillStats.AggregatedDrop drop : drops)
+                {
+                    if (lootManager.isDropHidden(npcName, drop.getItemId()))
+                        lootManager.unhideDropForNpc(npcName, drop.getItemId());
+                }
+                invalidateFingerprint();
+                refreshDisplay();
+            });
+            headerMenu.add(unhideItems);
+        }
 
         headerRow.addMouseListener(new MouseAdapter()
         {
