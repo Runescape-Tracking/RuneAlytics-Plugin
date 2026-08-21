@@ -37,7 +37,9 @@ public class LootTrackerManagerTest
                 mock(LootTrackerApiClient.class),
                 mock(ConfigManager.class),
                 mock(ScheduledExecutorService.class),
-                new Gson());
+                new Gson(),
+                mock(DoomEncounterTracker.class),
+                mock(GroundItemAttributor.class));
     }
 
     // ── normalizeBossName (static) ──────────────────────────────────────────────
