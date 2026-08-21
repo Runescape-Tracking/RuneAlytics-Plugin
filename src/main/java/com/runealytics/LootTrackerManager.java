@@ -1799,8 +1799,6 @@ public class LootTrackerManager
 
                 if (stats.getKillCount() != bd.getKillCount())
                 {
-                    log.debug("KC mismatch '{}': memory={} disk={}",
-                            entry.getKey(), stats.getKillCount(), bd.getKillCount());
                     stats.setKillCount(bd.getKillCount());
                 }
             }
