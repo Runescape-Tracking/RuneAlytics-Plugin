@@ -1888,7 +1888,11 @@ public class RuneAlyticsPlugin extends Plugin
     /**
      * Detects clan membership changes and updates clan status.
      * Called on login to detect initial clan, and on logout to clear clan state.
+     *
+     * NOTE: Requires ComponentID.CLAN_MEMBER_LIST which is not available in current RuneLite API.
+     * This handler is disabled until proper clan detection mechanism is available.
      */
+    /*
     @Subscribe
     public void onGameStateChangedForClan(GameStateChanged event)
     {
@@ -1904,11 +1908,16 @@ public class RuneAlyticsPlugin extends Plugin
             // Clan state is cleared by the main onGameStateChanged handler
         }
     }
+    */
 
     /**
      * Parses the clan member list from the clan info widget when it's loaded.
      * This is called when the player opens the clan member list UI.
+     *
+     * NOTE: Requires ComponentID.CLAN_MEMBER_LIST which is not available in current RuneLite API.
+     * This handler is disabled until proper clan widget detection is available.
      */
+    /*
     @Subscribe
     public void onWidgetLoadedForClan(WidgetLoaded event)
     {
@@ -1923,11 +1932,16 @@ public class RuneAlyticsPlugin extends Plugin
             clientThread.invokeLater(() -> parseClanMemberList(widget));
         }
     }
+    */
 
     /**
      * Attempts to detect the player's current clan from game state and records it.
      * Safe to call multiple times; idempotent.
+     *
+     * NOTE: Requires ComponentID.CLAN_MEMBER_LIST which is not available in current RuneLite API.
+     * This method is disabled until proper clan detection is available.
      */
+    /*
     private void detectAndRecordCurrentClan()
     {
         Player local = client.getLocalPlayer();
@@ -1966,11 +1980,16 @@ public class RuneAlyticsPlugin extends Plugin
             log.debug("[Clan] Error detecting current clan: {}", e.getMessage());
         }
     }
+    */
 
     /**
      * Extracts clan member names from the clan member list widget.
      * Parses the text content to build a list of member names.
+     *
+     * NOTE: This method is disabled as it depends on onWidgetLoadedForClan which
+     * requires unavailable ComponentID.CLAN_MEMBER_LIST.
      */
+    /*
     private void parseClanMemberList(Widget widget)
     {
         List<String> members = new ArrayList<>();
@@ -2012,6 +2031,7 @@ public class RuneAlyticsPlugin extends Plugin
             clanManager.updateMemberList(members);
         }
     }
+    */
 
     // ═════════════════════════════════════════════════════════════════════════
     //  XP SESSION SNAPSHOT SYNC  (XP Tracker tab)
