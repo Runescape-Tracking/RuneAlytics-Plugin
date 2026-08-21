@@ -706,9 +706,7 @@ public class RuneAlyticsPlugin extends Plugin
         for (net.runelite.client.game.ItemStack i : rlItems)
             items.add(new ItemStack(i.getId(), i.getQuantity()));
 
-        log.debug("PlayerLootReceived: source='{}' items={} (claimed to {})",
-                source, items.size(),
-                event.isBank() ? "BANK" : "INVENTORY");
+        log.debug("PlayerLootReceived: source='{}' items={}", source, items.size());
 
         lootManager.processPlayerLoot(source, items);
     }
