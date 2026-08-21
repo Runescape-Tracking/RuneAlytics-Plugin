@@ -172,8 +172,6 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private LootSyncMergeService     lootSyncMergeService;
     @Inject private DeathRecoveryGuard       deathRecoveryGuard;
     @Inject private ClanManager              clanManager;
-    @Inject private ServerNpcLootHandler     serverNpcLootHandler;
-    @Inject private PluginLootHandler        pluginLootHandler;
     @Inject private DoomEncounterTracker     doomEncounterTracker;
     @Inject private GroundItemAttributor     groundItemAttributor;
 
@@ -618,32 +616,6 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         lootManager.processNpcLoot(npc, items);
-    }
-
-    /**
-     * Server-authoritative NPC loot from RuneLite's ServerNpcLoot event.
-     * This has higher priority than NpcLootReceived because it is server-confirmed.
-     */
-    @Subscribe
-    public void onServerNpcLoot(net.runelite.client.events.ServerNpcLoot event)
-    {
-        if (!config.enableLootTracking()) return;
-        serverNpcLootHandler.onServerNpcLoot(event);
-        // LootTrackerManager will consume this from the handler's buffer when needed
-        updateCurrentGameMode();
-    }
-
-    /**
-     * Third-party plugin-generated loot events. Lower priority than official
-     * RuneLite events but useful for specialized encounter detection.
-     */
-    @Subscribe
-    public void onPluginLootReceived(net.runelite.client.events.PluginLootReceived event)
-    {
-        if (!config.enableLootTracking()) return;
-        pluginLootHandler.onPluginLootReceived(event);
-        // LootTrackerManager will consume this from the handler's buffer when needed
-        updateCurrentGameMode();
     }
 
     // ═════════════════════════════════════════════════════════════════════════

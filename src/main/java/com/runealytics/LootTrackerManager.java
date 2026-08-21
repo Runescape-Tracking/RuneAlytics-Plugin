@@ -264,8 +264,6 @@ public class LootTrackerManager
     private final ConfigManager            configManager;
     private final ScheduledExecutorService executorService;
     private final Gson                     gson;
-    private final ServerNpcLootHandler     serverNpcLootHandler;
-    private final PluginLootHandler        pluginLootHandler;
     private final DoomEncounterTracker     doomEncounterTracker;
     private final GroundItemAttributor     groundItemAttributor;
 
@@ -378,8 +376,6 @@ public class LootTrackerManager
             ConfigManager            configManager,
             ScheduledExecutorService executorService,
             Gson                     gson,
-            ServerNpcLootHandler     serverNpcLootHandler,
-            PluginLootHandler        pluginLootHandler,
             DoomEncounterTracker     doomEncounterTracker,
             GroundItemAttributor     groundItemAttributor
     )
@@ -394,8 +390,6 @@ public class LootTrackerManager
         this.configManager           = configManager;
         this.executorService         = executorService;
         this.gson                    = gson.newBuilder().setPrettyPrinting().create();
-        this.serverNpcLootHandler    = serverNpcLootHandler;
-        this.pluginLootHandler       = pluginLootHandler;
         this.doomEncounterTracker    = doomEncounterTracker;
         this.groundItemAttributor    = groundItemAttributor;
     }
@@ -489,60 +483,6 @@ public class LootTrackerManager
         log.debug("Upgraded zero-loot kill for '{}' with {} late drop(s) from a delayed NpcLootReceived",
                 name, items.size());
         return true;
-    }
-
-    /**
-     * Processes ServerNpcLoot events – RuneLite's server-authoritative NPC loot detection.
-     * Higher priority than NpcLootReceived because it is server-confirmed.
-     *
-     * <p>This is called from RuneAlyticsPlugin when a ServerNpcLoot event is buffered.
-     * We consume it from the handler's buffer using the NPC ID as key.</p>
-     */
-    public void processServerNpcLoot(int npcIndex)
-    {
-        if (!config.enableLootTracking()) return;
-
-        ServerNpcLootHandler.ServerNpcLootEvent lootEvent = serverNpcLootHandler.pollForNpc(npcIndex);
-        if (lootEvent == null) return;
-
-        NPC npc = lootEvent.npc;
-        if (npc == null) return;
-
-        log.debug("ServerNpcLoot: '{}' (id={}) items={}", npc.getName(), lootEvent.npcId, lootEvent.items.size());
-
-        String name = normalizeBossName(npc.getName());
-        boolean isBoss = isBoss(lootEvent.npcId, name);
-
-        if (!isBoss && !config.trackAllNpcs())
-        {
-            log.debug("ServerNpcLoot filtered (not a tracked boss): '{}'", name);
-            return;
-        }
-
-        List<LootStorageData.DropRecord> drops = convertToDropRecords(lootEvent.items);
-        recordKill(name, lootEvent.npcId, npc.getCombatLevel(), client.getWorld(), drops);
-    }
-
-    /**
-     * Processes PluginLootReceived events – third-party plugin generated loot.
-     * Lower priority than RuneLite's official events but useful for specialized encounters.
-     */
-    public void processPluginLoot(String source)
-    {
-        if (!config.enableLootTracking()) return;
-
-        PluginLootHandler.PluginLootEvent lootEvent = pluginLootHandler.pollForSource(source);
-        if (lootEvent == null) return;
-
-        log.debug("PluginLoot: source='{}' items={}", source, lootEvent.items.size());
-
-        String name = normalizeBossName(source);
-        int npcId = BOSS_NAME_TO_ID.getOrDefault(name, 0);
-
-        List<LootStorageData.DropRecord> drops = convertToDropRecords(lootEvent.items);
-        if (drops.isEmpty()) return;
-
-        recordKill(name, npcId, 0, client.getWorld(), drops);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1773,8 +1713,6 @@ public class LootTrackerManager
         lastPlayerLootTime.clear();
 
         // Clear pending state from new handlers
-        serverNpcLootHandler.reset();
-        pluginLootHandler.reset();
         doomEncounterTracker.reset();
 
         if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
