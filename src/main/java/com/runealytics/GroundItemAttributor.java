@@ -80,8 +80,7 @@ public class GroundItemAttributor
      * (Cosmetics, boss mechanics, non-drop items, etc.)
      */
     private static final Set<Integer> NON_LOOT_ITEM_IDS = Set.of(
-            ItemID.CLUE_SCROLL, // Handled separately via menu + widget
-            ItemID.BURNING_LOG   // Too common, would create false positives
+            ItemID.CLUE_SCROLL  // Handled separately via menu + widget
     );
 
     private final Client client;

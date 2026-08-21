@@ -112,9 +112,6 @@ public class GroundItemAttributorTest
     {
         assertFalse("Clue scroll should be filtered (handled separately)",
                 attributor.shouldAttributeToKill(ItemID.CLUE_SCROLL, 1, killLocation, killTime));
-
-        assertFalse("Burning log should be filtered (common false positive)",
-                attributor.shouldAttributeToKill(ItemID.BURNING_LOG, 1, killLocation, killTime));
     }
 
     @Test
