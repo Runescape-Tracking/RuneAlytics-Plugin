@@ -950,6 +950,9 @@ public class RuneAlyticsPlugin extends Plugin
                                 gained.size(), consumed.size());
                         if (!gained.isEmpty())
                             log.debug("[Farming] Gained items: {}", gained);
+                        else
+                            log.debug("[Farming] No items detected in diff (snap size={}, current inv size={})",
+                                    snap != null ? snap.size() : "null", inv.size());
                     }
 
                     if (!gained.isEmpty() && SKILLING_LOOT_NAMES.contains(skill))
@@ -1811,7 +1814,11 @@ public class RuneAlyticsPlugin extends Plugin
                 {
                     List<ItemStack> snap = getCurrentInventory();
                     skillingSnapshot.put(key, snap);
-                    log.debug("Farming snapshot taken immediately: {} slots", snap.size());
+                    log.debug("Farming snapshot taken immediately: {} slots — items: {}", snap.size(), snap);
+                }
+                else
+                {
+                    log.debug("Farming XP gained but snapshot already exists (session still active)");
                 }
                 skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
                 log.debug("Farming session opened: expires in {}ms", SKILLING_SESSION_MS);
