@@ -76,9 +76,10 @@ public class RuneAlyticsPlugin extends Plugin
     private static final long PICKPOCKET_WINDOW_MS = 1_800;
     /**
      * Window (ms) an open skilling-snapshot stays live for inventory diffs to be
-     * attributed to the skill that opened it.
+     * attributed to the skill that opened it. Set to 3000ms to accommodate slower
+     * skills like Farming where items can take ~2s to appear after XP gain.
      */
-    private static final long SKILLING_SESSION_MS  = 1_500;
+    private static final long SKILLING_SESSION_MS  = 3_000;
 
     /**
      * Tick window after a lamp/book menu click during which XP gains skip the
@@ -707,6 +708,8 @@ public class RuneAlyticsPlugin extends Plugin
         for (net.runelite.client.game.ItemStack i : rlItems)
             items.add(new ItemStack(i.getId(), i.getQuantity()));
 
+        log.debug("PlayerLootReceived: source='{}' items={}", source, items.size());
+
         lootManager.processPlayerLoot(source, items);
     }
 
@@ -943,8 +946,21 @@ public class RuneAlyticsPlugin extends Plugin
                     List<ItemStack> consumed = excludeEquipmentMovement(diffInventory(inv, snap), justEquipped);
                     if (gained.isEmpty() && consumed.isEmpty()) continue;
 
+                    if (skill.equals("Farming"))
+                    {
+                        log.debug("[Farming] Inventory diff: gained={} items, consumed={} items",
+                                gained.size(), consumed.size());
+                        if (!gained.isEmpty())
+                            log.debug("[Farming] Gained items: {}", gained);
+                        else
+                            log.debug("[Farming] No items detected in diff (snap size={}, current inv size={})",
+                                    snap != null ? snap.size() : "null", inv.size());
+                    }
+
                     if (!gained.isEmpty() && SKILLING_LOOT_NAMES.contains(skill))
                     {
+                        log.debug("[Loot] Recording {} loot for '{}': {} items",
+                                skill, skill, gained.size());
                         lootManager.processSkillLoot(skill, new ArrayList<>(gained));
                     }
                     recordSkillEconomy(skill, gained, consumed);
@@ -1811,11 +1827,32 @@ public class RuneAlyticsPlugin extends Plugin
                 && gameTickCount >= lampXpSuppressUntilTick)
         {
             String key = skill.getName();
-            clientThread.invokeLater(() -> {
+            // Farming items appear very quickly after XP gain, so take snapshot
+            // immediately rather than deferring to next client thread iteration.
+            // Other skills can defer safely as their items appear more slowly.
+            if (skill == Skill.FARMING)
+            {
                 if (!skillingSnapshot.containsKey(key))
-                    skillingSnapshot.put(key, getCurrentInventory());
+                {
+                    List<ItemStack> snap = getCurrentInventory();
+                    skillingSnapshot.put(key, snap);
+                    log.debug("Farming snapshot taken immediately: {} slots — items: {}", snap.size(), snap);
+                }
+                else
+                {
+                    log.debug("Farming XP gained but snapshot already exists (session still active)");
+                }
                 skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
-            });
+                log.debug("Farming session opened: expires in {}ms", SKILLING_SESSION_MS);
+            }
+            else
+            {
+                clientThread.invokeLater(() -> {
+                    if (!skillingSnapshot.containsKey(key))
+                        skillingSnapshot.put(key, getCurrentInventory());
+                    skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
+                });
+            }
         }
     }
 

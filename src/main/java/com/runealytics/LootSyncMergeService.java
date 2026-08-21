@@ -320,8 +320,6 @@ public class LootSyncMergeService
 
             if (src.killCount > bossData.getKillCount())
             {
-                log.debug("[merge] '{}' killCount {} -> {} (winner: {})",
-                        src.sourceName, bossData.getKillCount(), src.killCount, src.killCountWinner);
                 bossData.setKillCount(src.killCount);
             }
 
@@ -474,8 +472,6 @@ public class LootSyncMergeService
 
             if (quantity > item.quantity)
             {
-                log.debug("[merge] '{}' item '{}' (id={}) qty {} -> {} (source: {})",
-                        sourceName, itemName, itemId, item.quantity, quantity, source);
                 item.quantity    = quantity;
                 item.winnerSource = source;
             }
@@ -500,8 +496,6 @@ public class LootSyncMergeService
             int existing = killCounts.getOrDefault(sourceKey, 0);
             if (killCount > existing)
             {
-                log.debug("[merge] '{}' killCount {} -> {} (source: {})",
-                        sourceName, existing, killCount, source);
                 killCounts.put(sourceKey, killCount);
                 killCountWinners.put(sourceKey, source);
             }

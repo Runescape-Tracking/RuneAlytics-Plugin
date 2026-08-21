@@ -541,7 +541,17 @@ public class LootTrackerManager
             "tz-kih", "tz-kek", "tok-xil", "yt-mejkot", "ket-zek",
             // Fortis Colosseum waves (Sol Heredit's loot comes via widget read)
             "serpent shaman", "jaguar warrior", "javelin colossus",
-            "manticore", "shockwave colossus", "fremennik seer", "minotaur"
+            "manticore", "shockwave colossus", "fremennik seer", "minotaur",
+            // Chambers of Xeric adds (loot comes from chest, not individual mobs)
+            "guardian", "muttadile", "tekton", "ice demon", "lizardman shaman",
+            "scout", "soldier",
+            // Theatre of Blood adds (loot comes from chest, not individual mobs)
+            "nylocas vasilias", "nylocas", "bloat", "pestilent",
+            // Tombs of Amascut adds (loot comes from chest, not individual mobs)
+            "scabarite", "cursed", "scarab", "soul",
+            // Corrupted Gauntlet adds (loot comes from chest, not individual mobs)
+            "corrupted wolf", "corrupted spider", "corrupted scorpion",
+            "corrupted ogre", "corrupted unicorn", "corrupted bat"
     );
 
     /**
@@ -754,7 +764,7 @@ public class LootTrackerManager
         if (!config.enableLootTracking()) return;
         if (items == null || items.isEmpty()) return;
 
-        List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
+        List<LootStorageData.DropRecord> drops = convertToDropRecordsSkilling(items);
         if (drops.isEmpty()) return;
 
         String storedKey = SKILLING_PREFIX + skill;
@@ -1789,8 +1799,6 @@ public class LootTrackerManager
 
                 if (stats.getKillCount() != bd.getKillCount())
                 {
-                    log.debug("KC mismatch '{}': memory={} disk={}",
-                            entry.getKey(), stats.getKillCount(), bd.getKillCount());
                     stats.setKillCount(bd.getKillCount());
                 }
             }
@@ -2080,11 +2088,11 @@ public class LootTrackerManager
 
                 if (lowValueSource)
                 {
-                    // Reverse the earlier auto-hide of zero-value thieving/skilling
-                    // loot (coins, coin pouches) so it shows again. Only zero-value
-                    // items are touched, so a manually-hidden valuable stays hidden.
-                    if (drop.getGePrice() <= 0 && drop.getHighAlchValue() <= 0
-                            && isDropHidden(npcName, drop.getItemId()))
+                    // Always show drops from skilling/pickpocket sources regardless of value.
+                    // Thieving/farming/fishing naturally produce low-value or zero-value items
+                    // (coins, coin pouches, seeds, etc.) that are legitimately valuable to track.
+                    // Reverse any earlier auto-hide so items always show.
+                    if (isDropHidden(npcName, drop.getItemId()))
                         unhideDropForNpc(npcName, drop.getItemId());
                     continue;
                 }
@@ -2910,6 +2918,9 @@ public class LootTrackerManager
         if (lower.contains("gauntlet") && lower.contains("complete"))
             return lower.contains("corrupted") ? "Corrupted Gauntlet" : "The Gauntlet";
 
+        if (lower.contains("mokhaiotl"))
+            return "Doom of Mokhaiotl";
+
         if (lower.contains("phosani") && lower.contains("defeated"))
             return "Phosani's Nightmare";
         if (lower.contains("nightmare") && lower.contains("defeated"))
@@ -2962,6 +2973,42 @@ public class LootTrackerManager
             // loot RuneLite just can't price, not clutter to hide, so it's
             // always kept regardless of the configured threshold.
             if (totalValue > 0 && totalValue < config.minimumLootValue()) continue;
+
+            ItemComposition canonicalComp = itemManager.getItemComposition(itemManager.canonicalize(item.getId()));
+
+            LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
+            drop.setItemId   (item.getId());
+            drop.setItemName (comp.getName());
+            drop.setQuantity (item.getQuantity());
+            drop.setGePrice  (gePrice);
+            drop.setHighAlch (Math.max(comp.getHaPrice(), canonicalComp.getHaPrice()));
+            drop.setTotalValue(totalValue);
+            drop.setHidden   (false);
+
+            drops.add(drop);
+        }
+
+        return drops;
+    }
+
+    /**
+     * Converts a list of {@link ItemStack}s to drop records for skilling loot,
+     * without applying the minimum-value filter. All items are recorded
+     * regardless of GE value, ensuring farming crops and other low-value
+     * skilling products are never filtered out by the minimumLootValue config.
+     *
+     * @param items list of items gained during skilling
+     * @return list of drop records (never filters by value)
+     */
+    private List<LootStorageData.DropRecord> convertToDropRecordsSkilling(List<ItemStack> items)
+    {
+        List<LootStorageData.DropRecord> drops = new ArrayList<>();
+
+        for (ItemStack item : items)
+        {
+            ItemComposition comp = itemManager.getItemComposition(item.getId());
+            int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, item.getId());
+            long totalValue = (long) gePrice * item.getQuantity();
 
             ItemComposition canonicalComp = itemManager.getItemComposition(itemManager.canonicalize(item.getId()));
 
