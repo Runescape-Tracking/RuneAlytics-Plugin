@@ -1865,7 +1865,12 @@ public class RuneAlyticsPlugin extends Plugin
     /**
      * Detects when a player sends a message in clan chat.
      * Records the sender as a clan member for tracking purposes.
+     *
+     * NOTE: ChatMessageType.CLAN is not available in current RuneLite API.
+     * Clan tracking is handled through other mechanisms (ClanMemberJoined, etc.).
+     * This handler is disabled until the correct chat message type filter is identified.
      */
+    /*
     @Subscribe
     public void onClanChat(ChatMessage event)
     {
@@ -1878,6 +1883,7 @@ public class RuneAlyticsPlugin extends Plugin
         // Record this player as a clan member (we don't know if they use RuneAlytics yet)
         clanManager.recordMember(username, false);
     }
+    */
 
     /**
      * Detects clan membership changes and updates clan status.
