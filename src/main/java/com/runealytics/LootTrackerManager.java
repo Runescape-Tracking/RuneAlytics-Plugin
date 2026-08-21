@@ -2088,11 +2088,11 @@ public class LootTrackerManager
 
                 if (lowValueSource)
                 {
-                    // Reverse the earlier auto-hide of zero-value thieving/skilling
-                    // loot (coins, coin pouches) so it shows again. Only zero-value
-                    // items are touched, so a manually-hidden valuable stays hidden.
-                    if (drop.getGePrice() <= 0 && drop.getHighAlchValue() <= 0
-                            && isDropHidden(npcName, drop.getItemId()))
+                    // Always show drops from skilling/pickpocket sources regardless of value.
+                    // Thieving/farming/fishing naturally produce low-value or zero-value items
+                    // (coins, coin pouches, seeds, etc.) that are legitimately valuable to track.
+                    // Reverse any earlier auto-hide so items always show.
+                    if (isDropHidden(npcName, drop.getItemId()))
                         unhideDropForNpc(npcName, drop.getItemId());
                     continue;
                 }
