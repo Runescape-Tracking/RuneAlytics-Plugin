@@ -1118,8 +1118,41 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         valueLabel.setFont(CALIBRI_PLAIN);
         valueLabel.setBorder(new EmptyBorder(0, 4, 0, 8));
 
+        // Count hidden items for this boss
+        long hiddenItemCount = drops.stream()
+                .filter(d -> lootManager.isDropHidden(npcName, d.getItemId()))
+                .count();
+
+        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        rightPanel.setOpaque(false);
+
+        // Add unhide button if there are hidden items
+        if (hiddenItemCount > 0)
+        {
+            JButton unhideButton = new JButton("Unhide (" + hiddenItemCount + ")");
+            unhideButton.setFont(CALIBRI_PLAIN);
+            unhideButton.setForeground(new Color(200, 160, 80));
+            unhideButton.setBackground(new Color(50, 40, 20));
+            unhideButton.setBorder(BorderFactory.createLineBorder(new Color(100, 80, 40), 1));
+            unhideButton.setFocusPainted(false);
+            unhideButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            unhideButton.setPreferredSize(new Dimension(100, 18));
+            unhideButton.addActionListener(e -> {
+                for (BossKillStats.AggregatedDrop drop : drops)
+                {
+                    if (lootManager.isDropHidden(npcName, drop.getItemId()))
+                        lootManager.unhideDropForNpc(npcName, drop.getItemId());
+                }
+                invalidateFingerprint();
+                refreshDisplay();
+            });
+            rightPanel.add(unhideButton);
+        }
+
+        rightPanel.add(valueLabel);
+
         headerRow.add(nameLabel,  BorderLayout.WEST);
-        headerRow.add(valueLabel, BorderLayout.EAST);
+        headerRow.add(rightPanel, BorderLayout.EAST);
 
         bossNameLabelMap.put(npcName,  nameLabel);
         bossValueLabelMap.put(npcName, valueLabel);
