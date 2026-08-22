@@ -470,7 +470,20 @@ public class LootStorageManager
      */
     public synchronized void mergeServerData(Map<String, LootStorageData.BossKillData> serverData)
     {
-        log.debug("mergeServerData() called during manual sync");
+        mergeServerData(serverData, true);
+    }
+
+    /**
+     * Merges server data into the in-memory copy. Server kills for a boss are
+     * only added when the server has more kills than the client.
+     *
+     * @param manualSync when {@code true}, verbose merge details are logged;
+     *                   when {@code false}, only essential debug info is logged
+     */
+    public synchronized void mergeServerData(Map<String, LootStorageData.BossKillData> serverData, boolean manualSync)
+    {
+        if (manualSync)
+            log.debug("mergeServerData() called during manual sync");
 
         // Merge into the in-memory copy; load from disk only if nothing is
         // loaded yet this session.
@@ -481,7 +494,8 @@ public class LootStorageManager
 
         if (currentData == null)
         {
-            log.debug("Failed to load client data - aborting merge");
+            if (manualSync)
+                log.debug("Failed to load client data - aborting merge");
             return;
         }
 
@@ -504,15 +518,17 @@ public class LootStorageManager
                 // Client has equal or more kills; keep client data.
                 if (localBoss.getKillCount() >= serverBoss.getKillCount())
                 {
-                    log.debug("❌ SKIPPING SERVER DATA: {} - Client KC {} >= Server KC {}",
-                            npcName, localBoss.getKillCount(), serverBoss.getKillCount());
+                    if (manualSync)
+                        log.debug("❌ SKIPPING SERVER DATA: {} - Client KC {} >= Server KC {}",
+                                npcName, localBoss.getKillCount(), serverBoss.getKillCount());
                     bossesSkipped++;
                     continue; // Skip this boss entirely - client has fresher data
                 }
 
                 // Server has MORE kills - merge the new ones
-                log.debug("✅ MERGING: {} - Server KC {} > Client KC {}",
-                        npcName, serverBoss.getKillCount(), localBoss.getKillCount());
+                if (manualSync)
+                    log.debug("✅ MERGING: {} - Server KC {} > Client KC {}",
+                            npcName, serverBoss.getKillCount(), localBoss.getKillCount());
             }
             else
             {
@@ -527,13 +543,15 @@ public class LootStorageManager
                                         .anyMatch(d -> d.getTotalQuantity() > 0));
                 if (!serverHasRealData)
                 {
-                    log.debug("❌ SKIPPING SERVER DATA: {} - no kills/loot reported, not creating placeholder",
-                            npcName);
+                    if (manualSync)
+                        log.debug("❌ SKIPPING SERVER DATA: {} - no kills/loot reported, not creating placeholder",
+                                npcName);
                     bossesSkipped++;
                     continue;
                 }
 
-                log.debug("➕ NEW BOSS from server: {} with {} kills", npcName, serverBoss.getKillCount());
+                if (manualSync)
+                    log.debug("➕ NEW BOSS from server: {} with {} kills", npcName, serverBoss.getKillCount());
                 localBoss = new LootStorageData.BossKillData();
                 localBoss.setNpcName(npcName);
                 localBoss.setNpcId(serverBoss.getNpcId());
@@ -587,8 +605,9 @@ public class LootStorageManager
                 killsAdded++;
                 bossKillsAdded++;
 
-                log.debug("Added missing kill #{} from server: {} at timestamp {}",
-                        serverKill.getKillNumber(), npcName, serverKill.getTimestamp());
+                if (manualSync)
+                    log.debug("Added missing kill #{} from server: {} at timestamp {}",
+                            serverKill.getKillNumber(), npcName, serverKill.getTimestamp());
 
                 // Update aggregated drops
                 for (LootStorageData.DropRecord drop : serverKill.getDrops())
@@ -641,11 +660,12 @@ public class LootStorageManager
                 }
                 localBoss.setTotalLootValue(recalculatedValue);
 
-                log.debug("Updated {} stats - KC: {} -> {}, Prestige: {} -> {}, Value: {} -> {}",
-                        npcName,
-                        originalKillCount, localBoss.getKillCount(),
-                        originalPrestige, localBoss.getPrestige(),
-                        originalValue, localBoss.getTotalLootValue());
+                if (manualSync)
+                    log.debug("Updated {} stats - KC: {} -> {}, Prestige: {} -> {}, Value: {} -> {}",
+                            npcName,
+                            originalKillCount, localBoss.getKillCount(),
+                            originalPrestige, localBoss.getPrestige(),
+                            originalValue, localBoss.getTotalLootValue());
             }
         }
 
@@ -653,13 +673,15 @@ public class LootStorageManager
         {
             currentData.setLastSyncTimestamp(System.currentTimeMillis());
             saveData();
-            log.debug("Merge complete: Added {} kills, {} drops from server ({} bosses skipped - client data equal/newer)",
-                    killsAdded, dropsAdded, bossesSkipped);
+            if (manualSync)
+                log.debug("Merge complete: Added {} kills, {} drops from server ({} bosses skipped - client data equal/newer)",
+                        killsAdded, dropsAdded, bossesSkipped);
         }
         else
         {
-            log.debug("Merge complete: No new data from server ({} bosses skipped - client data equal/newer)",
-                    bossesSkipped);
+            if (manualSync)
+                log.debug("Merge complete: No new data from server ({} bosses skipped - client data equal/newer)",
+                        bossesSkipped);
         }
     }
 

@@ -1508,9 +1508,10 @@ public class LootTrackerManager
 
             if (serverData != null && !serverData.isEmpty())
             {
-                storageManager.mergeServerData(serverData);
+                storageManager.mergeServerData(serverData, userInitiated);
                 refreshLootDisplay();
-                log.debug("Merged {} bosses from server for {}", serverData.size(), username);
+                if (userInitiated)
+                    log.debug("Merged {} bosses from server for {}", serverData.size(), username);
             }
         }
         catch (Exception e) { log.debug("Failed to download kill history", e); }
