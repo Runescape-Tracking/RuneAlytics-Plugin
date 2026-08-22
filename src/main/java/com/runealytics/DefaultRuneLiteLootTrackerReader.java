@@ -183,12 +183,6 @@ public class DefaultRuneLiteLootTrackerReader
         }
         else
         {
-            for (Map.Entry<String, SourceTotals> e : result.entrySet())
-            {
-                log.debug("[rl-reader] account '{}' source '{}': killCount={}, {} item(s) -> {}",
-                        accountKey, e.getKey(), e.getValue().killCount,
-                        e.getValue().items.size(), e.getValue().items);
-            }
             log.debug("[rl-reader] Read {} source(s) for account '{}' from {} file(s)",
                     result.size(), accountKey, filesWithLoot);
         }

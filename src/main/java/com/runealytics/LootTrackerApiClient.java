@@ -187,7 +187,6 @@ public class LootTrackerApiClient
             }
 
             String json = response.body().string();
-            log.debug("[snapshot] response: {}", json);
             return parseSnapshot(gson.fromJson(json, JsonObject.class));
         }
         catch (IOException e)
