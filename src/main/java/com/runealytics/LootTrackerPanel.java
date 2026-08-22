@@ -776,6 +776,11 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     @Override
     public void onLootUpdated(BossKillStats stats, LootStorageData.KillRecord kill)
     {
+        if (stats.getNpcName().contains("Doom"))
+        {
+            log.debug("[Doom] onLootUpdated called for '{}' with {} kills",
+                    stats.getNpcName(), stats.getKillCount());
+        }
         scheduleLootUpdate(stats.getNpcName(), stats);
     }
 
@@ -816,11 +821,17 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     public void updateLoot(String npcName, BossKillStats stats)
     {
-        if (npcName.startsWith("Skilling: Farming"))
+        if (npcName.startsWith("Skilling: Farming") || npcName.contains("Doom"))
         {
-            log.debug("[Farming] updateLoot called for '{}' with {} kills", npcName, stats.getKillCount());
-            log.debug("[Farming] passesFilter('{}')={}", npcName, passesFilter(npcName));
-            log.debug("[Farming] isBossHidden('{}')={}", npcName, lootManager.isBossHidden(npcName));
+            log.debug("[{}] updateLoot called for '{}' with {} kills",
+                    npcName.contains("Doom") ? "Doom" : "Farming",
+                    npcName, stats.getKillCount());
+            log.debug("[{}] passesFilter('{}')={}",
+                    npcName.contains("Doom") ? "Doom" : "Farming",
+                    npcName, passesFilter(npcName));
+            log.debug("[{}] isBossHidden('{}')={}",
+                    npcName.contains("Doom") ? "Doom" : "Farming",
+                    npcName, lootManager.isBossHidden(npcName));
         }
         if (!passesFilter(npcName)) return;
         if (!showIgnoredItems && lootManager.isBossHidden(npcName)) return;

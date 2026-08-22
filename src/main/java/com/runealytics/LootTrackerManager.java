@@ -685,11 +685,30 @@ public class LootTrackerManager
         lastPlayerLootTime.put(name, now);
 
         int npcId = BOSS_NAME_TO_ID.getOrDefault(name, 0);
-        log.debug("Player loot: '{}' (id={}) items={}", name, npcId, items.size());
+        if (name.contains("Doom"))
+        {
+            log.debug("[Doom] processPlayerLoot: '{}' (id={}) items={}", name, npcId, items.size());
+            for (ItemStack item : items)
+            {
+                log.debug("[Doom]   {} x{}", item.getId(), item.getQuantity());
+            }
+        }
+        else
+        {
+            log.debug("Player loot: '{}' (id={}) items={}", name, npcId, items.size());
+        }
 
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
+        if (name.contains("Doom"))
+        {
+            log.debug("[Doom] convertToDropRecords returned {} drops", drops.size());
+        }
         if (drops.isEmpty()) return;
 
+        if (name.contains("Doom"))
+        {
+            log.debug("[Doom] Calling recordKill for '{}'", name);
+        }
         recordKill(name, npcId, 0, client.getWorld(), drops);
     }
 
@@ -1407,14 +1426,17 @@ public class LootTrackerManager
         // Guarded: the stream sum below is real work per kill, so it should
         // never run when debug logging is off (the default), not just have its
         // formatted message discarded.
-        if (npcName.startsWith("Skilling: Farming"))
+        if (npcName.startsWith("Skilling: Farming") || npcName.contains("Doom"))
         {
-            log.debug("[Farming] Kill recorded: '{}' #{} (gameKC={}) – {} drops",
+            log.debug("[{}] Kill recorded: '{}' #{} (gameKC={}) – {} drops",
+                    npcName.contains("Doom") ? "Doom" : "Farming",
                     npcName, killNumber, gameKC > 0 ? gameKC : "n/a",
                     drops.size());
             for (LootStorageData.DropRecord drop : drops)
             {
-                log.debug("[Farming]   {} x{} = {} gp", drop.getItemName(), drop.getQuantity(), drop.getTotalValue());
+                log.debug("[{}]   {} x{} = {} gp",
+                        npcName.contains("Doom") ? "Doom" : "Farming",
+                        drop.getItemName(), drop.getQuantity(), drop.getTotalValue());
             }
         }
         if (log.isDebugEnabled())
