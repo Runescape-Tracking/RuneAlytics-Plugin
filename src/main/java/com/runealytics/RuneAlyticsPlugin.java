@@ -2701,65 +2701,73 @@ public class RuneAlyticsPlugin extends Plugin
     {
         log.debug("[DOOM] readDoomWidgetLoot: starting to read loot from Doom reward widget");
         List<ItemStack> items = new ArrayList<>();
-        Widget widget = client.getWidget(WIDGET_DOOM, 0);
-        if (widget == null)
+
+        // Try all child indices of widget group 919 in case items are in a different index
+        log.debug("[DOOM] Scanning all indices of widget group 919");
+        for (int idx = 0; idx < 10; idx++)
         {
-            log.debug("[DOOM] readDoomWidgetLoot: widget 919 not found");
-            return items;
-        }
+            Widget widget = client.getWidget(WIDGET_DOOM, idx);
+            if (widget == null) continue;
 
-        // Log widget structure for debugging
-        log.debug("[DOOM] readDoomWidgetLoot: widget 919 found");
-        log.debug("[DOOM]   text='{}', id={}, parent={}, hidden={}",
-                widget.getText(), widget.getId(), widget.getParentId(), widget.isHidden());
+            log.debug("[DOOM] Checking widget 919[{}]: text='{}', id={}, parent={}, hidden={}",
+                    idx, widget.getText(), widget.getId(), widget.getParentId(), widget.isHidden());
 
-        Widget[] children = widget.getChildren();
-        Widget[] dynamic = widget.getDynamicChildren();
-        int childCount = (children != null ? children.length : 0);
-        int dynamicCount = (dynamic != null ? dynamic.length : 0);
-        log.debug("[DOOM]   children: {} static, {} dynamic", childCount, dynamicCount);
+            Widget[] children = widget.getChildren();
+            Widget[] dynamic = widget.getDynamicChildren();
+            int childCount = (children != null ? children.length : 0);
+            int dynamicCount = (dynamic != null ? dynamic.length : 0);
+            log.debug("[DOOM]   children: {} static, {} dynamic", childCount, dynamicCount);
 
-        // Recursively collect items from widget 919 and all descendants
-        // The Doom reward items should be within this widget's tree
-        log.debug("[DOOM] Recursively collecting items from widget tree (depth=15)");
-        collectWidgetItemsDeep(widget, items, 15);
+            // Recursively collect items from this widget
+            collectWidgetItemsDeep(widget, items, 15);
 
-        // If no items found in widget 919 tree, try searching for related widgets
-        // Look at parent or nearby widgets that might contain the reward items
-        if (items.isEmpty())
-        {
-            log.debug("[DOOM] No items in widget 919, trying parent widget id={}", widget.getParentId());
-            Widget parent = client.getWidget(widget.getParentId());
-            if (parent != null)
+            if (!items.isEmpty())
             {
-                log.debug("[DOOM] Parent widget found, searching its tree");
-                collectWidgetItemsDeep(parent, items, 15);
+                log.debug("[DOOM] Found items in widget 919[{}]", idx);
+                break;
             }
         }
 
-        // Last resort: scan for visible item-containing widgets opened around the same time
-        // This is more targeted than scanning all widgets - only looks for widgets with items
+        // If still no items, try parent widget and siblings
         if (items.isEmpty())
         {
-            log.debug("[DOOM] Still no items, doing targeted scan for reward-related widgets");
-            for (int g = 900; g < 950; g++) // Scan widgets near 919
+            log.debug("[DOOM] No items found in widget 919 indices, trying parent widget");
+            Widget widget = client.getWidget(WIDGET_DOOM, 0);
+            if (widget != null)
+            {
+                Widget parent = client.getWidget(widget.getParentId());
+                if (parent != null)
+                {
+                    log.debug("[DOOM] Parent widget found id={}, searching its tree", widget.getParentId());
+                    collectWidgetItemsDeep(parent, items, 15);
+                }
+            }
+        }
+
+        // Broader widget scan: search all widget groups for item-containing widgets
+        // This catches cases where the reward UI is in an unexpected widget group
+        if (items.isEmpty())
+        {
+            log.debug("[DOOM] Searching all widget groups for item containers");
+            outerLoop:
+            for (int g = 0; g < 1000; g++)
             {
                 Widget w = client.getWidget(g, 0);
                 if (w == null || w.isHidden()) continue;
-                Widget[] wc = w.getChildren();
-                if (wc != null)
+
+                Widget[] children = w.getChildren();
+                if (children != null)
                 {
-                    for (Widget child : wc)
+                    for (Widget child : children)
                     {
                         if (child != null && child.getItemId() > 0)
                         {
-                            log.debug("[DOOM] Found items in nearby widget {}, collecting", g);
+                            log.debug("[DOOM] Found items in widget group {}, collecting", g);
                             collectWidgetItemsDeep(w, items, 10);
-                            break;
+                            if (!items.isEmpty()) break outerLoop;
                         }
                     }
                 }
-                if (!items.isEmpty()) break;
             }
         }
 
@@ -2771,7 +2779,7 @@ public class RuneAlyticsPlugin extends Plugin
         }
         else
         {
-            log.debug("[DOOM] WARNING: No items found after exhaustive search!");
+            log.debug("[DOOM] WARNING: No items found in any widget!");
         }
         return items;
     }
