@@ -261,9 +261,6 @@ public class DefaultRuneLiteLootTrackerReader
                     totals.items.merge(itemId, qty, Math::max);
                 }
 
-                        + "{} item id/qty pair(s) parsed (raw json: {})",
-                        fileName, key, name, kills, totals.items.size() - itemsBefore, val);
-
                 entriesParsed++;
             }
             catch (Exception e)
