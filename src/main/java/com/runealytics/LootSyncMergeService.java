@@ -93,6 +93,23 @@ public class LootSyncMergeService
      */
     public MergeResult performMerge()
     {
+        return performMerge(true);
+    }
+
+    /**
+     * Performs the full website + RuneLite-tracker merge for the currently
+     * logged-in account.
+     *
+     * <p>Must be called from a background executor thread, never from the
+     * RuneLite client thread (network I/O is involved).</p>
+     *
+     * @param manualSync when {@code true}, verbose merge details are logged;
+     *                   when {@code false}, only essential debug info is logged
+     * @return a {@link MergeResult} describing what happened; check
+     *         {@link MergeResult#success} before reading other fields
+     */
+    public MergeResult performMerge(boolean manualSync)
+    {
         // ── 1. Account guard ─────────────────────────────────────────────────
         if (!identity.canSync())
         {
@@ -107,7 +124,7 @@ public class LootSyncMergeService
             return MergeResult.blocked("No RuneScape account detected. Log in before syncing.");
         }
 
-        return performMergeForAccount(accountKey);
+        return performMergeForAccount(accountKey, manualSync);
     }
 
     /**
@@ -124,12 +141,32 @@ public class LootSyncMergeService
      */
     public MergeResult performMergeForAccount(String accountKey)
     {
+        return performMergeForAccount(accountKey, true);
+    }
+
+    /**
+     * Performs the three-source merge for an explicitly supplied
+     * {@code accountKey}.
+     *
+     * <p>Unlike {@link #performMerge()}, this does not re-read the live client
+     * identity, so it is safe to call during a logout flush (when the local
+     * player is already gone). Callers are responsible for having validated
+     * that {@code accountKey} is the account that should be synced (e.g. via
+     * {@link CurrentPlayerIdentityService#isLinkedAccount(String)}).</p>
+     *
+     * @param accountKey normalized RuneScape account name; must be non-null
+     * @param manualSync when {@code true}, verbose merge details are logged;
+     *                   when {@code false}, only essential debug info is logged
+     */
+    public MergeResult performMergeForAccount(String accountKey, boolean manualSync)
+    {
         if (accountKey == null || accountKey.isEmpty())
         {
             return MergeResult.blocked("No RuneScape account detected. Log in before syncing.");
         }
 
-        log.debug("[merge] Starting merge for account '{}'", accountKey);
+        if (manualSync)
+            log.debug("[merge] Starting merge for account '{}'", accountKey);
 
         // ── 2. Read RuneLite default tracker first (best-effort, account-filtered) ──
         // Read directly from RuneLite's own profiles2/*.properties save file
@@ -145,12 +182,14 @@ public class LootSyncMergeService
         {
             rlTotals = rlReader.readForAccount(accountKey);
             rlSkippedDueToAccount = rlTotals.isEmpty();
-            log.debug("[merge] RuneLite tracker: {} sources (account-filtered)", rlTotals.size());
+            if (manualSync)
+                log.debug("[merge] RuneLite tracker: {} sources (account-filtered)", rlTotals.size());
         }
         else
         {
-            log.debug("[merge] RuneLite Loot Tracker historical data cannot be safely matched to "
-                    + "this account. Using website data only.");
+            if (manualSync)
+                log.debug("[merge] RuneLite Loot Tracker historical data cannot be safely matched to "
+                        + "this account. Using website data only.");
         }
 
         // ── 3. Fetch website snapshot ──────────────────────────────────────────
@@ -160,12 +199,14 @@ public class LootSyncMergeService
         try
         {
             websiteSnapshot = apiClient.fetchLootSnapshot(accountKey);
-            log.debug("[merge] Website snapshot: {} sources",
-                    websiteSnapshot != null ? websiteSnapshot.sources.size() : "null (fetch failed)");
+            if (manualSync)
+                log.debug("[merge] Website snapshot: {} sources",
+                        websiteSnapshot != null ? websiteSnapshot.sources.size() : "null (fetch failed)");
         }
         catch (IOException e)
         {
-            log.debug("[merge] Failed to fetch website snapshot: {}", e.getMessage());
+            if (manualSync)
+                log.debug("[merge] Failed to fetch website snapshot: {}", e.getMessage());
             // Non-fatal: continue with RuneLite data only.
         }
 
@@ -213,8 +254,9 @@ public class LootSyncMergeService
             {
                 if (hasMarkup(srcData.sourceKey) || hasMarkup(srcData.sourceName))
                 {
-                    log.debug("[merge] Rejected website source with malformed name/key: key='{}' name='{}'",
-                            srcData.sourceKey, srcData.sourceName);
+                    if (manualSync)
+                        log.debug("[merge] Rejected website source with malformed name/key: key='{}' name='{}'",
+                                srcData.sourceKey, srcData.sourceName);
                     continue;
                 }
 
@@ -239,12 +281,13 @@ public class LootSyncMergeService
         // lowers it), so nothing is lost by not looping it back through here.
 
         List<MergedSource> merged = ctx.build();
-        log.debug("[merge] Merge complete: {} sources, {} items total",
-                merged.size(),
-                merged.stream().mapToInt(s -> s.items.size()).sum());
+        if (manualSync)
+            log.debug("[merge] Merge complete: {} sources, {} items total",
+                    merged.size(),
+                    merged.stream().mapToInt(s -> s.items.size()).sum());
 
         // ── 6. Apply merged totals to plugin local storage ────────────────────
-        applyMergedToLocalStorage(merged, localData);
+        applyMergedToLocalStorage(merged, localData, manualSync);
 
         // ── 7. Submit merged totals to website ────────────────────────────────
         boolean uploaded = false;
@@ -252,12 +295,14 @@ public class LootSyncMergeService
         try
         {
             uploaded = apiClient.syncAbsolute(accountKey, merged);
-            log.debug("[merge] sync-absolute upload: {}", uploaded ? "OK" : "FAILED");
+            if (manualSync)
+                log.debug("[merge] sync-absolute upload: {}", uploaded ? "OK" : "FAILED");
         }
         catch (IOException e)
         {
             uploadError = e.getMessage();
-            log.debug("[merge] sync-absolute upload failed: {}", uploadError);
+            if (manualSync)
+                log.debug("[merge] sync-absolute upload failed: {}", uploadError);
         }
 
         // ── 8. Build result summary ───────────────────────────────────────────
@@ -280,8 +325,10 @@ public class LootSyncMergeService
      * <p>This updates the {@link LootStorageData.BossKillData#aggregatedDrops}
      * map for each source using max(existing, merged) — it does NOT add
      * fake kill records.</p>
+     *
+     * @param manualSync when {@code true}, verbose merge details are logged
      */
-    private void applyMergedToLocalStorage(List<MergedSource> merged, LootStorageData localData)
+    private void applyMergedToLocalStorage(List<MergedSource> merged, LootStorageData localData, boolean manualSync)
     {
         for (MergedSource src : merged)
         {
@@ -352,7 +399,8 @@ public class LootSyncMergeService
         }
 
         storageManager.scheduleSave();
-        log.debug("[merge] Applied merged totals to local storage");
+        if (manualSync)
+            log.debug("[merge] Applied merged totals to local storage");
     }
 
     /**
@@ -404,13 +452,14 @@ public class LootSyncMergeService
         {
             if (!latch.await(NAME_RESOLVE_TIMEOUT_MS, TimeUnit.MILLISECONDS))
             {
-                log.debug("[merge] Timed out resolving {} RuneLite item name(s); using fallbacks",
+                // This is logged at warn level always since it indicates a potential performance issue
+                log.warn("[merge] Timed out resolving {} RuneLite item name(s); using fallbacks",
                         itemIds.size());
             }
         }
         catch (InterruptedException e)
         {
-            log.debug("[merge] Interrupted while resolving item names; using fallbacks");
+            log.warn("[merge] Interrupted while resolving item names; using fallbacks");
         }
 
         // Backfill any IDs the client thread didn't resolve in time.

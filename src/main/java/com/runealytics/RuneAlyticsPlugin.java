@@ -2340,7 +2340,7 @@ public class RuneAlyticsPlugin extends Plugin
             //    loot tracker file, read fresh every sync and scoped to this
             //    account's OSRS username.
             LootSyncMergeService.MergeResult result =
-                    lootSyncMergeService.performMergeForAccount(accountKey);
+                    lootSyncMergeService.performMergeForAccount(accountKey, userInitiated);
 
             // The merge writes straight to LootStorageData, bypassing the
             // in-memory display cache — rebuild it now so the panel reflects
