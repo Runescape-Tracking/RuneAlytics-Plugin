@@ -130,6 +130,8 @@ public class RuneAlyticsPlugin extends Plugin
 
     private final Map<String, List<ItemStack>> skillingSnapshot = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Long>            skillingExpiry   = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Inventory state captured at end of previous tick, used to detect farming harvests. */
+    private List<ItemStack> preFarmingSnapshot = null;
 
     /**
      * Last-known equipment loadout, refreshed on every ItemContainerChanged.
@@ -549,6 +551,11 @@ public class RuneAlyticsPlugin extends Plugin
 
         // Clear interface-open suppression state
         inventoryDiffGuard.reset();
+
+        // Clear skilling state
+        skillingSnapshot.clear();
+        skillingExpiry.clear();
+        preFarmingSnapshot = null;
     }
 
     @Provides
@@ -1424,6 +1431,13 @@ public class RuneAlyticsPlugin extends Plugin
             }
             return false;
         });
+
+        // ── Pre-farming snapshot for next tick ──────────────────────────────────
+        // Capture inventory state at end of tick so we have a "before" state for
+        // farming XP events that fire in the next tick. By this point, all items
+        // from THIS tick's farming have already been added to inventory, so when
+        // the next XP event fires, we can use this snapshot to detect the delta.
+        preFarmingSnapshot = getCurrentInventory();
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1834,23 +1848,36 @@ public class RuneAlyticsPlugin extends Plugin
                 && gameTickCount >= lampXpSuppressUntilTick)
         {
             String key = skill.getName();
-            // Farming items appear very quickly after XP gain, so take snapshot
-            // immediately rather than deferring to next client thread iteration.
-            // Other skills can defer safely as their items appear more slowly.
+            // Farming items appear within the same tick or next tick as the XP gain.
+            // We use preFarmingSnapshot (captured at end of previous tick) as the
+            // baseline so we can detect items that were harvested THIS tick.
             if (skill == Skill.FARMING)
             {
                 if (!skillingSnapshot.containsKey(key))
                 {
-                    List<ItemStack> snap = getCurrentInventory();
-                    skillingSnapshot.put(key, snap);
-                    log.debug("Farming snapshot taken immediately: {} slots — items: {}", snap.size(), snap);
+                    // Use the pre-farming snapshot from the end of the previous tick,
+                    // which captures the inventory BEFORE this tick's harvest.
+                    if (preFarmingSnapshot != null)
+                    {
+                        skillingSnapshot.put(key, new ArrayList<>(preFarmingSnapshot));
+                        log.debug("[Farming] Snapshot taken from pre-farming state: {} items",
+                                preFarmingSnapshot.size());
+                    }
+                    else
+                    {
+                        // Fallback if pre-farming snapshot unavailable (shouldn't happen)
+                        List<ItemStack> snap = getCurrentInventory();
+                        skillingSnapshot.put(key, snap);
+                        log.debug("[Farming] Pre-farming snapshot unavailable, using current inventory: {} items",
+                                snap.size());
+                    }
                 }
                 else
                 {
-                    log.debug("Farming XP gained but snapshot already exists (session still active)");
+                    log.debug("[Farming] XP gained but snapshot already exists (session still active)");
                 }
                 skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
-                log.debug("Farming session opened: expires in {}ms", SKILLING_SESSION_MS);
+                log.debug("[Farming] Session opened: expires in {}ms", SKILLING_SESSION_MS);
             }
             else
             {
