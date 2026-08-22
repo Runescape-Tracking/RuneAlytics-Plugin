@@ -811,11 +811,31 @@ public class RuneAlyticsPlugin extends Plugin
      * Feeds interface closes to the {@link InventoryDiffGuard} so its
      * suppression window ends (after a short cooldown) once the player leaves
      * the bank / GE / shop / trade screen.
+     *
+     * Also handles Doom of Mokhaiotl reward claiming (widget closes = claimed).
      */
     @Subscribe
     public void onWidgetClosed(WidgetClosed event)
     {
-        inventoryDiffGuard.onWidgetClosed(event.getGroupId());
+        int groupId = event.getGroupId();
+        inventoryDiffGuard.onWidgetClosed(groupId);
+
+        // ── Doom of Mokhaiotl: widget closed = reward claimed ───────────────────
+        if (groupId == WIDGET_DOOM && config.enableLootTracking())
+        {
+            String account = state.getVerifiedUsername();
+            if (account != null)
+            {
+                DoomRunState run = doomEncounterTracker.getCurrentRun(account);
+                if (run != null && run.getPendingLootValue() > 0)
+                {
+                    // Mark the run as having the reward claimed
+                    // The loot was already read from the widget by readReward()
+                    doomEncounterTracker.markComplete(account);
+                    log.debug("Doom reward claimed and recorded for {}", account);
+                }
+            }
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
