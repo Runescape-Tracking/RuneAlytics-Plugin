@@ -2799,18 +2799,16 @@ public class RuneAlyticsPlugin extends Plugin
             log.debug("[DOOM]     Found item at depth {}: itemId={} qty={}", 15 - depth, itemId, itemQty);
         }
 
-        // For widget 289, log all available properties to find item data
+        // For widget 919, log available properties to understand item data
         String widgetText = w.getText();
         int spriteId = w.getSpriteId();
-        String tooltip = w.getToolTip();
         int modelId = w.getModelId();
-        int contentType = w.getContentType();
 
-        if (spriteId > 0 || modelId > 0 || (widgetText != null && !widgetText.isEmpty()) || (tooltip != null && !tooltip.isEmpty()))
+        if (spriteId > 0 || modelId > 0 || (widgetText != null && !widgetText.isEmpty()))
         {
             if (depth > 12) // Log to see structure
-                log.debug("[DOOM]   Depth {}: text='{}', itemId={}, spriteId={}, modelId={}, tooltip='{}', contentType={}",
-                    15 - depth, widgetText, itemId, spriteId, modelId, tooltip, contentType);
+                log.debug("[DOOM]   Depth {}: text='{}', itemId={}, spriteId={}, modelId={}",
+                    15 - depth, widgetText, itemId, spriteId, modelId);
         }
 
         if (depth == 0) return;
