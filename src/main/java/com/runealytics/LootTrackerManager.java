@@ -531,6 +531,8 @@ public class LootTrackerManager
             .add(12205).add(12223).add(12224).add(12225).add(12226).add(12227)
             // Fortis Colosseum (widget read)
             .add(12816).add(12817).add(12818)
+            // Doom of Mokhaiotl (container-based reward UI)
+            .add(14707).add(14708).add(14709).add(14710)
             .build();
 
     /**
