@@ -914,15 +914,15 @@ public class RuneAlyticsPlugin extends Plugin
         // Containers 935/923 are specific to Doom and hold the actual reward items.
         // Capture immediately when these containers appear with items, since
         // ItemContainerChanged may fire before WidgetLoaded.
-        int containerId = event.getContainerId();
-        if ((containerId == 935 || containerId == 923) && lastChestSource != null && lastChestSource.contains("Doom"))
+        int cid = event.getContainerId();
+        if ((cid == 935 || cid == 923) && lastChestSource != null && lastChestSource.contains("Doom"))
         {
             ItemContainer container = event.getItemContainer();
             if (container != null && container.count() > 0)
             {
-                log.debug("[DOOM] Capturing reward from container {}", containerId);
+                log.debug("[DOOM] Capturing reward from container {}", cid);
                 captureDoomReward(container);
-                doomRewardContainerId = containerId;
+                doomRewardContainerId = cid;
             }
         }
 
