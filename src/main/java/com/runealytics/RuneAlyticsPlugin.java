@@ -833,35 +833,34 @@ public class RuneAlyticsPlugin extends Plugin
 
         if (gid == WIDGET_DOOM)
         {
-            log.debug("[DOOM] WidgetLoaded event fired for Doom reward widget (919)");
+            log.debug("[DOOM] WidgetLoaded event fired for Doom reward widget (919) - just a preview");
             lastChestSource = "Doom of Mokhaiotl";
-            // Read the reward items from widget and store them (don't process yet)
+            return;
+        }
+
+        // Widget 289 is the confirmation dialog that opens when you click "Claim & Leave"
+        // This is where the actual loot items are displayed and need to be captured
+        if (gid == 289)
+        {
+            log.debug("[DOOM] WidgetLoaded event fired for widget 289 - confirmation dialog");
+            lastChestSource = "Doom of Mokhaiotl";
             clientThread.invokeLater(() -> {
-                log.debug("[DOOM] Reading loot from widget 919 on client thread");
-                // Read items from the reward widget (replaces previous round's reward)
-                doomPendingReward = readDoomWidgetLoot();
-                doomPendingValue = extractDoomPendingLootValue();
+                log.debug("[DOOM] Reading loot from widget 289 (confirmation dialog)");
+                doomPendingReward = readDoomWidgetLoot(289);
+                doomPendingValue = extractDoomPendingLootValue(289);
 
-                log.debug("[DOOM] Widget loot read: {} items, value={} gp", doomPendingReward.size(), doomPendingValue);
+                log.debug("[DOOM] Widget 289 loot read: {} items, value={} gp", doomPendingReward.size(), doomPendingValue);
 
-                if (doomPendingValue > 0)
+                if (!doomPendingReward.isEmpty())
                 {
                     String account = state.getVerifiedUsername();
                     if (account != null)
                     {
                         log.debug("[DOOM] Notifying DoomEncounterTracker for account: {}", account);
                         doomEncounterTracker.onPendingLootShown(account, doomPendingReward, doomPendingValue);
-                        log.debug("[DOOM] Doom widget loaded: {} items worth {} gp (pending reward total: {} items)",
-                                doomPendingReward.size(), doomPendingValue, doomPendingReward.size());
+                        log.debug("[DOOM] Doom confirmation: {} items worth {} gp",
+                                doomPendingReward.size(), doomPendingValue);
                     }
-                    else
-                    {
-                        log.debug("[DOOM] Could not get verified username for account");
-                    }
-                }
-                else
-                {
-                    log.debug("[DOOM] No loot value found in widget");
                 }
             });
             return;
@@ -2649,45 +2648,56 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     /**
-     * Extracts the pending loot value from the Doom of Mokhaiotl reward widget.
+     * Extracts the pending loot value from a Doom widget.
      * Looks for text like "Value: 20,482 GP" in the widget tree.
      * MUST run on the client thread.
      *
+     * @param widgetGroup the widget group to extract from (919 for preview, 289 for confirmation)
      * @return pending loot value in GP, or 0 if not found
      */
-    private long extractDoomPendingLootValue()
+    private long extractDoomPendingLootValue(int widgetGroup)
     {
-        Widget widget = client.getWidget(WIDGET_DOOM, 0);
+        Widget widget = client.getWidget(widgetGroup, 0);
         if (widget == null) return 0;
 
-        // Walk the widget tree to find the text showing the value
-        Widget[] children = widget.getChildren();
-        if (children == null) return 0;
+        // Recursively search for "Value:" text in the widget tree
+        long[] result = {0};
+        searchForValue(widget, result);
+        return result[0];
+    }
 
-        for (Widget child : children)
+    private void searchForValue(Widget w, long[] result)
+    {
+        if (w == null || result[0] > 0) return;
+
+        String text = w.getText();
+        if (text != null && text.contains("Value:"))
         {
-            if (child == null) continue;
-            String text = child.getText();
-            if (text != null && text.contains("Value:"))
+            try
             {
-                // Extract number from "Value: 20,482 GP" format
-                try
+                String valueStr = text.replaceAll("[^0-9]", "");
+                if (!valueStr.isEmpty())
                 {
-                    String valueStr = text.replaceAll("[^0-9]", "");
-                    if (!valueStr.isEmpty())
-                    {
-                        long value = Long.parseLong(valueStr);
-                        log.debug("Extracted Doom pending loot value: {} gp", value);
-                        return value;
-                    }
-                }
-                catch (NumberFormatException e)
-                {
-                    log.debug("Failed to parse Doom loot value from: {}", text);
+                    result[0] = Long.parseLong(valueStr);
+                    log.debug("[DOOM] Extracted Doom loot value: {} gp", result[0]);
+                    return;
                 }
             }
+            catch (NumberFormatException e)
+            {
+                log.debug("[DOOM] Failed to parse value from: {}", text);
+            }
         }
-        return 0;
+
+        Widget[] children = w.getChildren();
+        if (children != null)
+            for (Widget child : children)
+                searchForValue(child, result);
+
+        Widget[] dynamic = w.getDynamicChildren();
+        if (dynamic != null)
+            for (Widget child : dynamic)
+                searchForValue(child, result);
     }
 
     /**
@@ -2697,20 +2707,20 @@ public class RuneAlyticsPlugin extends Plugin
      *
      * @return list of items shown in the Doom reward widget
      */
-    private List<ItemStack> readDoomWidgetLoot()
+    private List<ItemStack> readDoomWidgetLoot(int widgetGroup)
     {
-        log.debug("[DOOM] readDoomWidgetLoot: starting to read loot from Doom reward widget");
+        log.debug("[DOOM] readDoomWidgetLoot: starting to read loot from widget {}", widgetGroup);
         List<ItemStack> items = new ArrayList<>();
 
-        // Try all child indices of widget group 919 in case items are in a different index
-        log.debug("[DOOM] Scanning all indices of widget group 919");
+        // Try all child indices of the specified widget group
+        log.debug("[DOOM] Scanning all indices of widget group {}", widgetGroup);
         for (int idx = 0; idx < 10; idx++)
         {
-            Widget widget = client.getWidget(WIDGET_DOOM, idx);
+            Widget widget = client.getWidget(widgetGroup, idx);
             if (widget == null) continue;
 
-            log.debug("[DOOM] Checking widget 919[{}]: text='{}', id={}, parent={}, hidden={}",
-                    idx, widget.getText(), widget.getId(), widget.getParentId(), widget.isHidden());
+            log.debug("[DOOM] Checking widget {}[{}]: text='{}', hidden={}",
+                    widgetGroup, idx, widget.getText(), widget.isHidden());
 
             Widget[] children = widget.getChildren();
             Widget[] dynamic = widget.getDynamicChildren();
@@ -2723,16 +2733,16 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (!items.isEmpty())
             {
-                log.debug("[DOOM] Found items in widget 919[{}]", idx);
+                log.debug("[DOOM] Found items in widget {}[{}]", widgetGroup, idx);
                 break;
             }
         }
 
-        // If still no items, try parent widget and siblings
+        // If still no items, try parent widget
         if (items.isEmpty())
         {
-            log.debug("[DOOM] No items found in widget 919 indices, trying parent widget");
-            Widget widget = client.getWidget(WIDGET_DOOM, 0);
+            log.debug("[DOOM] No items found in widget {} indices, trying parent widget", widgetGroup);
+            Widget widget = client.getWidget(widgetGroup, 0);
             if (widget != null)
             {
                 Widget parent = client.getWidget(widget.getParentId());
@@ -2744,34 +2754,7 @@ public class RuneAlyticsPlugin extends Plugin
             }
         }
 
-        // Broader widget scan: search all widget groups for item-containing widgets
-        // This catches cases where the reward UI is in an unexpected widget group
-        if (items.isEmpty())
-        {
-            log.debug("[DOOM] Searching all widget groups for item containers");
-            outerLoop:
-            for (int g = 0; g < 1000; g++)
-            {
-                Widget w = client.getWidget(g, 0);
-                if (w == null || w.isHidden()) continue;
-
-                Widget[] children = w.getChildren();
-                if (children != null)
-                {
-                    for (Widget child : children)
-                    {
-                        if (child != null && child.getItemId() > 0)
-                        {
-                            log.debug("[DOOM] Found items in widget group {}, collecting", g);
-                            collectWidgetItemsDeep(w, items, 10);
-                            if (!items.isEmpty()) break outerLoop;
-                        }
-                    }
-                }
-            }
-        }
-
-        log.debug("[DOOM] readDoomWidgetLoot: found {} items total", items.size());
+        log.debug("[DOOM] readDoomWidgetLoot: found {} items total from widget {}", items.size(), widgetGroup);
         if (!items.isEmpty())
         {
             for (ItemStack is : items)
@@ -2779,7 +2762,7 @@ public class RuneAlyticsPlugin extends Plugin
         }
         else
         {
-            log.debug("[DOOM] WARNING: No items found in any widget!");
+            log.debug("[DOOM] WARNING: No items found in widget {}!", widgetGroup);
         }
         return items;
     }
