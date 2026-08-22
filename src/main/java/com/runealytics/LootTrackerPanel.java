@@ -859,7 +859,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         else
         {
             // Only repaint the specific card to avoid flickering the entire panel
-            JPanel card = bossCardMap.get(npcName);
             if (card != null)
                 card.repaint();
         }
