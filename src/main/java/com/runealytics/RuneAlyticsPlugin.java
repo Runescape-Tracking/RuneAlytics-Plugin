@@ -835,45 +835,29 @@ public class RuneAlyticsPlugin extends Plugin
 
         if (gid == WIDGET_DOOM)
         {
-            log.debug("[DOOM] WidgetLoaded event fired for Doom reward widget (919) - just a preview");
+            log.debug("[DOOM] WidgetLoaded event fired for Doom reward widget (919)");
             lastChestSource = "Doom of Mokhaiotl";
+            clientThread.invokeLater(() -> {
+                // Widget 919 contains the actual reward data - read it here
+                doomPendingReward = readDoomWidgetLoot(919);
+                doomPendingValue = extractDoomPendingLootValue(919);
+                log.debug("[DOOM] Widget 919 loot: {} items, value={} gp",
+                    doomPendingReward.size(), doomPendingValue);
+                for (ItemStack item : doomPendingReward)
+                    log.debug("[DOOM]   - {} x{}", item.getId(), item.getQuantity());
+            });
             return;
         }
 
-        // Widget 289 is the confirmation dialog that opens when you click "Claim & Leave"
-        // Log detailed widget structure to understand item layout and find confirm button.
+        // Widget 289 is the confirmation dialog that opens after widget 919.
+        // Items were already read from widget 919, so we just track this as active.
         if (gid == 289)
         {
             log.debug("[DOOM] WidgetLoaded event fired for widget 289 - confirmation dialog");
             lastChestSource = "Doom of Mokhaiotl";
             clientThread.invokeLater(() -> {
                 doomConfirmationActive = true;
-                doomPendingValue = extractDoomPendingLootValue(289);
-                log.debug("[DOOM] Confirmation dialog active, value={} gp", doomPendingValue);
-
-                // Log all direct children of widget 289 to find structure
-                for (int idx = 0; idx < 10; idx++)
-                {
-                    Widget w = client.getWidget(289, idx);
-                    if (w == null) continue;
-                    log.debug("[DOOM] Widget 289[{}]: text='{}', itemId={}, spriteId={}, hidden={}, bounds: {}x{} @ {},{}",
-                        idx, w.getText(), w.getItemId(), w.getSpriteId(), w.isHidden(),
-                        w.getWidth(), w.getHeight(), w.getRelativeX(), w.getRelativeY());
-
-                    // Log children that might contain items or buttons
-                    Widget[] children = w.getChildren();
-                    if (children != null && children.length > 0)
-                    {
-                        log.debug("[DOOM]   Widget 289[{}] has {} children", idx, children.length);
-                        for (int ci = 0; ci < Math.min(children.length, 15); ci++)
-                        {
-                            Widget child = children[ci];
-                            if (child != null)
-                                log.debug("[DOOM]     [{}] text='{}' itemId={} spriteId={}",
-                                    ci, child.getText(), child.getItemId(), child.getSpriteId());
-                        }
-                    }
-                }
+                log.debug("[DOOM] Confirmation dialog opened. Pending reward: {} items", doomPendingReward.size());
             });
             return;
         }
@@ -1162,19 +1146,6 @@ public class RuneAlyticsPlugin extends Plugin
 
         String option = event.getMenuOption();
         if (option == null) return;
-
-        // ── Doom of Mokhaiotl confirm button ─────────────────────────────────
-        if (doomConfirmationActive && option.equalsIgnoreCase("Confirm"))
-        {
-            log.debug("[DOOM] Confirm button clicked on widget 289");
-            clientThread.invokeLater(() -> {
-                doomPendingReward = readDoomWidgetLoot(289);
-                log.debug("[DOOM] Loot read from widget 289 on confirm: {} items", doomPendingReward.size());
-                for (ItemStack item : doomPendingReward)
-                    log.debug("[DOOM]   - {} x{}", item.getId(), item.getQuantity());
-            });
-            return;
-        }
 
         // Fast pre-filter: ignore irrelevant clicks before any string work.
         String lowerOption = option.toLowerCase();
@@ -2765,7 +2736,6 @@ public class RuneAlyticsPlugin extends Plugin
         List<ItemStack> items = new ArrayList<>();
 
         // Try all child indices of the specified widget group
-        log.debug("[DOOM] Scanning all indices of widget group {}", widgetGroup);
         for (int idx = 0; idx < 10; idx++)
         {
             Widget widget = client.getWidget(widgetGroup, idx);
@@ -2773,12 +2743,6 @@ public class RuneAlyticsPlugin extends Plugin
 
             log.debug("[DOOM] Checking widget {}[{}]: text='{}', hidden={}",
                     widgetGroup, idx, widget.getText(), widget.isHidden());
-
-            Widget[] children = widget.getChildren();
-            Widget[] dynamic = widget.getDynamicChildren();
-            int childCount = (children != null ? children.length : 0);
-            int dynamicCount = (dynamic != null ? dynamic.length : 0);
-            log.debug("[DOOM]   children: {} static, {} dynamic", childCount, dynamicCount);
 
             // Recursively collect items from this widget
             collectWidgetItemsDeep(widget, items, 15);
