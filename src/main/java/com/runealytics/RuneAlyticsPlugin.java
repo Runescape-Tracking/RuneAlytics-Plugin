@@ -706,6 +706,8 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onPlayerLootReceived(PlayerLootReceived event)
     {
+        log.debug("[DEBUG] PlayerLootReceived fired! lastChestSource='{}', items={}", lastChestSource, event.getItems().size());
+
         if (!config.enableLootTracking()) return;
 
         Collection<net.runelite.client.game.ItemStack> rlItems = event.getItems();
@@ -852,6 +854,11 @@ public class RuneAlyticsPlugin extends Plugin
     {
         int groupId = event.getGroupId();
         inventoryDiffGuard.onWidgetClosed(groupId);
+
+        if (groupId == WIDGET_DOOM && config.enableLootTracking())
+        {
+            log.debug("[DEBUG] Doom widget 919 closed - doomPendingReward has {} items", doomPendingReward.size());
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
