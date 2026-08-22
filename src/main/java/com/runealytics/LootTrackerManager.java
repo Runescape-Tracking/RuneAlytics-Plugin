@@ -1495,6 +1495,17 @@ public class LootTrackerManager
      * into local storage. The caller is responsible for holding the sync slot
      * (so this never races a concurrent upload) and for scoping
      * {@code username} to the currently logged-in account.
+     */
+    void downloadHistoryBlocking(String username)
+    {
+        downloadHistoryBlocking(username, true);
+    }
+
+    /**
+     * Blocking, slot-free download of server kill history for {@code username}
+     * into local storage. The caller is responsible for holding the sync slot
+     * (so this never races a concurrent upload) and for scoping
+     * {@code username} to the currently logged-in account.
      *
      * @param userInitiated when {@code true}, verbose response logs are shown
      */
