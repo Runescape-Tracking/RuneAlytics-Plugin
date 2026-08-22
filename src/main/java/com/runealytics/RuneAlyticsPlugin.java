@@ -2635,14 +2635,14 @@ public class RuneAlyticsPlugin extends Plugin
 
     /**
      * Checks if an NPC is a Doom of Mokhaiotl encounter NPC.
-     * The main Doom boss NPC ID is 14707.
+     * Doom boss NPC IDs: 14707 (normal), 14709 (burrowed), 14708, and others in range.
      */
     private boolean isDoomNpc(NPC npc)
     {
         if (npc == null) return false;
         int id = npc.getId();
-        // Main Doom of Mokhaiotl NPC
-        if (id == 14707) return true;
+        // Main Doom of Mokhaiotl NPC variants
+        if (id >= 14707 && id <= 14710) return true;
         // Also support delve NPCs if they exist in the range
         return id >= 12681 && id <= 12690;
     }
@@ -2769,7 +2769,7 @@ public class RuneAlyticsPlugin extends Plugin
 
     /**
      * Recursively collects items from a widget and its children.
-     * Used for parsing reward widgets.
+     * Used for parsing reward widgets. Logs widget structure for debugging.
      */
     private void collectWidgetItemsDeep(Widget w, List<ItemStack> items, int depth)
     {
@@ -2781,6 +2781,16 @@ public class RuneAlyticsPlugin extends Plugin
         {
             items.add(new ItemStack(itemId, itemQty));
             log.debug("[DOOM]     Found item at depth {}: itemId={} qty={}", 15 - depth, itemId, itemQty);
+        }
+
+        // For widget 289, log detailed structure to understand how items are stored
+        String widgetText = w.getText();
+        int spriteId = w.getSpriteId();
+        if (spriteId > 0 || (widgetText != null && !widgetText.isEmpty()))
+        {
+            if (depth > 13) // Only log the top few levels to avoid spam
+                log.debug("[DOOM]     Widget at depth {}: text='{}', itemId={}, spriteId={}",
+                    15 - depth, widgetText, itemId, spriteId);
         }
 
         if (depth == 0) return;
