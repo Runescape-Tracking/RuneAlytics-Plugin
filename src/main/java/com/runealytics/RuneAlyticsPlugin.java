@@ -221,12 +221,14 @@ public class RuneAlyticsPlugin extends Plugin
     private long            crateLootWaitExpiry      = 0L;
     private static final long CRATE_LOOT_WINDOW_MS   = 60_000L;
 
-    /** Accumulated reward items for Doom of Mokhaiotl (replaced each floor). */
-    private List<ItemStack> doomPendingReward        = new ArrayList<>();
-    /** Current pending reward value for Doom round. */
-    private long            doomPendingValue         = 0;
-    /** Flag set when Doom widget 289 is active (Claim & Leave dialog open). */
-    private boolean         doomConfirmationActive   = false;
+    /** State flags for Doom encounter lifecycle. */
+    private boolean         doomRewardOpen           = false;
+    private boolean         doomConfirmationOpen     = false;
+    private boolean         doomClaimPending         = false;
+    private int             doomRewardContainerId    = -1;
+
+    /** Captured reward items waiting for claim confirmation. */
+    private final List<ItemStack> pendingDoomReward  = new ArrayList<>();
 
     /**
      * True after the Whisperer KC chat message fires. While open, every
@@ -835,30 +837,21 @@ public class RuneAlyticsPlugin extends Plugin
 
         if (gid == WIDGET_DOOM)
         {
-            log.debug("[DOOM] WidgetLoaded event fired for Doom reward widget (919)");
+            log.debug("[DOOM] WidgetLoaded: Doom reward widget (919) opened");
             lastChestSource = "Doom of Mokhaiotl";
-            clientThread.invokeLater(() -> {
-                // Widget 919 contains the actual reward data - read it here
-                doomPendingReward = readDoomWidgetLoot(919);
-                doomPendingValue = extractDoomPendingLootValue(919);
-                log.debug("[DOOM] Widget 919 loot: {} items, value={} gp",
-                    doomPendingReward.size(), doomPendingValue);
-                for (ItemStack item : doomPendingReward)
-                    log.debug("[DOOM]   - {} x{}", item.getId(), item.getQuantity());
-            });
+            doomRewardOpen = true;
             return;
         }
 
         // Widget 289 is the confirmation dialog that opens after widget 919.
-        // Items were already read from widget 919, so we just track this as active.
         if (gid == 289)
         {
-            log.debug("[DOOM] WidgetLoaded event fired for widget 289 - confirmation dialog");
-            lastChestSource = "Doom of Mokhaiotl";
-            clientThread.invokeLater(() -> {
-                doomConfirmationActive = true;
-                log.debug("[DOOM] Confirmation dialog opened. Pending reward: {} items", doomPendingReward.size());
-            });
+            if (doomRewardOpen)
+            {
+                doomConfirmationOpen = true;
+                log.debug("[DOOM] WidgetLoaded: Confirmation dialog (289) opened - pending reward: {} items",
+                    pendingDoomReward.size());
+            }
             return;
         }
 
@@ -887,46 +880,10 @@ public class RuneAlyticsPlugin extends Plugin
 
         if (groupId == WIDGET_DOOM)
         {
-            log.debug("[DOOM] WidgetClosed event fired for widget 919");
-            log.debug("[DOOM] Loot tracking enabled: {}, pending reward size: {}",
-                    config.enableLootTracking(), doomPendingReward.size());
-
-            if (!config.enableLootTracking())
-            {
-                log.debug("[DOOM] Loot tracking is disabled, skipping processing");
-                return;
-            }
-
-            if (!doomPendingReward.isEmpty())
-            {
-                log.debug("[DOOM] Processing {} items from pending reward to tracker", doomPendingReward.size());
-                for (ItemStack item : doomPendingReward)
-                    log.debug("[DOOM]   - Item ID {} qty {}", item.getId(), item.getQuantity());
-
-                // Doom doesn't trigger PlayerLootReceived, so we record here instead
-                lootManager.processPlayerLoot("Doom of Mokhaiotl", new ArrayList<>(doomPendingReward));
-                log.debug("[DOOM] Loot processed to manager");
-
-                String account = state.getVerifiedUsername();
-                if (account != null)
-                {
-                    log.debug("[DOOM] Marking Doom run complete for account: {}", account);
-                    doomEncounterTracker.markComplete(account);
-                    log.debug("[DOOM] Doom run marked complete");
-                }
-                else
-                {
-                    log.debug("[DOOM] Could not get verified username for account");
-                }
-
-                doomPendingReward.clear();
-                doomPendingValue = 0;
-                log.debug("[DOOM] Cleared pending reward");
-            }
-            else
-            {
-                log.debug("[DOOM] Widget 919 closed but no pending reward stored");
-            }
+            log.debug("[DOOM] WidgetClosed: Reward widget (919) closed");
+            doomRewardOpen = false;
+            doomConfirmationOpen = false;
+            // Don't reset pending reward here - only reset after claim confirmation
         }
     }
 
@@ -953,6 +910,24 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Matchmaking: refresh gear snapshot and report on change ──────────
         // Runs on the client thread, so ItemContainer reads are safe.
         matchmakingManager.onItemContainerChanged(event);
+
+        // ── DOOM CONTAINER DISCOVERY LOGGING ────────────────────────────────
+        // Log all container changes while Doom reward is active to identify
+        // which container ID holds the actual reward items.
+        if (doomRewardOpen || doomConfirmationOpen)
+        {
+            ItemContainer container = event.getItemContainer();
+            if (container != null)
+            {
+                StringBuilder itemsStr = new StringBuilder();
+                for (Item item : container.getItems())
+                {
+                    if (item == null || item.getId() <= 0 || item.getQuantity() <= 0) continue;
+                    itemsStr.append("[").append(item.getId()).append("x").append(item.getQuantity()).append("] ");
+                }
+                log.debug("[DOOM-CONTAINER] containerId={} items: {}", event.getContainerId(), itemsStr);
+            }
+        }
 
         // ── Bank sync (debounced) ───────────────────────────────────────────
         if (event.getContainerId() == InventoryID.BANK.getId()
@@ -1146,6 +1121,24 @@ public class RuneAlyticsPlugin extends Plugin
 
         String option = event.getMenuOption();
         if (option == null) return;
+
+        // ── DOOM CLAIM / CONFIRM DETECTION ─────────────────────────────────
+        // Listen for Claim Loot / Confirm buttons
+        if (doomRewardOpen && option != null)
+        {
+            String lowerOpt = option.toLowerCase();
+            if (lowerOpt.contains("claim") && lowerOpt.contains("loot"))
+            {
+                doomClaimPending = true;
+                log.debug("[DOOM] Player clicked Claim Loot; pending reward: {} items",
+                    pendingDoomReward.size());
+            }
+            else if (doomConfirmationOpen && lowerOpt.equals("confirm"))
+            {
+                log.debug("[DOOM] Player confirmed claim - committing reward");
+                commitDoomReward();
+            }
+        }
 
         // Fast pre-filter: ignore irrelevant clicks before any string work.
         String lowerOption = option.toLowerCase();
@@ -2654,6 +2647,71 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         return combined;
+    }
+
+    /**
+     * Captures items from a Doom reward container into pending state.
+     * Does not immediately record - waits for claim confirmation.
+     */
+    private void captureDoomReward(ItemContainer container)
+    {
+        if (container == null) return;
+
+        pendingDoomReward.clear();
+        for (Item item : container.getItems())
+        {
+            if (item == null || item.getId() <= 0 || item.getQuantity() <= 0) continue;
+            pendingDoomReward.add(new ItemStack(item.getId(), item.getQuantity()));
+        }
+
+        log.debug("[DOOM] Captured pending reward: {} items", pendingDoomReward.size());
+        for (ItemStack is : pendingDoomReward)
+            log.debug("[DOOM]   - {} x{}", is.getId(), is.getQuantity());
+    }
+
+    /**
+     * Commits pending Doom reward to loot tracker after claim confirmation.
+     */
+    private void commitDoomReward()
+    {
+        if (!config.enableLootTracking())
+        {
+            log.debug("[DOOM] Loot tracking disabled, skipping commit");
+            resetDoomRewardState();
+            return;
+        }
+
+        if (pendingDoomReward.isEmpty())
+        {
+            log.debug("[DOOM] Refusing to commit empty reward");
+            resetDoomRewardState();
+            return;
+        }
+
+        log.debug("[DOOM] COMMITTED {} items to tracker", pendingDoomReward.size());
+        lootManager.processPlayerLoot("Doom of Mokhaiotl", new ArrayList<>(pendingDoomReward));
+
+        String account = state.getVerifiedUsername();
+        if (account != null)
+        {
+            doomEncounterTracker.markComplete(account);
+            log.debug("[DOOM] Doom run marked complete for: {}", account);
+        }
+
+        resetDoomRewardState();
+    }
+
+    /**
+     * Resets all Doom state flags after claim is confirmed or abandoned.
+     */
+    private void resetDoomRewardState()
+    {
+        pendingDoomReward.clear();
+        doomRewardOpen = false;
+        doomConfirmationOpen = false;
+        doomClaimPending = false;
+        doomRewardContainerId = -1;
+        log.debug("[DOOM] State reset");
     }
 
     /**
