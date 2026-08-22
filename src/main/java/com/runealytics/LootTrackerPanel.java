@@ -777,11 +777,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     @Override
     public void onLootUpdated(BossKillStats stats, LootStorageData.KillRecord kill)
     {
-        if (stats.getNpcName().contains("Doom"))
-        {
-            log.debug("[Doom] onLootUpdated called for '{}' with {} kills",
-                    stats.getNpcName(), stats.getKillCount());
-        }
         scheduleLootUpdate(stats.getNpcName(), stats);
     }
 
@@ -822,12 +817,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     public void updateLoot(String npcName, BossKillStats stats)
     {
-        if (npcName.contains("Doom"))
-        {
-            log.debug("[Doom] updateLoot called for '{}' with {} kills", npcName, stats.getKillCount());
-            log.debug("[Doom] passesFilter('{}')={}", npcName, passesFilter(npcName));
-            log.debug("[Doom] isBossHidden('{}')={}", npcName, lootManager.isBossHidden(npcName));
-        }
         if (!passesFilter(npcName)) return;
         if (!showIgnoredItems && lootManager.isBossHidden(npcName)) return;
 
@@ -864,10 +853,15 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         if (nl != null) nl.setText(buildNameLabel(npcName, stats.getKillCount()));
 
         if (needsRebuild)
+        {
             rebuildBossCardGrid(npcName, drops);
+        }
         else
         {
-            bossListPanel.repaint();
+            // Only repaint the specific card to avoid flickering the entire panel
+            JPanel card = bossCardMap.get(npcName);
+            if (card != null)
+                card.repaint();
         }
     }
 
@@ -886,8 +880,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
         gridWrapper.revalidate();
         gridWrapper.repaint();
-        bossListPanel.revalidate();
-        bossListPanel.repaint();
+        // Only repaint the card, not the entire panel
+        JPanel card = bossCardMap.get(npcName);
+        if (card != null)
+            card.repaint();
     }
 
     public void refreshDisplay()

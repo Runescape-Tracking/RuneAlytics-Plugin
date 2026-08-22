@@ -684,20 +684,13 @@ public class RuneAlyticsPlugin extends Plugin
         NPC npc = (NPC) actor;
 
         // ── Doom of Mokhaiotl NPC kill tracking ────────────────────────────────
-        log.debug("[DOOM] Checking if NPC {} (id={}) is a Doom NPC", npc.getName(), npc.getId());
         if (isDoomNpc(npc))
         {
-            log.debug("[DOOM] Doom NPC killed! name='{}', id={}, location={}", npc.getName(), npc.getId(), npc.getWorldLocation());
             String account = state.getVerifiedUsername();
             if (account != null)
             {
                 int world = client.getWorld();
-                log.debug("[DOOM] Notifying DoomEncounterTracker: account={}, world={}", account, world);
                 doomEncounterTracker.onNpcKilled(npc, account, world);
-            }
-            else
-            {
-                log.debug("[DOOM] Could not get verified account name");
             }
         }
 
@@ -729,26 +722,13 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onPlayerLootReceived(PlayerLootReceived event)
     {
-        log.debug("[DEBUG] PlayerLootReceived fired! lastChestSource='{}', items={}", lastChestSource, event.getItems().size());
-
         if (!config.enableLootTracking()) return;
 
         Collection<net.runelite.client.game.ItemStack> rlItems = event.getItems();
-        if (rlItems == null || rlItems.isEmpty())
-        {
-            log.debug("PlayerLootReceived: no items in event");
-            return;
-        }
+        if (rlItems == null || rlItems.isEmpty()) return;
 
         String source = (lastChestSource != null && !lastChestSource.isEmpty())
                 ? lastChestSource : "Unknown Chest";
-
-        if (source.contains("Doom"))
-        {
-            log.debug("PlayerLootReceived: Doom loot detected! lastChestSource='{}', items={}", lastChestSource, rlItems.size());
-            for (net.runelite.client.game.ItemStack i : rlItems)
-                log.debug("  Item: {} x{}", i.getId(), i.getQuantity());
-        }
 
         lastChestSource = null;
 
@@ -760,8 +740,6 @@ public class RuneAlyticsPlugin extends Plugin
         for (net.runelite.client.game.ItemStack i : rlItems)
             items.add(new ItemStack(i.getId(), i.getQuantity()));
 
-        log.debug("PlayerLootReceived: source='{}' items={}", source, items.size());
-
         lootManager.processPlayerLoot(source, items);
 
         // Handle Doom of Mokhaiotl: when loot is received, reset state
@@ -771,7 +749,6 @@ public class RuneAlyticsPlugin extends Plugin
             if (account != null)
             {
                 doomEncounterTracker.markComplete(account);
-                log.debug("Doom reward received and marked complete");
             }
             resetDoomRewardState();
         }
@@ -793,7 +770,6 @@ public class RuneAlyticsPlugin extends Plugin
         if (!config.enableLootTracking()) return;
 
         int gid = event.getGroupId();
-        log.debug("WidgetLoaded: groupId={}", gid);
 
         // ── Special cases that can't use the generic registry ────────────────
         if (gid == WIDGET_WHISPERER)
@@ -836,7 +812,6 @@ public class RuneAlyticsPlugin extends Plugin
 
         if (gid == WIDGET_DOOM)
         {
-            log.debug("[DOOM] WidgetLoaded: Doom reward widget (919) opened");
             lastChestSource = "Doom of Mokhaiotl";
             doomRewardOpen = true;
             return;
@@ -848,8 +823,6 @@ public class RuneAlyticsPlugin extends Plugin
             if (doomRewardOpen)
             {
                 doomConfirmationOpen = true;
-                log.debug("[DOOM] WidgetLoaded: Confirmation dialog (289) opened - pending reward: {} items",
-                    pendingDoomReward.size());
             }
             return;
         }
@@ -879,7 +852,6 @@ public class RuneAlyticsPlugin extends Plugin
 
         if (groupId == WIDGET_DOOM)
         {
-            log.debug("[DOOM] WidgetClosed: Reward widget (919) closed");
             doomRewardOpen = false;
             doomConfirmationOpen = false;
             // Don't reset pending reward here - only reset after claim confirmation
@@ -920,7 +892,6 @@ public class RuneAlyticsPlugin extends Plugin
             ItemContainer container = event.getItemContainer();
             if (container != null && container.count() > 0)
             {
-                log.debug("[DOOM] Capturing reward from container {}", cid);
                 captureDoomReward(container);
                 doomRewardContainerId = cid;
             }
@@ -1127,12 +1098,9 @@ public class RuneAlyticsPlugin extends Plugin
             if (lowerOpt.contains("claim") && lowerOpt.contains("loot"))
             {
                 doomClaimPending = true;
-                log.debug("[DOOM] Player clicked Claim Loot; pending reward: {} items",
-                    pendingDoomReward.size());
             }
             else if (doomConfirmationOpen && lowerOpt.equals("confirm"))
             {
-                log.debug("[DOOM] Player confirmed claim - committing reward");
                 commitDoomReward();
             }
         }
@@ -2660,10 +2628,6 @@ public class RuneAlyticsPlugin extends Plugin
             if (item == null || item.getId() <= 0 || item.getQuantity() <= 0) continue;
             pendingDoomReward.add(new ItemStack(item.getId(), item.getQuantity()));
         }
-
-        log.debug("[DOOM] Captured pending reward: {} items", pendingDoomReward.size());
-        for (ItemStack is : pendingDoomReward)
-            log.debug("[DOOM]   - {} x{}", is.getId(), is.getQuantity());
     }
 
     /**
@@ -2673,26 +2637,22 @@ public class RuneAlyticsPlugin extends Plugin
     {
         if (!config.enableLootTracking())
         {
-            log.debug("[DOOM] Loot tracking disabled, skipping commit");
             resetDoomRewardState();
             return;
         }
 
         if (pendingDoomReward.isEmpty())
         {
-            log.debug("[DOOM] Refusing to commit empty reward");
             resetDoomRewardState();
             return;
         }
 
-        log.debug("[DOOM] COMMITTED {} items to tracker", pendingDoomReward.size());
         lootManager.processPlayerLoot("Doom of Mokhaiotl", new ArrayList<>(pendingDoomReward));
 
         String account = state.getVerifiedUsername();
         if (account != null)
         {
             doomEncounterTracker.markComplete(account);
-            log.debug("[DOOM] Doom run marked complete for: {}", account);
         }
 
         resetDoomRewardState();
@@ -2708,7 +2668,6 @@ public class RuneAlyticsPlugin extends Plugin
         doomConfirmationOpen = false;
         doomClaimPending = false;
         doomRewardContainerId = -1;
-        log.debug("[DOOM] State reset");
     }
 
     /**
@@ -2765,13 +2724,11 @@ public class RuneAlyticsPlugin extends Plugin
                 if (!valueStr.isEmpty())
                 {
                     result[0] = Long.parseLong(valueStr);
-                    log.debug("[DOOM] Extracted Doom loot value: {} gp", result[0]);
                     return;
                 }
             }
             catch (NumberFormatException e)
             {
-                log.debug("[DOOM] Failed to parse value from: {}", text);
             }
         }
 
@@ -2795,7 +2752,6 @@ public class RuneAlyticsPlugin extends Plugin
      */
     private List<ItemStack> readDoomWidgetLoot(int widgetGroup)
     {
-        log.debug("[DOOM] readDoomWidgetLoot: starting to read loot from widget {}", widgetGroup);
         List<ItemStack> items = new ArrayList<>();
 
         // Try all child indices of the specified widget group
@@ -2804,15 +2760,11 @@ public class RuneAlyticsPlugin extends Plugin
             Widget widget = client.getWidget(widgetGroup, idx);
             if (widget == null) continue;
 
-            log.debug("[DOOM] Checking widget {}[{}]: text='{}', hidden={}",
-                    widgetGroup, idx, widget.getText(), widget.isHidden());
-
             // Recursively collect items from this widget
             collectWidgetItemsDeep(widget, items, 15);
 
             if (!items.isEmpty())
             {
-                log.debug("[DOOM] Found items in widget {}[{}]", widgetGroup, idx);
                 break;
             }
         }
@@ -2820,29 +2772,17 @@ public class RuneAlyticsPlugin extends Plugin
         // If still no items, try parent widget
         if (items.isEmpty())
         {
-            log.debug("[DOOM] No items found in widget {} indices, trying parent widget", widgetGroup);
             Widget widget = client.getWidget(widgetGroup, 0);
             if (widget != null)
             {
                 Widget parent = client.getWidget(widget.getParentId());
                 if (parent != null)
                 {
-                    log.debug("[DOOM] Parent widget found id={}, searching its tree", widget.getParentId());
                     collectWidgetItemsDeep(parent, items, 15);
                 }
             }
         }
 
-        log.debug("[DOOM] readDoomWidgetLoot: found {} items total from widget {}", items.size(), widgetGroup);
-        if (!items.isEmpty())
-        {
-            for (ItemStack is : items)
-                log.debug("[DOOM]   Item: {} x{}", is.getId(), is.getQuantity());
-        }
-        else
-        {
-            log.debug("[DOOM] WARNING: No items found in widget {}!", widgetGroup);
-        }
         return items;
     }
 
@@ -2859,19 +2799,6 @@ public class RuneAlyticsPlugin extends Plugin
         if (itemId > 0 && itemQty > 0)
         {
             items.add(new ItemStack(itemId, itemQty));
-            log.debug("[DOOM]     Found item at depth {}: itemId={} qty={}", 15 - depth, itemId, itemQty);
-        }
-
-        // For widget 919, log available properties to understand item data
-        String widgetText = w.getText();
-        int spriteId = w.getSpriteId();
-        int modelId = w.getModelId();
-
-        if (spriteId > 0 || modelId > 0 || (widgetText != null && !widgetText.isEmpty()))
-        {
-            if (depth > 12) // Log to see structure
-                log.debug("[DOOM]   Depth {}: text='{}', itemId={}, spriteId={}, modelId={}",
-                    15 - depth, widgetText, itemId, spriteId, modelId);
         }
 
         if (depth == 0) return;
