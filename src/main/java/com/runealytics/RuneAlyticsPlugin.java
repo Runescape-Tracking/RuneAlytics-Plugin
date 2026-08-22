@@ -2647,19 +2647,49 @@ public class RuneAlyticsPlugin extends Plugin
     {
         List<ItemStack> items = new ArrayList<>();
         Widget widget = client.getWidget(WIDGET_DOOM, 0);
-        if (widget == null) return items;
-
-        Widget[] children = widget.getChildren();
-        if (children != null)
+        if (widget == null)
         {
-            for (Widget child : children)
-            {
-                if (child != null)
-                    collectWidgetItemsDeep(child, items, 10);
-            }
+            log.debug("readDoomWidgetLoot: widget 919 not found");
+            return items;
         }
 
-        log.debug("readDoomWidgetLoot: found {} items", items.size());
+        Widget[] children = widget.getChildren();
+        if (children == null)
+        {
+            log.debug("readDoomWidgetLoot: widget 919 has no children");
+            return items;
+        }
+
+        log.debug("readDoomWidgetLoot: widget 919 has {} children", children.length);
+
+        for (int i = 0; i < children.length; i++)
+        {
+            Widget child = children[i];
+            if (child == null) continue;
+
+            // Log child details for debugging
+            String childText = child.getText() != null ? child.getText() : "";
+            int childItemId = child.getItemId();
+            int childQuantity = child.getItemQuantity();
+
+            if (!childText.isEmpty() || childItemId > 0)
+            {
+                log.debug("  Child [{}]: itemId={}, qty={}, text='{}' (bounds: x={},y={},w={},h={})",
+                        i, childItemId, childQuantity, childText,
+                        child.getCanvasLocation().getX(), child.getCanvasLocation().getY(),
+                        child.getWidth(), child.getHeight());
+            }
+
+            // Collect items from this child and descendants
+            collectWidgetItemsDeep(child, items, 10);
+        }
+
+        log.debug("readDoomWidgetLoot: found {} items total", items.size());
+        if (!items.isEmpty())
+        {
+            for (ItemStack is : items)
+                log.debug("  Item: {} x{}", is.getId(), is.getQuantity());
+        }
         return items;
     }
 
