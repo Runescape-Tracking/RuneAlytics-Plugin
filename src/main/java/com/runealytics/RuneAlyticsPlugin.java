@@ -225,6 +225,8 @@ public class RuneAlyticsPlugin extends Plugin
     private List<ItemStack> doomPendingReward        = new ArrayList<>();
     /** Current pending reward value for Doom round. */
     private long            doomPendingValue         = 0;
+    /** Flag set when Doom widget 289 is active (Claim & Leave dialog open). */
+    private boolean         doomConfirmationActive   = false;
 
     /**
      * True after the Whisperer KC chat message fires. While open, every
@@ -839,27 +841,37 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         // Widget 289 is the confirmation dialog that opens when you click "Claim & Leave"
-        // This is where the actual loot items are displayed and need to be captured
+        // Log detailed widget structure to understand item layout and find confirm button.
         if (gid == 289)
         {
             log.debug("[DOOM] WidgetLoaded event fired for widget 289 - confirmation dialog");
             lastChestSource = "Doom of Mokhaiotl";
             clientThread.invokeLater(() -> {
-                log.debug("[DOOM] Reading loot from widget 289 (confirmation dialog)");
-                doomPendingReward = readDoomWidgetLoot(289);
+                doomConfirmationActive = true;
                 doomPendingValue = extractDoomPendingLootValue(289);
+                log.debug("[DOOM] Confirmation dialog active, value={} gp", doomPendingValue);
 
-                log.debug("[DOOM] Widget 289 loot read: {} items, value={} gp", doomPendingReward.size(), doomPendingValue);
-
-                if (!doomPendingReward.isEmpty())
+                // Log all direct children of widget 289 to find structure
+                for (int idx = 0; idx < 10; idx++)
                 {
-                    String account = state.getVerifiedUsername();
-                    if (account != null)
+                    Widget w = client.getWidget(289, idx);
+                    if (w == null) continue;
+                    log.debug("[DOOM] Widget 289[{}]: text='{}', itemId={}, spriteId={}, hidden={}, bounds: {}x{} @ {},{}",
+                        idx, w.getText(), w.getItemId(), w.getSpriteId(), w.isHidden(),
+                        w.getWidth(), w.getHeight(), w.getRelativeX(), w.getRelativeY());
+
+                    // Log children that might contain items or buttons
+                    Widget[] children = w.getChildren();
+                    if (children != null && children.length > 0)
                     {
-                        log.debug("[DOOM] Notifying DoomEncounterTracker for account: {}", account);
-                        doomEncounterTracker.onPendingLootShown(account, doomPendingReward, doomPendingValue);
-                        log.debug("[DOOM] Doom confirmation: {} items worth {} gp",
-                                doomPendingReward.size(), doomPendingValue);
+                        log.debug("[DOOM]   Widget 289[{}] has {} children", idx, children.length);
+                        for (int ci = 0; ci < Math.min(children.length, 15); ci++)
+                        {
+                            Widget child = children[ci];
+                            if (child != null)
+                                log.debug("[DOOM]     [{}] text='{}' itemId={} spriteId={}",
+                                    ci, child.getText(), child.getItemId(), child.getSpriteId());
+                        }
                     }
                 }
             });
@@ -1150,6 +1162,19 @@ public class RuneAlyticsPlugin extends Plugin
 
         String option = event.getMenuOption();
         if (option == null) return;
+
+        // ── Doom of Mokhaiotl confirm button ─────────────────────────────────
+        if (doomConfirmationActive && option.equalsIgnoreCase("Confirm"))
+        {
+            log.debug("[DOOM] Confirm button clicked on widget 289");
+            clientThread.invokeLater(() -> {
+                doomPendingReward = readDoomWidgetLoot(289);
+                log.debug("[DOOM] Loot read from widget 289 on confirm: {} items", doomPendingReward.size());
+                for (ItemStack item : doomPendingReward)
+                    log.debug("[DOOM]   - {} x{}", item.getId(), item.getQuantity());
+            });
+            return;
+        }
 
         // Fast pre-filter: ignore irrelevant clicks before any string work.
         String lowerOption = option.toLowerCase();
@@ -2634,6 +2659,33 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     /**
+     * Gets the current combined inventory and bank contents.
+     * Used for Doom loot detection since items can go to either location.
+     */
+    private List<ItemStack> getInventoryAndBank()
+    {
+        List<ItemStack> combined = new ArrayList<>();
+
+        ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
+        if (inv != null)
+        {
+            for (Item item : inv.getItems())
+                if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+                    combined.add(new ItemStack(item.getId(), item.getQuantity()));
+        }
+
+        ItemContainer bank = client.getItemContainer(InventoryID.BANK);
+        if (bank != null)
+        {
+            for (Item item : bank.getItems())
+                if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+                    combined.add(new ItemStack(item.getId(), item.getQuantity()));
+        }
+
+        return combined;
+    }
+
+    /**
      * Checks if an NPC is a Doom of Mokhaiotl encounter NPC.
      * Doom boss NPC IDs: 14707 (normal), 14709 (burrowed), 14708, and others in range.
      */
@@ -2783,14 +2835,18 @@ public class RuneAlyticsPlugin extends Plugin
             log.debug("[DOOM]     Found item at depth {}: itemId={} qty={}", 15 - depth, itemId, itemQty);
         }
 
-        // For widget 289, log detailed structure to understand how items are stored
+        // For widget 289, log all available properties to find item data
         String widgetText = w.getText();
         int spriteId = w.getSpriteId();
-        if (spriteId > 0 || (widgetText != null && !widgetText.isEmpty()))
+        String tooltip = w.getToolTip();
+        int modelId = w.getModelId();
+        int contentType = w.getContentType();
+
+        if (spriteId > 0 || modelId > 0 || (widgetText != null && !widgetText.isEmpty()) || (tooltip != null && !tooltip.isEmpty()))
         {
-            if (depth > 13) // Only log the top few levels to avoid spam
-                log.debug("[DOOM]     Widget at depth {}: text='{}', itemId={}, spriteId={}",
-                    15 - depth, widgetText, itemId, spriteId);
+            if (depth > 12) // Log to see structure
+                log.debug("[DOOM]   Depth {}: text='{}', itemId={}, spriteId={}, modelId={}, tooltip='{}', contentType={}",
+                    15 - depth, widgetText, itemId, spriteId, modelId, tooltip, contentType);
         }
 
         if (depth == 0) return;
