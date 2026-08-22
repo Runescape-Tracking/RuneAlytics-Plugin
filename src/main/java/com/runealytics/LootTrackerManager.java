@@ -786,30 +786,13 @@ public class LootTrackerManager
 
     public void processSkillLoot(String skill, List<ItemStack> items)
     {
-        if (!config.enableLootTracking())
-        {
-            log.debug("[Farming] processSkillLoot: loot tracking disabled");
-            return;
-        }
-        if (items == null || items.isEmpty())
-        {
-            log.debug("[Farming] processSkillLoot: items null or empty");
-            return;
-        }
+        if (!config.enableLootTracking()) return;
+        if (items == null || items.isEmpty()) return;
 
-        log.debug("[Farming] processSkillLoot called with {} items for '{}': {}", items.size(), skill, items);
         List<LootStorageData.DropRecord> drops = convertToDropRecordsSkilling(items);
-        log.debug("[Farming] convertToDropRecordsSkilling returned {} drops", drops.size());
-        if (drops.isEmpty())
-        {
-            log.debug("[Farming] No drops after conversion, not recording kill");
-            return;
-        }
+        if (drops.isEmpty()) return;
 
         String storedKey = SKILLING_PREFIX + skill;
-        log.debug("[Farming] Recording kill: '{}' — {} items: {}", storedKey, drops.size(), drops.stream()
-                .map(d -> d.getItemName() + "x" + d.getQuantity())
-                .collect(java.util.stream.Collectors.joining(", ")));
         recordKill(storedKey, 0, 0, client.getWorld(), drops);
     }
 
@@ -3103,8 +3086,6 @@ public class LootTrackerManager
                 drop.setTotalValue(totalValue);
                 drop.setHidden   (false);
 
-                log.debug("[Farming] Converted item: {} (id={}) x{} = {} gp",
-                        comp.getName(), item.getId(), item.getQuantity(), totalValue);
                 drops.add(drop);
             }
             catch (Exception e)

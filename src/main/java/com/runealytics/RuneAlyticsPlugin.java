@@ -998,27 +998,11 @@ public class RuneAlyticsPlugin extends Plugin
                     List<ItemStack> consumed = excludeEquipmentMovement(diffInventory(inv, snap), justEquipped);
                     if (gained.isEmpty() && consumed.isEmpty()) continue;
 
-                    if (skill.equals("Farming"))
-                    {
-                        log.debug("[Farming] Inventory diff: gained={} items, consumed={} items",
-                                gained.size(), consumed.size());
-                        if (!gained.isEmpty())
-                            log.debug("[Farming] Gained items: {}", gained);
-                        else
-                            log.debug("[Farming] No items detected in diff (snap size={}, current inv size={})",
-                                    snap != null ? snap.size() : "null", inv.size());
-                        log.debug("[Farming] SKILLING_LOOT_NAMES.contains('{}')={}", skill, SKILLING_LOOT_NAMES.contains(skill));
-                    }
-
                     if (!gained.isEmpty() && SKILLING_LOOT_NAMES.contains(skill))
                     {
                         log.debug("[Loot] Recording {} loot for '{}': {} items: {}",
                                 skill, skill, gained.size(), gained);
                         lootManager.processSkillLoot(skill, new ArrayList<>(gained));
-                    }
-                    else if (skill.equals("Farming") && !gained.isEmpty())
-                    {
-                        log.debug("[Farming] NOT recording loot: SKILLING_LOOT_NAMES.contains('Farming')={}", SKILLING_LOOT_NAMES.contains(skill));
                     }
                     recordSkillEconomy(skill, gained, consumed);
                     skillingSnapshot.put(skill, inv);
@@ -1931,24 +1915,15 @@ public class RuneAlyticsPlugin extends Plugin
                     if (preFarmingSnapshot != null)
                     {
                         skillingSnapshot.put(key, new ArrayList<>(preFarmingSnapshot));
-                        log.debug("[Farming] Snapshot taken from pre-farming state: {} items",
-                                preFarmingSnapshot.size());
                     }
                     else
                     {
                         // Fallback if pre-farming snapshot unavailable (shouldn't happen)
                         List<ItemStack> snap = getCurrentInventory();
                         skillingSnapshot.put(key, snap);
-                        log.debug("[Farming] Pre-farming snapshot unavailable, using current inventory: {} items",
-                                snap.size());
                     }
                 }
-                else
-                {
-                    log.debug("[Farming] XP gained but snapshot already exists (session still active)");
-                }
                 skillingExpiry.put(key, System.currentTimeMillis() + SKILLING_SESSION_MS);
-                log.debug("[Farming] Session opened: expires in {}ms", SKILLING_SESSION_MS);
             }
             else
             {
