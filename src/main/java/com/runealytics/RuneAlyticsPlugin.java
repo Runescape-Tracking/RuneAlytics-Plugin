@@ -910,21 +910,15 @@ public class RuneAlyticsPlugin extends Plugin
         // Runs on the client thread, so ItemContainer reads are safe.
         matchmakingManager.onItemContainerChanged(event);
 
-        // ── DOOM CONTAINER DISCOVERY LOGGING ────────────────────────────────
-        // Log all container changes while Doom reward is active to identify
-        // which container ID holds the actual reward items.
-        if (doomRewardOpen || doomConfirmationOpen)
+        // ── DOOM REWARD CONTAINER (ID 935) ─────────────────────────────────
+        // Container 935 holds the actual Doom reward items
+        if (event.getContainerId() == 935 && (doomRewardOpen || doomConfirmationOpen))
         {
             ItemContainer container = event.getItemContainer();
             if (container != null)
             {
-                StringBuilder itemsStr = new StringBuilder();
-                for (Item item : container.getItems())
-                {
-                    if (item == null || item.getId() <= 0 || item.getQuantity() <= 0) continue;
-                    itemsStr.append("[").append(item.getId()).append("x").append(item.getQuantity()).append("] ");
-                }
-                log.debug("[DOOM-CONTAINER] containerId={} items: {}", event.getContainerId(), itemsStr);
+                log.debug("[DOOM] Container 935 changed - capturing reward");
+                captureDoomReward(container);
             }
         }
 
