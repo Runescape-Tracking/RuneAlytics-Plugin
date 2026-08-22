@@ -726,6 +726,19 @@ public class RuneAlyticsPlugin extends Plugin
         log.debug("PlayerLootReceived: source='{}' items={}", source, items.size());
 
         lootManager.processPlayerLoot(source, items);
+
+        // Handle Doom of Mokhaiotl: when loot is received, the run is complete
+        if (source.contains("Doom"))
+        {
+            String account = state.getVerifiedUsername();
+            if (account != null)
+            {
+                doomEncounterTracker.markComplete(account);
+                log.debug("Doom reward received and marked complete");
+                doomPendingReward.clear();
+                doomPendingValue = 0;
+            }
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -790,9 +803,6 @@ public class RuneAlyticsPlugin extends Plugin
             lastChestSource = "Doom of Mokhaiotl";
             // Read the reward items from widget and store them (don't process yet)
             clientThread.invokeLater(() -> {
-                // Snapshot current inventory so we can detect if items are added when they claim
-                inventorySnapshot = getCurrentInventory();
-
                 // Read items from the reward widget (replaces previous round's reward)
                 doomPendingReward = readDoomWidgetLoot();
                 doomPendingValue = extractDoomPendingLootValue();
@@ -824,50 +834,12 @@ public class RuneAlyticsPlugin extends Plugin
      * Feeds interface closes to the {@link InventoryDiffGuard} so its
      * suppression window ends (after a short cooldown) once the player leaves
      * the bank / GE / shop / trade screen.
-     *
-     * Also handles Doom of Mokhaiotl reward claiming (widget closes = claimed).
      */
     @Subscribe
     public void onWidgetClosed(WidgetClosed event)
     {
         int groupId = event.getGroupId();
         inventoryDiffGuard.onWidgetClosed(groupId);
-
-        // ── Doom of Mokhaiotl: when widget closes, check if player claimed ──────
-        if (groupId == WIDGET_DOOM && config.enableLootTracking())
-        {
-            // After a short delay, check if the Doom reward was claimed
-            // (items added to inventory = claimed; no items = descended)
-            clientThread.invokeLater(() -> {
-                String account = state.getVerifiedUsername();
-                if (account == null || doomPendingReward.isEmpty()) return;
-
-                DoomRunState run = doomEncounterTracker.getCurrentRun(account);
-                if (run == null) return;
-
-                // Check if items were actually added to inventory
-                List<ItemStack> currentInv = getCurrentInventory();
-                List<ItemStack> gained = diffInventory(inventorySnapshot, currentInv);
-
-                if (!gained.isEmpty())
-                {
-                    // Items were added = "Claim & Leave" was pressed
-                    // Add the stored pending reward to tracker
-                    lootManager.processPlayerLoot("Doom of Mokhaiotl", doomPendingReward);
-                    doomEncounterTracker.markComplete(account);
-                    log.debug("Doom reward CLAIMED: {} items recorded to tracker", doomPendingReward.size());
-                    doomPendingReward.clear();
-                    doomPendingValue = 0;
-                }
-                else
-                {
-                    // No items added = "Descend" was pressed
-                    // Keep pending reward for next round
-                    log.debug("Doom: DESCENDED - kept {} items for next round", doomPendingReward.size());
-                }
-                inventorySnapshot = null;
-            });
-        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -2653,35 +2625,55 @@ public class RuneAlyticsPlugin extends Plugin
             return items;
         }
 
+        // Try to find items in the main widget first
         Widget[] children = widget.getChildren();
-        if (children == null)
+        if (children != null && children.length > 0)
         {
-            log.debug("readDoomWidgetLoot: widget 919 has no children");
-            return items;
+            log.debug("readDoomWidgetLoot: widget 919 has {} children", children.length);
+            for (int i = 0; i < children.length; i++)
+            {
+                Widget child = children[i];
+                if (child == null) continue;
+                collectWidgetItemsDeep(child, items, 10);
+            }
+        }
+        else
+        {
+            log.debug("readDoomWidgetLoot: widget 919 has no children, searching dynamic children");
+            Widget[] dynamic = widget.getDynamicChildren();
+            if (dynamic != null && dynamic.length > 0)
+            {
+                log.debug("readDoomWidgetLoot: widget 919 has {} dynamic children", dynamic.length);
+                for (Widget child : dynamic)
+                {
+                    if (child != null)
+                        collectWidgetItemsDeep(child, items, 10);
+                }
+            }
         }
 
-        log.debug("readDoomWidgetLoot: widget 919 has {} children", children.length);
-
-        for (int i = 0; i < children.length; i++)
+        // If still no items, scan all open widgets for Doom item entries
+        if (items.isEmpty())
         {
-            Widget child = children[i];
-            if (child == null) continue;
-
-            // Log child details for debugging
-            String childText = child.getText() != null ? child.getText() : "";
-            int childItemId = child.getItemId();
-            int childQuantity = child.getItemQuantity();
-
-            if (!childText.isEmpty() || childItemId > 0)
+            log.debug("readDoomWidgetLoot: no items found in 919, scanning all visible widgets for item stacks");
+            for (int g = 0; g < 1000; g++)
             {
-                log.debug("  Child [{}]: itemId={}, qty={}, text='{}' (bounds: x={},y={},w={},h={})",
-                        i, childItemId, childQuantity, childText,
-                        child.getCanvasLocation().getX(), child.getCanvasLocation().getY(),
-                        child.getWidth(), child.getHeight());
+                Widget w = client.getWidget(g, 0);
+                if (w == null) continue;
+                Widget[] wc = w.getChildren();
+                if (wc != null)
+                {
+                    for (Widget child : wc)
+                    {
+                        if (child != null && child.getItemId() > 0)
+                        {
+                            log.debug("  Found item in widget {}: itemId={}, qty={}", g, child.getItemId(), child.getItemQuantity());
+                            collectWidgetItemsDeep(w, items, 10);
+                            break;
+                        }
+                    }
+                }
             }
-
-            // Collect items from this child and descendants
-            collectWidgetItemsDeep(child, items, 10);
         }
 
         log.debug("readDoomWidgetLoot: found {} items total", items.size());
