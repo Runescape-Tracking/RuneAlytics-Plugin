@@ -790,11 +790,15 @@ public class RuneAlyticsPlugin extends Plugin
                 {
                     String account = state.getVerifiedUsername();
                     if (account != null)
+                    {
                         doomEncounterTracker.onPendingLootShown(account, new ArrayList<>(), pendingValue);
+                        // Snapshot inventory so we can diff when player claims (not descends)
+                        inventorySnapshot = getCurrentInventory();
+                        log.debug("Doom reward widget loaded: pending value={}, inventory snapshot taken", pendingValue);
+                    }
                 }
             });
-            // Read the actual items from the widget
-            lootManager.readReward(RewardSources.BY_WIDGET.get(gid), gid);
+            // NOTE: Do NOT call readReward() here - only read items when actually claimed
             return;
         }
 
@@ -820,19 +824,36 @@ public class RuneAlyticsPlugin extends Plugin
         int groupId = event.getGroupId();
         inventoryDiffGuard.onWidgetClosed(groupId);
 
-        // ── Doom of Mokhaiotl: widget closed = reward claimed ───────────────────
+        // ── Doom of Mokhaiotl: detect if actually claimed (items in inventory) ──
         if (groupId == WIDGET_DOOM && config.enableLootTracking())
         {
             String account = state.getVerifiedUsername();
-            if (account != null)
+            if (account != null && inventorySnapshot != null)
             {
                 DoomRunState run = doomEncounterTracker.getCurrentRun(account);
                 if (run != null && run.getPendingLootValue() > 0)
                 {
-                    // Mark the run as having the reward claimed
-                    // The loot was already read from the widget by readReward()
-                    doomEncounterTracker.markComplete(account);
-                    log.debug("Doom reward claimed and recorded for {}", account);
+                    // Diff inventory to see if items were added (claimed vs descended)
+                    clientThread.invokeLater(() -> {
+                        List<ItemStack> currentInv = getCurrentInventory();
+                        List<ItemStack> gained = diffInventory(inventorySnapshot, currentInv);
+                        inventorySnapshot = null;
+
+                        if (!gained.isEmpty())
+                        {
+                            // Items were added = player clicked "Claim & Leave"
+                            // Record the loot to tracker
+                            lootManager.processLoot("Doom of Mokhaiotl", gained);
+                            doomEncounterTracker.markComplete(account);
+                            log.debug("Doom reward claimed: {} items added to inventory", gained.size());
+                        }
+                        else
+                        {
+                            // No items added = player clicked "Descend"
+                            // Keep run active, don't record loot yet
+                            log.debug("Doom: descended without claiming");
+                        }
+                    });
                 }
             }
         }
