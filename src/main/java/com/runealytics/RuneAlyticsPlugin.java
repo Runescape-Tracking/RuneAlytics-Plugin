@@ -853,7 +853,7 @@ public class RuneAlyticsPlugin extends Plugin
                 {
                     // Items were added = "Claim & Leave" was pressed
                     // Add the stored pending reward to tracker
-                    lootManager.processLoot("Doom of Mokhaiotl", doomPendingReward);
+                    lootManager.processPlayerLoot("Doom of Mokhaiotl", doomPendingReward);
                     doomEncounterTracker.markComplete(account);
                     log.debug("Doom reward CLAIMED: {} items recorded to tracker", doomPendingReward.size());
                     doomPendingReward.clear();
