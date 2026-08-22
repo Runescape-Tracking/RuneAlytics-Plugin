@@ -678,6 +678,25 @@ public class RuneAlyticsPlugin extends Plugin
         if (!(actor instanceof NPC)) return;
 
         NPC npc = (NPC) actor;
+
+        // ── Doom of Mokhaiotl NPC kill tracking ────────────────────────────────
+        log.debug("[DOOM] Checking if NPC {} (id={}) is a Doom NPC", npc.getName(), npc.getId());
+        if (isDoomNpc(npc))
+        {
+            log.debug("[DOOM] Doom NPC killed! name='{}', id={}, location={}", npc.getName(), npc.getId(), npc.getWorldLocation());
+            String account = state.getVerifiedUsername();
+            if (account != null)
+            {
+                int world = client.getWorld();
+                log.debug("[DOOM] Notifying DoomEncounterTracker: account={}, world={}", account, world);
+                doomEncounterTracker.onNpcKilled(npc, account, world);
+            }
+            else
+            {
+                log.debug("[DOOM] Could not get verified account name");
+            }
+        }
+
         if (!damagedNpcs.containsKey(npc.getIndex())) return;
 
         // ActorDeath fires at the start of the death animation, but
@@ -814,22 +833,35 @@ public class RuneAlyticsPlugin extends Plugin
 
         if (gid == WIDGET_DOOM)
         {
+            log.debug("[DOOM] WidgetLoaded event fired for Doom reward widget (919)");
             lastChestSource = "Doom of Mokhaiotl";
             // Read the reward items from widget and store them (don't process yet)
             clientThread.invokeLater(() -> {
+                log.debug("[DOOM] Reading loot from widget 919 on client thread");
                 // Read items from the reward widget (replaces previous round's reward)
                 doomPendingReward = readDoomWidgetLoot();
                 doomPendingValue = extractDoomPendingLootValue();
+
+                log.debug("[DOOM] Widget loot read: {} items, value={} gp", doomPendingReward.size(), doomPendingValue);
 
                 if (doomPendingValue > 0)
                 {
                     String account = state.getVerifiedUsername();
                     if (account != null)
                     {
+                        log.debug("[DOOM] Notifying DoomEncounterTracker for account: {}", account);
                         doomEncounterTracker.onPendingLootShown(account, doomPendingReward, doomPendingValue);
-                        log.debug("Doom widget loaded: {} items worth {} gp (pending reward total: {} items)",
+                        log.debug("[DOOM] Doom widget loaded: {} items worth {} gp (pending reward total: {} items)",
                                 doomPendingReward.size(), doomPendingValue, doomPendingReward.size());
                     }
+                    else
+                    {
+                        log.debug("[DOOM] Could not get verified username for account");
+                    }
+                }
+                else
+                {
+                    log.debug("[DOOM] No loot value found in widget");
                 }
             });
             return;
@@ -858,28 +890,47 @@ public class RuneAlyticsPlugin extends Plugin
         int groupId = event.getGroupId();
         inventoryDiffGuard.onWidgetClosed(groupId);
 
-        if (groupId == WIDGET_DOOM && config.enableLootTracking())
+        if (groupId == WIDGET_DOOM)
         {
+            log.debug("[DOOM] WidgetClosed event fired for widget 919");
+            log.debug("[DOOM] Loot tracking enabled: {}, pending reward size: {}",
+                    config.enableLootTracking(), doomPendingReward.size());
+
+            if (!config.enableLootTracking())
+            {
+                log.debug("[DOOM] Loot tracking is disabled, skipping processing");
+                return;
+            }
+
             if (!doomPendingReward.isEmpty())
             {
-                log.debug("[DEBUG] Doom widget 919 closed - recording {} items to tracker", doomPendingReward.size());
+                log.debug("[DOOM] Processing {} items from pending reward to tracker", doomPendingReward.size());
+                for (ItemStack item : doomPendingReward)
+                    log.debug("[DOOM]   - Item ID {} qty {}", item.getId(), item.getQuantity());
 
                 // Doom doesn't trigger PlayerLootReceived, so we record here instead
                 lootManager.processPlayerLoot("Doom of Mokhaiotl", new ArrayList<>(doomPendingReward));
+                log.debug("[DOOM] Loot processed to manager");
 
                 String account = state.getVerifiedUsername();
                 if (account != null)
                 {
+                    log.debug("[DOOM] Marking Doom run complete for account: {}", account);
                     doomEncounterTracker.markComplete(account);
-                    log.debug("Doom run marked complete");
+                    log.debug("[DOOM] Doom run marked complete");
+                }
+                else
+                {
+                    log.debug("[DOOM] Could not get verified username for account");
                 }
 
                 doomPendingReward.clear();
                 doomPendingValue = 0;
+                log.debug("[DOOM] Cleared pending reward");
             }
             else
             {
-                log.debug("[DEBUG] Doom widget 919 closed but no pending reward");
+                log.debug("[DOOM] Widget 919 closed but no pending reward stored");
             }
         }
     }
@@ -2584,6 +2635,17 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     /**
+     * Checks if an NPC is a Doom of Mokhaiotl Mokhaiotl delve NPC.
+     * Doom delve NPCs are in the range 12681–12690.
+     */
+    private boolean isDoomNpc(NPC npc)
+    {
+        if (npc == null) return false;
+        int id = npc.getId();
+        return id >= 12681 && id <= 12690;
+    }
+
+    /**
      * Extracts the pending loot value from the Doom of Mokhaiotl reward widget.
      * Looks for text like "Value: 20,482 GP" in the widget tree.
      * MUST run on the client thread.
@@ -2634,27 +2696,40 @@ public class RuneAlyticsPlugin extends Plugin
      */
     private List<ItemStack> readDoomWidgetLoot()
     {
+        log.debug("[DOOM] readDoomWidgetLoot: starting to read loot from Doom reward widget");
         List<ItemStack> items = new ArrayList<>();
         Widget widget = client.getWidget(WIDGET_DOOM, 0);
         if (widget == null)
         {
-            log.debug("readDoomWidgetLoot: widget 919 not found");
+            log.debug("[DOOM] readDoomWidgetLoot: widget 919 not found");
             return items;
         }
 
         // Log widget structure for debugging
-        log.debug("readDoomWidgetLoot: widget 919 found - text='{}', id={}, parent={}, hidden={}",
+        log.debug("[DOOM] readDoomWidgetLoot: widget 919 found");
+        log.debug("[DOOM]   text='{}', id={}, parent={}, hidden={}",
                 widget.getText(), widget.getId(), widget.getParentId(), widget.isHidden());
+
+        Widget[] children = widget.getChildren();
+        Widget[] dynamic = widget.getDynamicChildren();
+        log.debug("[DOOM]   children: {} static, {} dynamic",
+                (children != null ? children.length : 0),
+                (dynamic != null ? dynamic.length : 0));
 
         // Recursively collect items from widget 919 and all descendants
         // The Doom reward items should be within this widget's tree
+        log.debug("[DOOM] Recursively collecting items from widget tree (depth=15)");
         collectWidgetItemsDeep(widget, items, 15);
 
-        log.debug("readDoomWidgetLoot: found {} items total from widget 919 tree", items.size());
+        log.debug("[DOOM] readDoomWidgetLoot: found {} items total from widget 919 tree", items.size());
         if (!items.isEmpty())
         {
             for (ItemStack is : items)
-                log.debug("  Item: {} x{}", is.getId(), is.getQuantity());
+                log.debug("[DOOM]   Item: {} x{}", is.getId(), is.getQuantity());
+        }
+        else
+        {
+            log.debug("[DOOM] WARNING: No items found in widget 919 tree!");
         }
         return items;
     }
@@ -2667,20 +2742,29 @@ public class RuneAlyticsPlugin extends Plugin
     {
         if (w == null || depth < 0) return;
 
-        if (w.getItemId() > 0 && w.getItemQuantity() > 0)
-            items.add(new ItemStack(w.getItemId(), w.getItemQuantity()));
+        int itemId = w.getItemId();
+        int itemQty = w.getItemQuantity();
+        if (itemId > 0 && itemQty > 0)
+        {
+            items.add(new ItemStack(itemId, itemQty));
+            log.debug("[DOOM]     Found item at depth {}: itemId={} qty={}", 15 - depth, itemId, itemQty);
+        }
 
         if (depth == 0) return;
 
         Widget[] children = w.getChildren();
-        if (children != null)
+        if (children != null && children.length > 0)
+        {
             for (Widget child : children)
                 collectWidgetItemsDeep(child, items, depth - 1);
+        }
 
         Widget[] dynamic = w.getDynamicChildren();
-        if (dynamic != null)
+        if (dynamic != null && dynamic.length > 0)
+        {
             for (Widget child : dynamic)
                 collectWidgetItemsDeep(child, items, depth - 1);
+        }
     }
 
     /**
