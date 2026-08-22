@@ -2635,13 +2635,16 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     /**
-     * Checks if an NPC is a Doom of Mokhaiotl Mokhaiotl delve NPC.
-     * Doom delve NPCs are in the range 12681–12690.
+     * Checks if an NPC is a Doom of Mokhaiotl encounter NPC.
+     * The main Doom boss NPC ID is 14707.
      */
     private boolean isDoomNpc(NPC npc)
     {
         if (npc == null) return false;
         int id = npc.getId();
+        // Main Doom of Mokhaiotl NPC
+        if (id == 14707) return true;
+        // Also support delve NPCs if they exist in the range
         return id >= 12681 && id <= 12690;
     }
 
@@ -2712,16 +2715,55 @@ public class RuneAlyticsPlugin extends Plugin
 
         Widget[] children = widget.getChildren();
         Widget[] dynamic = widget.getDynamicChildren();
-        log.debug("[DOOM]   children: {} static, {} dynamic",
-                (children != null ? children.length : 0),
-                (dynamic != null ? dynamic.length : 0));
+        int childCount = (children != null ? children.length : 0);
+        int dynamicCount = (dynamic != null ? dynamic.length : 0);
+        log.debug("[DOOM]   children: {} static, {} dynamic", childCount, dynamicCount);
 
         // Recursively collect items from widget 919 and all descendants
         // The Doom reward items should be within this widget's tree
         log.debug("[DOOM] Recursively collecting items from widget tree (depth=15)");
         collectWidgetItemsDeep(widget, items, 15);
 
-        log.debug("[DOOM] readDoomWidgetLoot: found {} items total from widget 919 tree", items.size());
+        // If no items found in widget 919 tree, try searching for related widgets
+        // Look at parent or nearby widgets that might contain the reward items
+        if (items.isEmpty())
+        {
+            log.debug("[DOOM] No items in widget 919, trying parent widget id={}", widget.getParentId());
+            Widget parent = client.getWidget(widget.getParentId());
+            if (parent != null)
+            {
+                log.debug("[DOOM] Parent widget found, searching its tree");
+                collectWidgetItemsDeep(parent, items, 15);
+            }
+        }
+
+        // Last resort: scan for visible item-containing widgets opened around the same time
+        // This is more targeted than scanning all widgets - only looks for widgets with items
+        if (items.isEmpty())
+        {
+            log.debug("[DOOM] Still no items, doing targeted scan for reward-related widgets");
+            for (int g = 900; g < 950; g++) // Scan widgets near 919
+            {
+                Widget w = client.getWidget(g, 0);
+                if (w == null || w.isHidden()) continue;
+                Widget[] wc = w.getChildren();
+                if (wc != null)
+                {
+                    for (Widget child : wc)
+                    {
+                        if (child != null && child.getItemId() > 0)
+                        {
+                            log.debug("[DOOM] Found items in nearby widget {}, collecting", g);
+                            collectWidgetItemsDeep(w, items, 10);
+                            break;
+                        }
+                    }
+                }
+                if (!items.isEmpty()) break;
+            }
+        }
+
+        log.debug("[DOOM] readDoomWidgetLoot: found {} items total", items.size());
         if (!items.isEmpty())
         {
             for (ItemStack is : items)
@@ -2729,7 +2771,7 @@ public class RuneAlyticsPlugin extends Plugin
         }
         else
         {
-            log.debug("[DOOM] WARNING: No items found in widget 919 tree!");
+            log.debug("[DOOM] WARNING: No items found after exhaustive search!");
         }
         return items;
     }
