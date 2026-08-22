@@ -2329,7 +2329,7 @@ public class RuneAlyticsPlugin extends Plugin
             }
 
             // 1. Legacy per-kill website history pull + upload.
-            lootManager.syncLegacyBlocking(accountKey, pull);
+            lootManager.syncLegacyBlocking(accountKey, pull, userInitiated);
 
             if (userInitiated && lootTrackerPanel != null)
             {

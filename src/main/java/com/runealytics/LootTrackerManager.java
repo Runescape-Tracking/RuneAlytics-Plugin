@@ -1495,14 +1495,16 @@ public class LootTrackerManager
      * into local storage. The caller is responsible for holding the sync slot
      * (so this never races a concurrent upload) and for scoping
      * {@code username} to the currently logged-in account.
+     *
+     * @param userInitiated when {@code true}, verbose response logs are shown
      */
-    void downloadHistoryBlocking(String username)
+    void downloadHistoryBlocking(String username, boolean userInitiated)
     {
         if (username == null || username.isEmpty()) return;
         try
         {
             Map<String, LootStorageData.BossKillData> serverData =
-                    apiClient.fetchKillHistoryFromServer(username);
+                    apiClient.fetchKillHistoryFromServer(username, userInitiated);
 
             if (serverData != null && !serverData.isEmpty())
             {
@@ -1608,14 +1610,17 @@ public class LootTrackerManager
      * it is read directly (and freshly, every sync) by
      * {@link LootSyncMergeService}, never copied into this plugin's local
      * cache or any temp file.</p>
+     *
+     * @param userInitiated when {@code true}, verbose response logs are shown;
+     *                      when {@code false}, only essential debug info is logged
      */
-    public void syncLegacyBlocking(String username, boolean pull)
+    public void syncLegacyBlocking(String username, boolean pull, boolean userInitiated)
     {
         if (username == null || username.isEmpty()) return;
 
         if (pull)
         {
-            downloadHistoryBlocking(username);
+            downloadHistoryBlocking(username, userInitiated);
             cleanupZeroValueDrops();
         }
         uploadUnsyncedKillsBlocking(username);

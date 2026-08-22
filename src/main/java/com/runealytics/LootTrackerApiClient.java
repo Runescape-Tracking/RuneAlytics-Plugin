@@ -409,6 +409,18 @@ public class LootTrackerApiClient
      */
     public Map<String, LootStorageData.BossKillData> fetchKillHistoryFromServer(String username) throws IOException
     {
+        return fetchKillHistoryFromServer(username, true);
+    }
+
+    /**
+     * Fetches the complete kill history for {@code username} from the server,
+     * grouped by boss for use by {@link LootStorageManager#mergeServerData}.
+     *
+     * @param manualSync when {@code true}, verbose response logs are shown;
+     *                   when {@code false}, only essential debug info is logged
+     */
+    public Map<String, LootStorageData.BossKillData> fetchKillHistoryFromServer(String username, boolean manualSync) throws IOException
+    {
         Request request = new Request.Builder()
                 .url(config.apiUrl() + LOOT_HISTORY_PATH + encodePathSegment(username))
                 .get()
@@ -423,7 +435,8 @@ public class LootTrackerApiClient
             }
 
             String json = response.body().string();
-            log.debug("History response: {}", json);
+            if (manualSync)
+                log.debug("History response: {}", json);
 
             JsonObject responseObj = gson.fromJson(json, JsonObject.class);
             if (responseObj == null || !responseObj.has("kills") || !responseObj.get("kills").isJsonArray())
