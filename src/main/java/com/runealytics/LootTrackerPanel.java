@@ -31,6 +31,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private static final Font CALIBRI_BOLD  = new Font("Calibri", Font.BOLD, 12);
     private static final Font CALIBRI_PLAIN = new Font("Calibri", Font.PLAIN, 11);
+    private static final Font CALIBRI_VALUE = new Font("Calibri", Font.BOLD, 13);
     private static final Font FILTER_FONT   = new Font("Calibri", Font.BOLD, 11);
 
     private static final Color PICKPOCKET_HEADER_HL   = new Color(30, 18, 55);
@@ -1140,15 +1141,16 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
         JLabel valueLabel = new JLabel(totalValue > 0 ? formatGp(totalValue) : "");
         valueLabel.setForeground(new Color(200, 180, 80));
-        valueLabel.setFont(CALIBRI_PLAIN);
+        valueLabel.setFont(CALIBRI_VALUE);
         valueLabel.setBorder(new EmptyBorder(0, 4, 0, 8));
+        valueLabel.setVerticalAlignment(JLabel.CENTER);
 
         // Count hidden items for this boss
         long hiddenItemCount = drops.stream()
                 .filter(d -> lootManager.isDropHidden(npcName, d.getItemId()))
                 .count();
 
-        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 4));
         rightPanel.setOpaque(false);
 
         rightPanel.add(valueLabel);
