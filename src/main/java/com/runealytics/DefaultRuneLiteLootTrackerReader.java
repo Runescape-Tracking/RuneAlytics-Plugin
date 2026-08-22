@@ -122,15 +122,11 @@ public class DefaultRuneLiteLootTrackerReader
     {
         if (accountKey == null || accountKey.isEmpty())
         {
-            log.debug("[rl-reader] readForAccount called with null/empty accountKey — skipping");
             return Collections.emptyMap();
         }
 
         if (files == null || files.isEmpty())
         {
-            log.debug("[rl-reader] No profiles2/*.properties files found under {} — "
-                    + "no RuneLite tracker data to read for '{}'",
-                    new File(RuneLite.RUNELITE_DIR, "profiles2"), accountKey);
             return Collections.emptyMap();
         }
 
@@ -155,13 +151,8 @@ public class DefaultRuneLiteLootTrackerReader
 
             if (matchingKeys.isEmpty())
             {
-                log.debug("[rl-reader] {}: no rsprofile key maps to '{}' (keys seen here: {})",
-                        propFile.getName(), accountKey, keyToAccount);
                 continue;
             }
-
-            log.debug("[rl-reader] {}: account '{}' matched rsprofile key(s) {}",
-                    propFile.getName(), accountKey, matchingKeys);
 
             // 2. Read only loot stored under those keys.
             if (readLootForKeys(propFile.getName(), props, matchingKeys, result)) filesWithLoot++;
@@ -172,20 +163,6 @@ public class DefaultRuneLiteLootTrackerReader
         // filtered out (itemId<=0/qty<=0). These carry no real information and
         // must never reach the merge step as a phantom 0-KC/0-loot source.
         result.values().removeIf(t -> t.killCount <= 0 && t.items.isEmpty());
-
-        if (result.isEmpty())
-        {
-            log.debug("[rl-reader] No RuneLite loot matched account '{}' across {} file(s). "
-                    + "Display names seen in profiles2: {}. "
-                    + "If '{}' isn't in that list, RuneLite has never recorded a displayName for "
-                    + "this exact account — check capitalization/spacing.",
-                    accountKey, files.size(), allSeenDisplayNames, accountKey);
-        }
-        else
-        {
-            log.debug("[rl-reader] Read {} source(s) for account '{}' from {} file(s)",
-                    result.size(), accountKey, filesWithLoot);
-        }
 
         return result;
     }
@@ -284,7 +261,6 @@ public class DefaultRuneLiteLootTrackerReader
                     totals.items.merge(itemId, qty, Math::max);
                 }
 
-                log.debug("[rl-reader] {} | key={} -> source='{}', runelite_kills={}, "
                         + "{} item id/qty pair(s) parsed (raw json: {})",
                         fileName, key, name, kills, totals.items.size() - itemsBefore, val);
 
@@ -292,7 +268,6 @@ public class DefaultRuneLiteLootTrackerReader
             }
             catch (Exception e)
             {
-                log.debug("[rl-reader] Failed to parse entry {}: {}", key, e.getMessage());
             }
         }
 
@@ -310,7 +285,6 @@ public class DefaultRuneLiteLootTrackerReader
         }
         catch (Exception e)
         {
-            log.debug("[rl-reader] Failed to load properties from {}: {}", propFile.getName(), e.getMessage());
             return null;
         }
     }
