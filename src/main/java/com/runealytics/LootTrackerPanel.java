@@ -1282,6 +1282,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             iconLabel.setVerticalAlignment(SwingConstants.CENTER);
             iconLabel.setToolTipText(tooltip);
             iconLabel.setBounds(0, 0, ITEM_SIZE, ITEM_SIZE);
+            iconLabel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
             if (isPet && drop.getItemId() == LootTrackerManager.PET_ITEM_ID_UNKNOWN)
             {
@@ -1322,11 +1323,16 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 refreshDisplay();
             });
             menu.add(toggleHide);
-            slot.addMouseListener(new MouseAdapter()
+
+            // Add right-click listener to both slot and iconLabel to ensure menu shows
+            MouseAdapter rightClickAdapter = new MouseAdapter()
             {
                 @Override public void mousePressed (MouseEvent e) { if (e.isPopupTrigger()) menu.show(e.getComponent(), e.getX(), e.getY()); }
                 @Override public void mouseReleased(MouseEvent e) { if (e.isPopupTrigger()) menu.show(e.getComponent(), e.getX(), e.getY()); }
-            });
+            };
+            slot.addMouseListener(rightClickAdapter);
+            iconLabel.addMouseListener(rightClickAdapter);
+            layers.addMouseListener(rightClickAdapter);
 
             grid.add(slot);
         }
