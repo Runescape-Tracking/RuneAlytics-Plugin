@@ -22,6 +22,7 @@ public class BossKillStats
     private List<LootStorageData.KillRecord> killHistory;
 
     private List<AggregatedDrop> preloadedDrops = new ArrayList<>();
+    private boolean manualSync = false;
 
     public BossKillStats(String npcName, int npcId)
     {
@@ -99,7 +100,8 @@ public class BossKillStats
 
         if (result.isEmpty() && preloadedDrops != null && !preloadedDrops.isEmpty())
         {
-            log.debug("{}: using {} preloaded drops", npcName, preloadedDrops.size());
+            if (manualSync)
+                log.debug("{}: using {} preloaded drops", npcName, preloadedDrops.size());
             return new ArrayList<>(preloadedDrops);
         }
 

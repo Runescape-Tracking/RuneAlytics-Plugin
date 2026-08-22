@@ -1520,7 +1520,7 @@ public class LootTrackerManager
             if (serverData != null && !serverData.isEmpty())
             {
                 storageManager.mergeServerData(serverData, userInitiated);
-                refreshLootDisplay();
+                refreshLootDisplay(userInitiated);
                 if (userInitiated)
                     log.debug("Merged {} bosses from server for {}", serverData.size(), username);
             }
@@ -1748,7 +1748,7 @@ public class LootTrackerManager
         // we never display or sync one account's loot under another.
         log.debug("Loading local loot data for '{}' (was '{}')", norm, loadedAccount);
         storageManager.dropCache();
-        refreshLootDisplay();
+        refreshLootDisplay(false);
         loadedAccount = norm;
     }
 
@@ -1797,10 +1797,10 @@ public class LootTrackerManager
      */
     public void refreshFromStorage()
     {
-        refreshLootDisplay();
+        refreshLootDisplay(false);
     }
 
-    private void refreshLootDisplay()
+    private void refreshLootDisplay(boolean manualSync)
     {
         LootStorageData data = storageManager.getCurrentData();
 
@@ -1862,6 +1862,7 @@ public class LootTrackerManager
             }
 
             BossKillStats stats = new BossKillStats(bd.getNpcName(), bd.getNpcId());
+            stats.setManualSync(manualSync);
             stats.setPrestige(bd.getPrestige());
 
             if (bd.getKills() != null && !bd.getKills().isEmpty())
