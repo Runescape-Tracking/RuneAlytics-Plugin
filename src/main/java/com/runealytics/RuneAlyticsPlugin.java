@@ -2646,59 +2646,11 @@ public class RuneAlyticsPlugin extends Plugin
         log.debug("readDoomWidgetLoot: widget 919 found - text='{}', id={}, parent={}, hidden={}",
                 widget.getText(), widget.getId(), widget.getParentId(), widget.isHidden());
 
-        // Try to find items in the main widget first
-        Widget[] children = widget.getChildren();
-        if (children != null && children.length > 0)
-        {
-            log.debug("readDoomWidgetLoot: widget 919 has {} children", children.length);
-            for (int i = 0; i < children.length; i++)
-            {
-                Widget child = children[i];
-                if (child == null) continue;
-                log.debug("  child[{}]: text='{}', id={}, itemId={}", i, child.getText(), child.getId(), child.getItemId());
-                collectWidgetItemsDeep(child, items, 10);
-            }
-        }
+        // Recursively collect items from widget 919 and all descendants
+        // The Doom reward items should be within this widget's tree
+        collectWidgetItemsDeep(widget, items, 15);
 
-        // Always also check dynamic children
-        Widget[] dynamic = widget.getDynamicChildren();
-        if (dynamic != null && dynamic.length > 0)
-        {
-            log.debug("readDoomWidgetLoot: widget 919 has {} dynamic children", dynamic.length);
-            for (int i = 0; i < dynamic.length; i++)
-            {
-                Widget child = dynamic[i];
-                if (child == null) continue;
-                log.debug("  dynamic_child[{}]: text='{}', id={}, itemId={}", i, child.getText(), child.getId(), child.getItemId());
-                collectWidgetItemsDeep(child, items, 10);
-            }
-        }
-
-        // If still no items, scan all open widgets for Doom item entries
-        if (items.isEmpty())
-        {
-            log.debug("readDoomWidgetLoot: no items found in 919, scanning all visible widgets for item stacks");
-            for (int g = 0; g < 1000; g++)
-            {
-                Widget w = client.getWidget(g, 0);
-                if (w == null) continue;
-                Widget[] wc = w.getChildren();
-                if (wc != null)
-                {
-                    for (Widget child : wc)
-                    {
-                        if (child != null && child.getItemId() > 0)
-                        {
-                            log.debug("  Found item in widget {}: itemId={}, qty={}", g, child.getItemId(), child.getItemQuantity());
-                            collectWidgetItemsDeep(w, items, 10);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        log.debug("readDoomWidgetLoot: found {} items total", items.size());
+        log.debug("readDoomWidgetLoot: found {} items total from widget 919 tree", items.size());
         if (!items.isEmpty())
         {
             for (ItemStack is : items)
