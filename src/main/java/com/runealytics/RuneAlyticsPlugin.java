@@ -764,7 +764,7 @@ public class RuneAlyticsPlugin extends Plugin
 
         lootManager.processPlayerLoot(source, items);
 
-        // Handle Doom of Mokhaiotl: when loot is received, the run is complete
+        // Handle Doom of Mokhaiotl: when loot is received, reset state
         if (source.contains("Doom"))
         {
             String account = state.getVerifiedUsername();
@@ -772,9 +772,8 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 doomEncounterTracker.markComplete(account);
                 log.debug("Doom reward received and marked complete");
-                doomPendingReward.clear();
-                doomPendingValue = 0;
             }
+            resetDoomRewardState();
         }
     }
 
