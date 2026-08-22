@@ -2417,19 +2417,11 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (userInitiated && lootTrackerPanel != null)
             {
-                SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Importing RuneLite tracker…"));
-            }
-
-            // 1. Import from RuneLite tracker FIRST so local panel reflects RuneLite's
-            //    values before uploading. This ensures RuneLite's higher values take priority.
-            lootManager.importFromRuneLiteLootTracker(accountKey);
-
-            if (userInitiated && lootTrackerPanel != null)
-            {
                 SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Syncing with server…"));
             }
 
-            // 2. Legacy per-kill website history pull + upload.
+            // 1. Legacy per-kill website history pull + upload.
+            //    Pull from website first to establish baseline before merge.
             lootManager.syncLegacyBlocking(accountKey, pull, userInitiated);
 
             if (userInitiated && lootTrackerPanel != null)
@@ -2437,10 +2429,10 @@ public class RuneAlyticsPlugin extends Plugin
                 SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Reconciling data…"));
             }
 
-            // 3. Absolute-merge reconcile: website + RuneLite's own rsprofile
-            //    loot tracker file, read fresh every sync and scoped to this
-            //    account's OSRS username. RuneLite values are merged with website
-            //    using max(runelite, website) so the highest values are kept.
+            // 2. Absolute-merge reconcile: reads fresh data from RuneLite's loot tracker
+            //    file and website snapshot, merges all available values (local, RuneLite,
+            //    website) using max semantics so the highest value from any source wins,
+            //    then applies the result back to local storage.
             LootSyncMergeService.MergeResult result =
                     lootSyncMergeService.performMergeForAccount(accountKey, userInitiated);
 

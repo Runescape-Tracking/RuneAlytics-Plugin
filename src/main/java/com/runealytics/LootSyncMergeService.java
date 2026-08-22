@@ -210,8 +210,8 @@ public class LootSyncMergeService
             // Non-fatal: continue with RuneLite data only.
         }
 
-        // Local cache, kept only so the panel has something to render between
-        // syncs; it is never read as a merge input.
+        // Local cache — used as a merge input so local plugin tracking is
+        // included in the max-wins merge alongside RuneLite and website.
         LootStorageData localData = storageManager.getCurrentData();
 
         // ── 5. Item + kill-count merge ────────────────────────────────────────
@@ -279,6 +279,39 @@ public class LootSyncMergeService
         // account's already-recorded kill count is preserved as a floor
         // directly in applyMergedToLocalStorage (it only ever raises KC, never
         // lowers it), so nothing is lost by not looping it back through here.
+
+        // Local plugin data leg — merged third, so it can raise any values that
+        // both RuneLite and website are missing or underestimating. This ensures
+        // local plugin tracking (player's actual loot) participates in max-wins merge.
+        if (localData != null && !localData.getBossKills().isEmpty())
+        {
+            for (Map.Entry<String, LootStorageData.BossKillData> bossEntry : localData.getBossKills().entrySet())
+            {
+                String bossName = bossEntry.getKey();
+                String bossKey = normalizeBossKey(bossName);
+                LootStorageData.BossKillData bossData = bossEntry.getValue();
+
+                if (bossData.getKillCount() > 0)
+                {
+                    ctx.mergeKillCount(bossKey, bossName, bossData.getKillCount(), "local_plugin_tracking");
+                }
+
+                if (!bossData.getAggregatedDrops().isEmpty())
+                {
+                    for (Map.Entry<Integer, LootStorageData.AggregatedDrop> dropEntry : bossData.getAggregatedDrops().entrySet())
+                    {
+                        LootStorageData.AggregatedDrop drop = dropEntry.getValue();
+                        if (drop.getTotalQuantity() > 0)
+                        {
+                            ctx.mergeItem(bossKey, bossName, null,
+                                    drop.getItemId(), drop.getItemName(), drop.getTotalQuantity(), "local_plugin_tracking");
+                        }
+                    }
+                }
+            }
+            if (manualSync)
+                log.debug("[merge] Local plugin data: {} sources merged", localData.getBossKills().size());
+        }
 
         List<MergedSource> merged = ctx.build();
         if (manualSync)
