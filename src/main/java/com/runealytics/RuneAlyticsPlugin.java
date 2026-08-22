@@ -957,13 +957,18 @@ public class RuneAlyticsPlugin extends Plugin
                         else
                             log.debug("[Farming] No items detected in diff (snap size={}, current inv size={})",
                                     snap != null ? snap.size() : "null", inv.size());
+                        log.debug("[Farming] SKILLING_LOOT_NAMES.contains('{}')={}", skill, SKILLING_LOOT_NAMES.contains(skill));
                     }
 
                     if (!gained.isEmpty() && SKILLING_LOOT_NAMES.contains(skill))
                     {
-                        log.debug("[Loot] Recording {} loot for '{}': {} items",
-                                skill, skill, gained.size());
+                        log.debug("[Loot] Recording {} loot for '{}': {} items: {}",
+                                skill, skill, gained.size(), gained);
                         lootManager.processSkillLoot(skill, new ArrayList<>(gained));
+                    }
+                    else if (skill.equals("Farming") && !gained.isEmpty())
+                    {
+                        log.debug("[Farming] NOT recording loot: SKILLING_LOOT_NAMES.contains('Farming')={}", SKILLING_LOOT_NAMES.contains(skill));
                     }
                     recordSkillEconomy(skill, gained, consumed);
                     skillingSnapshot.put(skill, inv);

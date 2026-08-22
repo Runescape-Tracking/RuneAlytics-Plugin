@@ -816,11 +816,25 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     public void updateLoot(String npcName, BossKillStats stats)
     {
+        if (npcName.startsWith("Skilling: Farming"))
+        {
+            log.debug("[Farming] updateLoot called for '{}' with {} kills", npcName, stats.getKillCount());
+            log.debug("[Farming] passesFilter('{}')={}", npcName, passesFilter(npcName));
+            log.debug("[Farming] isBossHidden('{}')={}", npcName, lootManager.isBossHidden(npcName));
+        }
         if (!passesFilter(npcName)) return;
         if (!showIgnoredItems && lootManager.isBossHidden(npcName)) return;
 
         List<BossKillStats.AggregatedDrop> drops = lootManager.getStorageDropsForBoss(npcName);
         long totalValue = drops.stream().mapToLong(BossKillStats.AggregatedDrop::getTotalValue).sum();
+        if (npcName.startsWith("Skilling: Farming"))
+        {
+            log.debug("[Farming] getStorageDropsForBoss returned {} drops", drops.size());
+            for (BossKillStats.AggregatedDrop drop : drops)
+            {
+                log.debug("[Farming]   {} x{} = {} gp", drop.getItemName(), drop.getTotalQuantity(), drop.getTotalValue());
+            }
+        }
 
         JPanel card = bossCardMap.get(npcName);
         if (card == null)

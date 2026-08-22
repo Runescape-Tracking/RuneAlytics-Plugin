@@ -767,14 +767,30 @@ public class LootTrackerManager
 
     public void processSkillLoot(String skill, List<ItemStack> items)
     {
-        if (!config.enableLootTracking()) return;
-        if (items == null || items.isEmpty()) return;
+        if (!config.enableLootTracking())
+        {
+            log.debug("[Farming] processSkillLoot: loot tracking disabled");
+            return;
+        }
+        if (items == null || items.isEmpty())
+        {
+            log.debug("[Farming] processSkillLoot: items null or empty");
+            return;
+        }
 
+        log.debug("[Farming] processSkillLoot called with {} items for '{}': {}", items.size(), skill, items);
         List<LootStorageData.DropRecord> drops = convertToDropRecordsSkilling(items);
-        if (drops.isEmpty()) return;
+        log.debug("[Farming] convertToDropRecordsSkilling returned {} drops", drops.size());
+        if (drops.isEmpty())
+        {
+            log.debug("[Farming] No drops after conversion, not recording kill");
+            return;
+        }
 
         String storedKey = SKILLING_PREFIX + skill;
-        log.debug("Skilling: '{}' — {} items", skill, drops.size());
+        log.debug("[Farming] Recording kill: '{}' — {} items: {}", storedKey, drops.size(), drops.stream()
+                .map(d -> d.getItemName() + "x" + d.getQuantity())
+                .collect(java.util.stream.Collectors.joining(", ")));
         recordKill(storedKey, 0, 0, client.getWorld(), drops);
     }
 
@@ -1391,6 +1407,16 @@ public class LootTrackerManager
         // Guarded: the stream sum below is real work per kill, so it should
         // never run when debug logging is off (the default), not just have its
         // formatted message discarded.
+        if (npcName.startsWith("Skilling: Farming"))
+        {
+            log.debug("[Farming] Kill recorded: '{}' #{} (gameKC={}) – {} drops",
+                    npcName, killNumber, gameKC > 0 ? gameKC : "n/a",
+                    drops.size());
+            for (LootStorageData.DropRecord drop : drops)
+            {
+                log.debug("[Farming]   {} x{} = {} gp", drop.getItemName(), drop.getQuantity(), drop.getTotalValue());
+            }
+        }
         if (log.isDebugEnabled())
         {
             log.debug("Kill recorded: '{}' #{} (gameKC={}) – {} drops, {} gp",
@@ -3015,22 +3041,31 @@ public class LootTrackerManager
 
         for (ItemStack item : items)
         {
-            ItemComposition comp = itemManager.getItemComposition(item.getId());
-            int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, item.getId());
-            long totalValue = (long) gePrice * item.getQuantity();
+            try
+            {
+                ItemComposition comp = itemManager.getItemComposition(item.getId());
+                int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, item.getId());
+                long totalValue = (long) gePrice * item.getQuantity();
 
-            ItemComposition canonicalComp = itemManager.getItemComposition(itemManager.canonicalize(item.getId()));
+                ItemComposition canonicalComp = itemManager.getItemComposition(itemManager.canonicalize(item.getId()));
 
-            LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
-            drop.setItemId   (item.getId());
-            drop.setItemName (comp.getName());
-            drop.setQuantity (item.getQuantity());
-            drop.setGePrice  (gePrice);
-            drop.setHighAlch (Math.max(comp.getHaPrice(), canonicalComp.getHaPrice()));
-            drop.setTotalValue(totalValue);
-            drop.setHidden   (false);
+                LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
+                drop.setItemId   (item.getId());
+                drop.setItemName (comp.getName());
+                drop.setQuantity (item.getQuantity());
+                drop.setGePrice  (gePrice);
+                drop.setHighAlch (Math.max(comp.getHaPrice(), canonicalComp.getHaPrice()));
+                drop.setTotalValue(totalValue);
+                drop.setHidden   (false);
 
-            drops.add(drop);
+                log.debug("[Farming] Converted item: {} (id={}) x{} = {} gp",
+                        comp.getName(), item.getId(), item.getQuantity(), totalValue);
+                drops.add(drop);
+            }
+            catch (Exception e)
+            {
+                log.warn("[Farming] Failed to convert item id={}: {}", item.getId(), e.getMessage(), e);
+            }
         }
 
         return drops;
