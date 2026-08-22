@@ -910,15 +910,19 @@ public class RuneAlyticsPlugin extends Plugin
         // Runs on the client thread, so ItemContainer reads are safe.
         matchmakingManager.onItemContainerChanged(event);
 
-        // ── DOOM REWARD CONTAINER (ID 935) ─────────────────────────────────
-        // Container 935 holds the actual Doom reward items
-        if (event.getContainerId() == 935 && (doomRewardOpen || doomConfirmationOpen))
+        // ── DOOM REWARD CONTAINER (ID 935 or 923) ──────────────────────────
+        // Containers 935/923 are specific to Doom and hold the actual reward items.
+        // Capture immediately when these containers appear with items, since
+        // ItemContainerChanged may fire before WidgetLoaded.
+        int containerId = event.getContainerId();
+        if ((containerId == 935 || containerId == 923) && lastChestSource != null && lastChestSource.contains("Doom"))
         {
             ItemContainer container = event.getItemContainer();
-            if (container != null)
+            if (container != null && container.count() > 0)
             {
-                log.debug("[DOOM] Container 935 changed - capturing reward");
+                log.debug("[DOOM] Capturing reward from container {}", containerId);
                 captureDoomReward(container);
+                doomRewardContainerId = containerId;
             }
         }
 
@@ -2705,6 +2709,14 @@ public class RuneAlyticsPlugin extends Plugin
         doomClaimPending = false;
         doomRewardContainerId = -1;
         log.debug("[DOOM] State reset");
+    }
+
+    /**
+     * Checks if a Doom encounter is currently active (reward pending).
+     */
+    private boolean isDoomEncounterActive()
+    {
+        return doomRewardOpen || doomConfirmationOpen || doomClaimPending;
     }
 
     /**
