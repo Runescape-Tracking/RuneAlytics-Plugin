@@ -221,6 +221,11 @@ public class RuneAlyticsPlugin extends Plugin
     private long            crateLootWaitExpiry      = 0L;
     private static final long CRATE_LOOT_WINDOW_MS   = 60_000L;
 
+    /** Accumulated reward items for Doom of Mokhaiotl (replaced each floor). */
+    private List<ItemStack> doomPendingReward        = new ArrayList<>();
+    /** Current pending reward value for Doom round. */
+    private long            doomPendingValue         = 0;
+
     /**
      * True after the Whisperer KC chat message fires. While open, every
      * ItemSpawned near the player is collected and attributed to the kill.
@@ -783,22 +788,26 @@ public class RuneAlyticsPlugin extends Plugin
         if (gid == WIDGET_DOOM)
         {
             lastChestSource = "Doom of Mokhaiotl";
-            // Extract pending loot value from the widget and notify doom tracker
+            // Read the reward items from widget and store them (don't process yet)
             clientThread.invokeLater(() -> {
-                long pendingValue = extractDoomPendingLootValue();
-                if (pendingValue > 0)
+                // Snapshot current inventory so we can detect if items are added when they claim
+                inventorySnapshot = getCurrentInventory();
+
+                // Read items from the reward widget (replaces previous round's reward)
+                doomPendingReward = readDoomWidgetLoot();
+                doomPendingValue = extractDoomPendingLootValue();
+
+                if (doomPendingValue > 0)
                 {
                     String account = state.getVerifiedUsername();
                     if (account != null)
                     {
-                        doomEncounterTracker.onPendingLootShown(account, new ArrayList<>(), pendingValue);
-                        // Snapshot inventory so we can diff when player claims (not descends)
-                        inventorySnapshot = getCurrentInventory();
-                        log.debug("Doom reward widget loaded: pending value={}, inventory snapshot taken", pendingValue);
+                        doomEncounterTracker.onPendingLootShown(account, doomPendingReward, doomPendingValue);
+                        log.debug("Doom widget loaded: {} items worth {} gp (pending reward total: {} items)",
+                                doomPendingReward.size(), doomPendingValue, doomPendingReward.size());
                     }
                 }
             });
-            // NOTE: Do NOT call readReward() here - only read items when actually claimed
             return;
         }
 
@@ -824,38 +833,40 @@ public class RuneAlyticsPlugin extends Plugin
         int groupId = event.getGroupId();
         inventoryDiffGuard.onWidgetClosed(groupId);
 
-        // ── Doom of Mokhaiotl: detect if actually claimed (items in inventory) ──
+        // ── Doom of Mokhaiotl: when widget closes, check if player claimed ──────
         if (groupId == WIDGET_DOOM && config.enableLootTracking())
         {
-            String account = state.getVerifiedUsername();
-            if (account != null && inventorySnapshot != null)
-            {
-                DoomRunState run = doomEncounterTracker.getCurrentRun(account);
-                if (run != null && run.getPendingLootValue() > 0)
-                {
-                    // Diff inventory to see if items were added (claimed vs descended)
-                    clientThread.invokeLater(() -> {
-                        List<ItemStack> currentInv = getCurrentInventory();
-                        List<ItemStack> gained = diffInventory(inventorySnapshot, currentInv);
-                        inventorySnapshot = null;
+            // After a short delay, check if the Doom reward was claimed
+            // (items added to inventory = claimed; no items = descended)
+            clientThread.invokeLater(() -> {
+                String account = state.getVerifiedUsername();
+                if (account == null || doomPendingReward.isEmpty()) return;
 
-                        if (!gained.isEmpty())
-                        {
-                            // Items were added = player clicked "Claim & Leave"
-                            // Record the loot to tracker
-                            lootManager.processLoot("Doom of Mokhaiotl", gained);
-                            doomEncounterTracker.markComplete(account);
-                            log.debug("Doom reward claimed: {} items added to inventory", gained.size());
-                        }
-                        else
-                        {
-                            // No items added = player clicked "Descend"
-                            // Keep run active, don't record loot yet
-                            log.debug("Doom: descended without claiming");
-                        }
-                    });
+                DoomRunState run = doomEncounterTracker.getCurrentRun(account);
+                if (run == null) return;
+
+                // Check if items were actually added to inventory
+                List<ItemStack> currentInv = getCurrentInventory();
+                List<ItemStack> gained = diffInventory(inventorySnapshot, currentInv);
+
+                if (!gained.isEmpty())
+                {
+                    // Items were added = "Claim & Leave" was pressed
+                    // Add the stored pending reward to tracker
+                    lootManager.processLoot("Doom of Mokhaiotl", doomPendingReward);
+                    doomEncounterTracker.markComplete(account);
+                    log.debug("Doom reward CLAIMED: {} items recorded to tracker", doomPendingReward.size());
+                    doomPendingReward.clear();
+                    doomPendingValue = 0;
                 }
-            }
+                else
+                {
+                    // No items added = "Descend" was pressed
+                    // Keep pending reward for next round
+                    log.debug("Doom: DESCENDED - kept {} items for next round", doomPendingReward.size());
+                }
+                inventorySnapshot = null;
+            });
         }
     }
 
@@ -2623,6 +2634,57 @@ public class RuneAlyticsPlugin extends Plugin
             }
         }
         return 0;
+    }
+
+    /**
+     * Reads items from the Doom of Mokhaiotl reward widget.
+     * Returns the items without processing them (for storage/accumulation).
+     * MUST run on the client thread.
+     *
+     * @return list of items shown in the Doom reward widget
+     */
+    private List<ItemStack> readDoomWidgetLoot()
+    {
+        List<ItemStack> items = new ArrayList<>();
+        Widget widget = client.getWidget(WIDGET_DOOM, 0);
+        if (widget == null) return items;
+
+        Widget[] children = widget.getChildren();
+        if (children != null)
+        {
+            for (Widget child : children)
+            {
+                if (child != null)
+                    collectWidgetItemsDeep(child, items, 10);
+            }
+        }
+
+        log.debug("readDoomWidgetLoot: found {} items", items.size());
+        return items;
+    }
+
+    /**
+     * Recursively collects items from a widget and its children.
+     * Used for parsing reward widgets.
+     */
+    private void collectWidgetItemsDeep(Widget w, List<ItemStack> items, int depth)
+    {
+        if (w == null || depth < 0) return;
+
+        if (w.getItemId() > 0 && w.getItemQuantity() > 0)
+            items.add(new ItemStack(w.getItemId(), w.getItemQuantity()));
+
+        if (depth == 0) return;
+
+        Widget[] children = w.getChildren();
+        if (children != null)
+            for (Widget child : children)
+                collectWidgetItemsDeep(child, items, depth - 1);
+
+        Widget[] dynamic = w.getDynamicChildren();
+        if (dynamic != null)
+            for (Widget child : dynamic)
+                collectWidgetItemsDeep(child, items, depth - 1);
     }
 
     /**
