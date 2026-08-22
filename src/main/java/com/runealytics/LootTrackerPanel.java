@@ -1120,6 +1120,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         nameLabel.setForeground(bossHiddenForLabel ? new Color(140, 90, 90) : nameCol);
         nameLabel.setFont(CALIBRI_BOLD);
         nameLabel.setBorder(new EmptyBorder(0, 8, 0, 4));
+        nameLabel.setVerticalAlignment(JLabel.CENTER);
 
         JLabel valueLabel = new JLabel(totalValue > 0 ? formatGp(totalValue) : "");
         valueLabel.setForeground(new Color(200, 180, 80));
@@ -1132,10 +1133,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 .filter(d -> lootManager.isDropHidden(npcName, d.getItemId()))
                 .count();
 
-        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 4));
+        JPanel rightPanel = new JPanel(new BorderLayout());
         rightPanel.setOpaque(false);
-
-        rightPanel.add(valueLabel);
+        rightPanel.add(valueLabel, BorderLayout.EAST);
 
         headerRow.add(nameLabel,  BorderLayout.WEST);
         headerRow.add(rightPanel, BorderLayout.EAST);

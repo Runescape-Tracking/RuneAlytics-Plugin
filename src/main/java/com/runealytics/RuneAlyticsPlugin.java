@@ -2417,20 +2417,30 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (userInitiated && lootTrackerPanel != null)
             {
+                SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Importing RuneLite tracker…"));
+            }
+
+            // 1. Import from RuneLite tracker FIRST so local panel reflects RuneLite's
+            //    values before uploading. This ensures RuneLite's higher values take priority.
+            lootManager.importFromRuneLiteLootTracker(accountKey);
+
+            if (userInitiated && lootTrackerPanel != null)
+            {
                 SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Syncing with server…"));
             }
 
-            // 1. Legacy per-kill website history pull + upload.
+            // 2. Legacy per-kill website history pull + upload.
             lootManager.syncLegacyBlocking(accountKey, pull, userInitiated);
 
             if (userInitiated && lootTrackerPanel != null)
             {
-                SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Syncing RuneLite tracker…"));
+                SwingUtilities.invokeLater(() -> lootTrackerPanel.showSyncPhase("Reconciling data…"));
             }
 
-            // 2. Absolute-merge reconcile: website + RuneLite's own rsprofile
+            // 3. Absolute-merge reconcile: website + RuneLite's own rsprofile
             //    loot tracker file, read fresh every sync and scoped to this
-            //    account's OSRS username.
+            //    account's OSRS username. RuneLite values are merged with website
+            //    using max(runelite, website) so the highest values are kept.
             LootSyncMergeService.MergeResult result =
                     lootSyncMergeService.performMergeForAccount(accountKey, userInitiated);
 
