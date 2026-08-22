@@ -709,10 +709,22 @@ public class RuneAlyticsPlugin extends Plugin
         if (!config.enableLootTracking()) return;
 
         Collection<net.runelite.client.game.ItemStack> rlItems = event.getItems();
-        if (rlItems == null || rlItems.isEmpty()) return;
+        if (rlItems == null || rlItems.isEmpty())
+        {
+            log.debug("PlayerLootReceived: no items in event");
+            return;
+        }
 
         String source = (lastChestSource != null && !lastChestSource.isEmpty())
                 ? lastChestSource : "Unknown Chest";
+
+        if (source.contains("Doom"))
+        {
+            log.debug("PlayerLootReceived: Doom loot detected! lastChestSource='{}', items={}", lastChestSource, rlItems.size());
+            for (net.runelite.client.game.ItemStack i : rlItems)
+                log.debug("  Item: {} x{}", i.getId(), i.getQuantity());
+        }
+
         lastChestSource = null;
 
         if (source.toLowerCase().contains("reward pool")
@@ -2600,6 +2612,10 @@ public class RuneAlyticsPlugin extends Plugin
             return items;
         }
 
+        // Log widget structure for debugging
+        log.debug("readDoomWidgetLoot: widget 919 found - text='{}', id={}, parent={}, hidden={}",
+                widget.getText(), widget.getId(), widget.getParentId(), widget.isHidden());
+
         // Try to find items in the main widget first
         Widget[] children = widget.getChildren();
         if (children != null && children.length > 0)
@@ -2609,21 +2625,22 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 Widget child = children[i];
                 if (child == null) continue;
+                log.debug("  child[{}]: text='{}', id={}, itemId={}", i, child.getText(), child.getId(), child.getItemId());
                 collectWidgetItemsDeep(child, items, 10);
             }
         }
-        else
+
+        // Always also check dynamic children
+        Widget[] dynamic = widget.getDynamicChildren();
+        if (dynamic != null && dynamic.length > 0)
         {
-            log.debug("readDoomWidgetLoot: widget 919 has no children, searching dynamic children");
-            Widget[] dynamic = widget.getDynamicChildren();
-            if (dynamic != null && dynamic.length > 0)
+            log.debug("readDoomWidgetLoot: widget 919 has {} dynamic children", dynamic.length);
+            for (int i = 0; i < dynamic.length; i++)
             {
-                log.debug("readDoomWidgetLoot: widget 919 has {} dynamic children", dynamic.length);
-                for (Widget child : dynamic)
-                {
-                    if (child != null)
-                        collectWidgetItemsDeep(child, items, 10);
-                }
+                Widget child = dynamic[i];
+                if (child == null) continue;
+                log.debug("  dynamic_child[{}]: text='{}', id={}, itemId={}", i, child.getText(), child.getId(), child.getItemId());
+                collectWidgetItemsDeep(child, items, 10);
             }
         }
 
