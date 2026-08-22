@@ -43,6 +43,7 @@ public final class RewardSources
     public static final int WIDGET_COLOSSEUM          = 867;
     public static final int WIDGET_HESPORI            = 897;
     public static final int WIDGET_WHISPERER          = 834;
+    public static final int WIDGET_DOOM               = 919;
 
     // ── Container IDs ─────────────────────────────────────────────────────────
     //
@@ -97,5 +98,6 @@ public final class RewardSources
             .put(WIDGET_COLOSSEUM,          new Source("Fortis Colosseum",   null, 150))
             .put(WIDGET_HESPORI,            new Source("Hespori",            null,  60))
             .put(WIDGET_TEMPOROSS,          new Source("Tempoross",          null,  80))
+            .put(WIDGET_DOOM,               new Source("Doom of Mokhaiotl",  null, 100))
             .build();
 }
