@@ -69,6 +69,9 @@ public class DoomEncounterTracker
 
     private final Client client;
 
+    /** Cumulative value of all Doom loot lost from this session. */
+    private long totalLostLootValue = 0;
+
     @Inject
     public DoomEncounterTracker(Client client)
     {
@@ -140,6 +143,22 @@ public class DoomEncounterTracker
     }
 
     /**
+     * Records pending loot shown in the reward dialog (items earned this floor).
+     */
+    public void onPendingLootShown(String account, List<ItemStack> items, long value)
+    {
+        DoomRunState run = currentRun.get(account);
+        if (run == null)
+        {
+            log.debug("No active Doom run for {}, ignoring pending loot", account);
+            return;
+        }
+
+        run.setPendingLoot(items, value);
+        log.debug("Doom pending loot recorded: {} items, {} gp", items.size(), value);
+    }
+
+    /**
      * Marks the run as completed after loot has been recorded to the database.
      */
     public void markComplete(String account)
@@ -155,6 +174,7 @@ public class DoomEncounterTracker
 
     /**
      * Abandons the current run (logout, world hop, death, etc.).
+     * Accumulates lost loot value to session total.
      */
     public void abandonRun(String account, String reason)
     {
@@ -163,8 +183,13 @@ public class DoomEncounterTracker
         {
             run.abandon(reason);
             if (run.getState() == DoomRunState.State.ABANDONED)
+            {
+                // Accumulate lost loot to session total
+                totalLostLootValue += run.getLostLootValue();
                 currentRun.remove(account);
-            log.debug("Doom run abandoned: {}", reason);
+                log.debug("Doom run abandoned: {} (lost {} gp, session total: {} gp)",
+                        reason, run.getLostLootValue(), totalLostLootValue);
+            }
         }
     }
 
@@ -184,6 +209,23 @@ public class DoomEncounterTracker
     }
 
     /**
+     * Returns the cumulative value of all Doom loot lost in this session.
+     */
+    public long getTotalLostLootValue()
+    {
+        return totalLostLootValue;
+    }
+
+    /**
+     * Returns the pending loot value from the current active run, or 0 if none.
+     */
+    public long getCurrentRunPendingLootValue(String account)
+    {
+        DoomRunState run = getCurrentRun(account);
+        return run != null ? run.getPendingLootValue() : 0;
+    }
+
+    /**
      * Clears all state (logout/plugin shutdown).
      */
     public void reset()
@@ -191,6 +233,7 @@ public class DoomEncounterTracker
         for (DoomRunState run : currentRun.values())
             run.abandon("session reset");
         currentRun.clear();
+        totalLostLootValue = 0;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

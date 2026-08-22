@@ -80,6 +80,15 @@ public class DoomRunState
     /** Items obtained from the final reward. */
     private List<ItemStack> claimedItems = Collections.emptyList();
 
+    /** Pending loot accumulated but not yet claimed (shown in reward dialog). */
+    private List<ItemStack> pendingLoot = Collections.emptyList();
+
+    /** Total value of pending loot in GP. */
+    private long pendingLootValue = 0;
+
+    /** Total value of loot lost from this run (if abandoned before claiming). */
+    private long lostLootValue = 0;
+
     /** Floor progression history (useful for analytics). */
     private final List<FloorProgression> progressionHistory = new ArrayList<>();
 
@@ -139,6 +148,25 @@ public class DoomRunState
     }
 
     /**
+     * Record the pending loot shown in the floor-completion reward dialog.
+     * This loot is earned but not yet claimed (player can descend or claim).
+     */
+    public void setPendingLoot(List<ItemStack> items, long value)
+    {
+        if (state != State.PROGRESSION_ACTIVE)
+        {
+            log.debug("DoomRun {}: Cannot set pending loot from state {}", runId, state);
+            return;
+        }
+
+        this.pendingLoot = new ArrayList<>(items);
+        this.pendingLootValue = value;
+        this.lastActivityAt = System.currentTimeMillis();
+        log.debug("DoomRun {}: Pending loot set for floor {}: {} items, {} gp",
+                runId, highestFloorCompleted, items.size(), value);
+    }
+
+    /**
      * Mark that the player has claimed their reward.
      */
     public void claimReward(List<ItemStack> items)
@@ -174,12 +202,20 @@ public class DoomRunState
 
     /**
      * Abandon the run due to death, logout, world hop, etc.
+     * Captures any pending loot that was lost.
      */
     public void abandon(String reason)
     {
         if (state == State.COMPLETED || state == State.ABANDONED)
         {
             return;
+        }
+
+        // Record loot value that was lost if run is abandoned during progression
+        if (state == State.PROGRESSION_ACTIVE && pendingLootValue > 0)
+        {
+            lostLootValue = pendingLootValue;
+            log.debug("DoomRun {}: Abandoned with {} gp pending loot lost", runId, lostLootValue);
         }
 
         state = State.ABANDONED;

@@ -58,6 +58,7 @@ public class RuneAlyticsPlugin extends Plugin
     static final int WIDGET_WINTERTODT = RewardSources.WIDGET_WINTERTODT;
     static final int WIDGET_NIGHTMARE  = RewardSources.WIDGET_NIGHTMARE;
     static final int WIDGET_CLUE       = RewardSources.WIDGET_CLUE;
+    static final int WIDGET_DOOM       = RewardSources.WIDGET_DOOM;
 
     // ── Timing ────────────────────────────────────────────────────────────────
     /** ms after a kill during which spawning ground items are attributed to it */
@@ -779,6 +780,24 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
+        if (gid == WIDGET_DOOM)
+        {
+            lastChestSource = "Doom of Mokhaiotl";
+            // Extract pending loot value from the widget and notify doom tracker
+            clientThread.invokeLater(() -> {
+                long pendingValue = extractDoomPendingLootValue();
+                if (pendingValue > 0)
+                {
+                    String account = state.getVerifiedUsername();
+                    if (account != null)
+                        doomEncounterTracker.onPendingLootShown(account, new ArrayList<>(), pendingValue);
+                }
+            });
+            // Read the actual items from the widget
+            lootManager.readReward(RewardSources.BY_WIDGET.get(gid), gid);
+            return;
+        }
+
         // ── Generic registry-driven reads ────────────────────────────────────
         RewardSources.Source src = RewardSources.BY_WIDGET.get(gid);
         if (src != null)
@@ -1185,6 +1204,34 @@ public class RuneAlyticsPlugin extends Plugin
     {
         // ── Death recovery guard: detect death messages ───────────────────────
         deathRecoveryGuard.onChatMessage(event);
+
+        // ── Doom of Mokhaiotl death detection ───────────────────────────────────
+        if (event.getType() == ChatMessageType.GAMEMESSAGE)
+        {
+            String msg = event.getMessage().toLowerCase();
+            if (msg.contains("oh dear") && msg.contains("you are dead"))
+            {
+                String account = state.getVerifiedUsername();
+                if (account != null)
+                {
+                    DoomRunState run = doomEncounterTracker.getCurrentRun(account);
+                    if (run != null && run.getPendingLootValue() > 0)
+                    {
+                        long lostValue = run.getPendingLootValue();
+                        long totalLost = doomEncounterTracker.getTotalLostLootValue();
+
+                        doomEncounterTracker.abandonRun(account, "death");
+
+                        // Send red chat message about lost loot
+                        String lostMsg = String.format(
+                                "<col=ff0000>❌ Doom of Mokhaiotl death: Lost %,d gp (Session: %,d | Total: %,d)",
+                                lostValue, lostValue, totalLost + lostValue);
+                        clientThread.invokeLater(() ->
+                                client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", lostMsg, ""));
+                    }
+                }
+            }
+        }
 
         if (!config.enableLootTracking()) return;
 
@@ -2493,6 +2540,48 @@ public class RuneAlyticsPlugin extends Plugin
             if (item != null && item.getId() > 0 && item.getQuantity() > 0)
                 items.add(new ItemStack(item.getId(), item.getQuantity()));
         return items;
+    }
+
+    /**
+     * Extracts the pending loot value from the Doom of Mokhaiotl reward widget.
+     * Looks for text like "Value: 20,482 GP" in the widget tree.
+     * MUST run on the client thread.
+     *
+     * @return pending loot value in GP, or 0 if not found
+     */
+    private long extractDoomPendingLootValue()
+    {
+        Widget widget = client.getWidget(WIDGET_DOOM, 0);
+        if (widget == null) return 0;
+
+        // Walk the widget tree to find the text showing the value
+        Widget[] children = widget.getChildren();
+        if (children == null) return 0;
+
+        for (Widget child : children)
+        {
+            if (child == null) continue;
+            String text = child.getText();
+            if (text != null && text.contains("Value:"))
+            {
+                // Extract number from "Value: 20,482 GP" format
+                try
+                {
+                    String valueStr = text.replaceAll("[^0-9]", "");
+                    if (!valueStr.isEmpty())
+                    {
+                        long value = Long.parseLong(valueStr);
+                        log.debug("Extracted Doom pending loot value: {} gp", value);
+                        return value;
+                    }
+                }
+                catch (NumberFormatException e)
+                {
+                    log.debug("Failed to parse Doom loot value from: {}", text);
+                }
+            }
+        }
+        return 0;
     }
 
     /**
