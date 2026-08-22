@@ -1800,6 +1800,11 @@ public class LootTrackerManager
         refreshLootDisplay(false);
     }
 
+    public void refreshFromStorage(boolean manualSync)
+    {
+        refreshLootDisplay(manualSync);
+    }
+
     private void refreshLootDisplay(boolean manualSync)
     {
         LootStorageData data = storageManager.getCurrentData();

@@ -2346,7 +2346,7 @@ public class RuneAlyticsPlugin extends Plugin
             // in-memory display cache — rebuild it now so the panel reflects
             // the merged KCs/drops (and any newly-empty placeholders get
             // purged) instead of showing a stale pre-merge snapshot.
-            lootManager.refreshFromStorage();
+            lootManager.refreshFromStorage(userInitiated);
 
             SwingUtilities.invokeLater(() ->
             {
