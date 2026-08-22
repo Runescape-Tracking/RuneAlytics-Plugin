@@ -832,6 +832,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         if (!showIgnoredItems && lootManager.isBossHidden(npcName)) return;
 
         List<BossKillStats.AggregatedDrop> drops = lootManager.getStorageDropsForBoss(npcName);
+        long totalValue = drops.stream().mapToLong(BossKillStats.AggregatedDrop::getTotalValue).sum();
 
         JPanel card = bossCardMap.get(npcName);
         if (card == null)
