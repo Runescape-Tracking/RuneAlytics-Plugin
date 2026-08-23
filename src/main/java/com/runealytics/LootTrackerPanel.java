@@ -1053,9 +1053,11 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         for (BossKillStats s : copy)
         {
             if (!passesFilter(s.getNpcName()) || isEmptyBossEntry(s)) continue;
+            // Only fingerprint structure (boss name, kill count, timestamp)
+            // Exclude getTotalLootValue() since it changes with every item update
+            // and triggers unnecessary rebuilds. The fast path updates values in place.
             sb.append(s.getNpcName())
                     .append(':').append(s.getKillCount())
-                    .append(':').append(s.getTotalLootValue())
                     .append(':').append(s.getLastKillTimestamp())
                     .append(';');
         }
