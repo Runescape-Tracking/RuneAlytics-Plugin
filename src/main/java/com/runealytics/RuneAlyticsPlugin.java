@@ -2624,8 +2624,8 @@ public class RuneAlyticsPlugin extends Plugin
         double trackerCacheHitRate = trackerResultsCache.getHitRate();
 
         log.debug(LogCategory.PERF.format(
-            "Sync metrics - Memory: {}% ({}) | ItemCache: {:.1f}% ({}/{}) | " +
-            "GECache: {:.1f}% ({}/{}) | MergeCache: {:.1f}% ({}/{})",
+            "Sync metrics - Memory: %d%% (%s) | ItemCache: %.1f%% (%d/%d) | " +
+            "GECache: %.1f%% (%d/%d) | MergeCache: %.1f%% (%d/%d)",
             heapPercent, pressure,
             itemCacheHitRate, itemMetadataCache.getHits(),
             itemMetadataCache.getHits() + itemMetadataCache.getMisses(),
@@ -2639,8 +2639,8 @@ public class RuneAlyticsPlugin extends Plugin
         if (sharedQueueTracker != null)
         {
             log.debug(LogCategory.EXECUTOR.format(
-                "Shared executor - Queue: {} | Active: {} | Peak: {} | " +
-                "Submitted: {} | Completed: {}",
+                "Shared executor - Queue: %d | Active: %d | Peak: %d | " +
+                "Submitted: %d | Completed: %d",
                 sharedQueueTracker.getQueueDepth(),
                 sharedQueueTracker.getActiveThreadCount(),
                 sharedQueueTracker.getPeakQueueDepth(),
@@ -2654,7 +2654,7 @@ public class RuneAlyticsPlugin extends Plugin
             pressure == MemoryPressureDetector.MemoryPressure.CRITICAL)
         {
             log.warn(LogCategory.MEMORY.format(
-                "High memory pressure detected: {}% heap used. " +
+                "High memory pressure detected: %d%% heap used. " +
                 "Consider closing other applications.", heapPercent));
         }
     }

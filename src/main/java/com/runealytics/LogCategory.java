@@ -43,14 +43,17 @@ public enum LogCategory
 
 	/**
 	 * Formats a log message with this category prefix.
-	 * Example: "merge:Merging 5 sources" with SYNC_MERGE category
-	 * becomes "[sync:merge] merge:Merging 5 sources"
+	 * Supports standard String.format() style formatting with %s, %d, %f, etc.
+	 * Example: format("Memory: %d%% (%s)", 85, "HIGH")
+	 * becomes "[perf] Memory: 85% (HIGH)"
 	 *
-	 * @param message the base message
-	 * @return message with category prefix
+	 * @param format the format string (supports %s, %d, %f, etc.)
+	 * @param args variable arguments to substitute into format string
+	 * @return formatted message with category prefix
 	 */
-	public String format(String message)
+	public String format(String format, Object... args)
 	{
-		return String.format("[%s] %s", label, message);
+		String formattedMessage = String.format(format, args);
+		return String.format("[%s] %s", label, formattedMessage);
 	}
 }
