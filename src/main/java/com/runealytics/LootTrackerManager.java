@@ -2795,6 +2795,7 @@ public class LootTrackerManager
     /**
      * Permanently delete an item from a boss's loot history.
      * Removes the item from all kill records for that boss and recalculates totals.
+     * Updates both storage and in-memory cache.
      */
     public void deleteDropForNpc(String npcName, int itemId)
     {
@@ -2806,7 +2807,7 @@ public class LootTrackerManager
 
         long totalValueRemoved = 0;
 
-        // Remove from all kill records
+        // Remove from all kill records in storage
         for (LootStorageData.KillRecord kill : bossData.getKills())
         {
             for (Iterator<LootStorageData.DropRecord> it = kill.getDrops().iterator(); it.hasNext(); )
@@ -2818,6 +2819,26 @@ public class LootTrackerManager
                     it.remove();
                 }
             }
+        }
+
+        // Also update the in-memory BossKillStats cache so panel sees the change
+        BossKillStats stats = bossKillStats.get(npcName);
+        if (stats != null)
+        {
+            List<LootStorageData.KillRecord> killHistory = stats.getKillHistory();
+            if (killHistory != null)
+            {
+                for (LootStorageData.KillRecord kill : killHistory)
+                {
+                    for (Iterator<LootStorageData.DropRecord> it = kill.getDrops().iterator(); it.hasNext(); )
+                    {
+                        LootStorageData.DropRecord drop = it.next();
+                        if (drop.getItemId() == itemId)
+                            it.remove();
+                    }
+                }
+            }
+            stats.setTotalLootValue(Math.max(0, stats.getTotalLootValue() - totalValueRemoved));
         }
 
         // Remove from aggregated drops and recalculate totals
