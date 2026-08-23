@@ -196,6 +196,14 @@ public class RuneAlyticsPlugin extends Plugin
     /** Caches merge results, invalidated when tracker files change. */
     private final TrackerResultsCache trackerResultsCache = new TrackerResultsCache();
 
+    // ── Monitoring ────────────────────────────────────────────────────────────
+    /** Detects memory pressure to warn when system is running low on memory. */
+    private final MemoryPressureDetector memoryPressureDetector = new MemoryPressureDetector();
+    /** Tracks queue depth of sync executor (if available). */
+    private AsyncQueueDepthTracker syncQueueTracker;
+    /** Tracks queue depth of shared executor (if available). */
+    private AsyncQueueDepthTracker sharedQueueTracker;
+
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
     private NavigationButton         navButton;
@@ -440,6 +448,18 @@ public class RuneAlyticsPlugin extends Plugin
         syncExecutorMonitor.start();
         sharedExecutorMonitor = new ExecutorHealthMonitor(executorService, "shared");
         sharedExecutorMonitor.start();
+
+        // Initialize queue depth trackers if executors are ThreadPoolExecutor instances
+        // Note: ScheduledExecutorService doesn't expose queue directly, so tracking
+        // may not be available for the dedicated syncExecutor
+        if (executorService instanceof java.util.concurrent.ThreadPoolExecutor)
+        {
+            sharedQueueTracker = new AsyncQueueDepthTracker(
+                (java.util.concurrent.ThreadPoolExecutor) executorService, "shared");
+            log.debug("[monitoring] Shared executor queue depth tracking enabled");
+        }
+
+        log.debug("[monitoring] Memory pressure detector initialized");
 
         // Build the root panel on the EDT, then register the nav button.
         buildOnEdt(() -> mainPanel = injector.getInstance(RuneAlyticsPanel.class));
@@ -2562,6 +2582,9 @@ public class RuneAlyticsPlugin extends Plugin
 
             metrics.logSummary(accountKey, syncContext.getReason());
 
+            // Log cache statistics and memory pressure at end of sync
+            logMonitoringMetrics();
+
             SwingUtilities.invokeLater(() ->
             {
                 if (lootTrackerPanel == null) return;
@@ -2582,6 +2605,57 @@ public class RuneAlyticsPlugin extends Plugin
                     if (lootTrackerPanel != null) lootTrackerPanel.showSyncFailed(t.getMessage());
                 });
             }
+        }
+    }
+
+    /**
+     * Logs monitoring metrics including cache statistics and memory pressure.
+     * Called at the end of sync pipeline to capture performance data.
+     */
+    private void logMonitoringMetrics()
+    {
+        // Check memory pressure
+        int heapPercent = memoryPressureDetector.getHeapUsagePercent();
+        MemoryPressureDetector.MemoryPressure pressure = memoryPressureDetector.getCurrentPressure();
+
+        // Cache statistics
+        double itemCacheHitRate = itemMetadataCache.getHitRate();
+        double geCacheHitRate = gePriceCache.getHitRate();
+        double trackerCacheHitRate = trackerResultsCache.getHitRate();
+
+        log.debug(LogCategory.PERF.format(
+            "Sync metrics - Memory: {}% ({}) | ItemCache: {:.1f}% ({}/{}) | " +
+            "GECache: {:.1f}% ({}/{}) | MergeCache: {:.1f}% ({}/{})",
+            heapPercent, pressure,
+            itemCacheHitRate, itemMetadataCache.getHits(),
+            itemMetadataCache.getHits() + itemMetadataCache.getMisses(),
+            geCacheHitRate, gePriceCache.getHits(),
+            gePriceCache.getHits() + gePriceCache.getMisses(),
+            trackerCacheHitRate, trackerResultsCache.getHits(),
+            trackerResultsCache.getHits() + trackerResultsCache.getMisses()
+        ));
+
+        // Log queue depth if available
+        if (sharedQueueTracker != null)
+        {
+            log.debug(LogCategory.EXECUTOR.format(
+                "Shared executor - Queue: {} | Active: {} | Peak: {} | " +
+                "Submitted: {} | Completed: {}",
+                sharedQueueTracker.getQueueDepth(),
+                sharedQueueTracker.getActiveThreadCount(),
+                sharedQueueTracker.getPeakQueueDepth(),
+                sharedQueueTracker.getTotalSubmitted(),
+                sharedQueueTracker.getTotalCompleted()
+            ));
+        }
+
+        // Warn if memory pressure is high
+        if (pressure == MemoryPressureDetector.MemoryPressure.HIGH ||
+            pressure == MemoryPressureDetector.MemoryPressure.CRITICAL)
+        {
+            log.warn(LogCategory.MEMORY.format(
+                "High memory pressure detected: {}% heap used. " +
+                "Consider closing other applications.", heapPercent));
         }
     }
 
@@ -2624,6 +2698,30 @@ public class RuneAlyticsPlugin extends Plugin
     public TrackerResultsCache getTrackerResultsCache()
     {
         return trackerResultsCache;
+    }
+
+    /**
+     * Exposes the memory pressure detector for monitoring system memory.
+     */
+    public MemoryPressureDetector getMemoryPressureDetector()
+    {
+        return memoryPressureDetector;
+    }
+
+    /**
+     * Exposes the sync executor queue depth tracker (if available).
+     */
+    public AsyncQueueDepthTracker getSyncQueueTracker()
+    {
+        return syncQueueTracker;
+    }
+
+    /**
+     * Exposes the shared executor queue depth tracker (if available).
+     */
+    public AsyncQueueDepthTracker getSharedQueueTracker()
+    {
+        return sharedQueueTracker;
     }
 
     @net.runelite.client.task.Schedule(
