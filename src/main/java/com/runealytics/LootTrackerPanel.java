@@ -858,7 +858,14 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 }
             }
 
-            final boolean needsRebuildFinal = needsRebuild;
+            // Pre-build the new grid off-thread to avoid EDT blocking
+            JPanel newGrid = null;
+            if (needsRebuild)
+            {
+                newGrid = buildItemGrid(drops, npcName);
+            }
+
+            final JPanel newGridFinal = newGrid;
             SwingUtilities.invokeLater(() ->
             {
                 JLabel vl = bossValueLabelMap.get(npcName);
@@ -866,9 +873,23 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 if (vl != null) vl.setText(totalValue > 0 ? formatGp(totalValue) : "");
                 if (nl != null) nl.setText(buildNameLabel(npcName, stats.getKillCount()));
 
-                if (needsRebuildFinal)
+                if (newGridFinal != null)
                 {
-                    rebuildBossCardGrid(npcName, drops);
+                    // Grid was pre-built off-thread, just swap it on EDT
+                    JPanel gridWrapper = bossGridWrapperMap.get(npcName);
+                    if (gridWrapper != null)
+                    {
+                        gridWrapper.removeAll();
+                        gridWrapper.add(newGridFinal, BorderLayout.NORTH);
+                        gridWrapper.revalidate();
+                        gridWrapper.repaint();
+
+                        // Only repaint the card, not the entire panel
+                        JPanel card2 = bossCardMap.get(npcName);
+                        if (card2 != null) card2.repaint();
+                    }
+                    // Clear item slots for this boss to avoid stale references
+                    itemSlotMap.keySet().removeIf(k -> k.startsWith(npcName + "_"));
                 }
                 else
                 {
@@ -1117,27 +1138,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         });
     }
 
-    private void rebuildBossCardGrid(String npcName, List<BossKillStats.AggregatedDrop> drops)
-    {
-        // Swap only the inner item grid inside the existing wrapper, preserving the
-        // header row and its collapse listener (which captures this wrapper instance).
-        JPanel gridWrapper = bossGridWrapperMap.get(npcName);
-        if (gridWrapper == null) { invalidateFingerprint(); refreshDisplay(); return; }
-
-        itemSlotMap.keySet().removeIf(k -> k.startsWith(npcName + "_"));
-
-        JPanel newGrid = buildItemGrid(drops, npcName);
-        gridWrapper.removeAll();
-        gridWrapper.add(newGrid, BorderLayout.NORTH);
-
-        gridWrapper.revalidate();
-        gridWrapper.repaint();
-        // Only repaint the card, not the entire panel
-        JPanel card = bossCardMap.get(npcName);
-        if (card != null)
-            card.repaint();
-    }
-
     public void refreshDisplay()
     {
         if (SwingUtilities.isEventDispatchThread())
@@ -1158,13 +1158,6 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 List<BossKillStats> allStats = lootManager.getAllBossStats();
 
                 String fp = buildDisplayFingerprint(allStats, highlightedBoss);
-                if (fp.equals(lastDisplayFingerprint))
-                {
-                    refreshing.set(false);
-                    long elapsedMs = System.currentTimeMillis() - startMs;
-                    log.debug(LogCategory.UI_UPDATE.format("Fast path: skipped rebuild (%dms)", elapsedMs));
-                    return;
-                }
                 lastDisplayFingerprint = fp;
 
                 Map<String, BossKillStats> unique = new LinkedHashMap<>();
