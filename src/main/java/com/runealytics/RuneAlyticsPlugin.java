@@ -2449,8 +2449,8 @@ public class RuneAlyticsPlugin extends Plugin
         // Capture immutable context at sync start so stale results cannot
         // alter a different account/session after logout/switch
         final SyncContext syncContext = new SyncContext(
-            currentPlayerIdentity.getVerifiedUsername(),
-            currentPlayerIdentity.getAccountKey(),
+            state.getVerifiedUsername(),
+            accountKey,
             state.getSessionGeneration(),
             userInitiated ? "manual" : "auto"
         );
