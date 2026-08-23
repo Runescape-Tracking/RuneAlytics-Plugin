@@ -1094,7 +1094,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 // If structure hasn't changed, do incremental updates
                 if (newFp.equals(lastDisplayFingerprint))
                 {
-                    // Structure same: just update values and kill counts
+                    // Structure same: just update values and kill counts on EDT
                     long edtStartMs = System.currentTimeMillis();
                     SwingUtilities.invokeLater(() ->
                     {
@@ -1102,15 +1102,20 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         int totalKills = 0;
                         for (BossKillStats stats : updatedStats)
                         {
-                            if (!passesFilter(stats.getNpcName())
-                                    || isEmptyBossEntry(stats)) continue;
+                            String npcName = stats.getNpcName();
+                            if (!passesFilter(npcName) || isEmptyBossEntry(stats)) continue;
 
                             totalVal += stats.getTotalLootValue();
                             totalKills += stats.getKillCount();
 
-                            // Update labels incrementally
-                            updateBossKillLabel(stats.getNpcName(), stats.getKillCount());
-                            updateBossValue(stats.getNpcName(), stats.getTotalLootValue());
+                            // Update labels directly on EDT (no nested invokeLater)
+                            JLabel nameLabel = bossNameLabelMap.get(npcName);
+                            if (nameLabel != null)
+                                nameLabel.setText(buildNameLabel(npcName, stats.getKillCount()));
+
+                            JLabel valueLabel = bossValueLabelMap.get(npcName);
+                            if (valueLabel != null)
+                                valueLabel.setText(stats.getTotalLootValue() > 0 ? formatGp(stats.getTotalLootValue()) : "");
                         }
                         totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                         totalValueLabel.setText("Value " + formatGp(totalVal));
