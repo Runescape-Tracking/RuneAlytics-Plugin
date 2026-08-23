@@ -1174,7 +1174,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 List<BossKillStats> allStats = lootManager.getAllBossStats();
 
                 String fp = buildDisplayFingerprint(allStats, highlightedBoss);
+                String oldFp = lastDisplayFingerprint;
                 lastDisplayFingerprint = fp;
+
+                // If fingerprint was invalidated (set to null by invalidateFingerprint()),
+                // force a slow-path rebuild even if structure looks the same
+                boolean fingerprintChanged = (oldFp == null) || !fp.equals(oldFp);
 
                 Map<String, BossKillStats> unique = new LinkedHashMap<>();
                 for (BossKillStats s : allStats) unique.putIfAbsent(s.getNpcName(), s);
@@ -1190,6 +1195,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
                 final long totalVal   = sorted.stream().mapToLong(BossKillStats::getTotalLootValue).sum();
                 final int  totalKills = sorted.stream().mapToInt(BossKillStats::getKillCount).sum();
+                final boolean forceSlowPath = fingerprintChanged;
 
                 SwingUtilities.invokeLater(() ->
                 {
@@ -1200,7 +1206,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
                         // Fast path: same bosses, same order, same highlight → update
                         // the existing cards in place. No removeAll, so no flicker.
-                        boolean inPlace = !sorted.isEmpty()
+                        // Skip if fingerprint was invalidated (force slow path for structure changes)
+                        boolean inPlace = !forceSlowPath && !sorted.isEmpty()
                                 && newOrder.equals(displayedOrder)
                                 && java.util.Objects.equals(highlightedBoss, displayedHighlight)
                                 && bossCardMap.size() == newOrder.size();
