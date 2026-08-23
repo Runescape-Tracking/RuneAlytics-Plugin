@@ -831,37 +831,46 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             return;
         }
 
-        boolean needsRebuild = false;
-        for (BossKillStats.AggregatedDrop drop : drops)
+        // Defer itemManager calls to avoid blocking the EDT
+        executorService.execute(() ->
         {
-            JLabel existing = itemSlotMap.get(npcName + "_" + drop.getItemId());
-            if (existing != null)
+            boolean needsRebuild = false;
+            for (BossKillStats.AggregatedDrop drop : drops)
             {
-                AsyncBufferedImage img = itemManager.getImage(
-                        drop.getItemId(), drop.getTotalQuantity(), drop.getTotalQuantity() > 1);
-                img.addTo(existing);
+                JLabel existing = itemSlotMap.get(npcName + "_" + drop.getItemId());
+                if (existing != null)
+                {
+                    // ItemManager call deferred off-thread to avoid EDT blocking
+                    AsyncBufferedImage img = itemManager.getImage(
+                            drop.getItemId(), drop.getTotalQuantity(), drop.getTotalQuantity() > 1);
+                    img.addTo(existing);
+                }
+                else
+                {
+                    needsRebuild = true;
+                }
             }
-            else
+
+            final boolean needsRebuildFinal = needsRebuild;
+            SwingUtilities.invokeLater(() ->
             {
-                needsRebuild = true;
-            }
-        }
+                JLabel vl = bossValueLabelMap.get(npcName);
+                JLabel nl = bossNameLabelMap.get(npcName);
+                if (vl != null) vl.setText(totalValue > 0 ? formatGp(totalValue) : "");
+                if (nl != null) nl.setText(buildNameLabel(npcName, stats.getKillCount()));
 
-        JLabel vl = bossValueLabelMap.get(npcName);
-        JLabel nl = bossNameLabelMap.get(npcName);
-        if (vl != null) vl.setText(totalValue > 0 ? formatGp(totalValue) : "");
-        if (nl != null) nl.setText(buildNameLabel(npcName, stats.getKillCount()));
-
-        if (needsRebuild)
-        {
-            rebuildBossCardGrid(npcName, drops);
-        }
-        else
-        {
-            // Only repaint the specific card to avoid flickering the entire panel
-            if (card != null)
-                card.repaint();
-        }
+                if (needsRebuildFinal)
+                {
+                    rebuildBossCardGrid(npcName, drops);
+                }
+                else
+                {
+                    // Only repaint the specific card to avoid flickering the entire panel
+                    if (card != null)
+                        card.repaint();
+                }
+            });
+        });
     }
 
     private void rebuildBossCardGrid(String npcName, List<BossKillStats.AggregatedDrop> drops)
