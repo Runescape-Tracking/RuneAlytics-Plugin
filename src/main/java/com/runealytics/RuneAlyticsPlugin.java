@@ -178,6 +178,10 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private DoomEncounterTracker     doomEncounterTracker;
     @Inject private GroundItemAttributor     groundItemAttributor;
 
+    // ── Sync coordination ─────────────────────────────────────────────────────
+    /** Coordinates one-at-a-time sync operations with proper coalescing. */
+    private final SyncCoordinator syncCoordinator = new SyncCoordinator();
+
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
     private NavigationButton         navButton;
@@ -2339,9 +2343,6 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 String msg = currentPlayerIdentity.getMismatchMessage();
                 if (msg != null) lootTrackerPanel.showAccountMismatch(msg);
-                // getMismatchMessage() should never be null when canSync() is
-                // false, but guard against a TOCTOU race so the button (already
-                // showing "Syncing…") is never left stuck.
                 else                lootTrackerPanel.showSyncBusy("Log in to sync loot…");
             }
             return;
@@ -2350,7 +2351,6 @@ public class RuneAlyticsPlugin extends Plugin
         final String accountKey = currentPlayerIdentity.getAccountKey();
         if (accountKey == null)
         {
-            // canSync() was true a moment ago but the player just logged out.
             if (userInitiated && lootTrackerPanel != null)
             {
                 lootTrackerPanel.showSyncBusy("Log in to sync loot…");
@@ -2358,12 +2358,16 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
+        SyncRequest request = new SyncRequest(
+            userInitiated ? SyncRequest.Priority.MANUAL : SyncRequest.Priority.AUTO,
+            true,
+            userInitiated ? "manual_user_click" : "auto_trigger"
+        );
+
         executorService.submit(() ->
         {
-            if (!state.tryStartSync())
+            if (!syncCoordinator.tryStartSync(request))
             {
-                // A sync (live/auto/manual) is already running. Reset the button
-                // so a manual click doesn't get stuck on "Syncing…".
                 if (userInitiated && lootTrackerPanel != null)
                 {
                     SwingUtilities.invokeLater(() ->
@@ -2371,8 +2375,19 @@ public class RuneAlyticsPlugin extends Plugin
                 }
                 return;
             }
-            try     { runSyncPipeline(accountKey, true, userInitiated); }
-            finally { state.endSync(); }
+            try
+            {
+                runSyncPipeline(accountKey, true, userInitiated);
+            }
+            finally
+            {
+                SyncRequest pending = syncCoordinator.endSync();
+                if (pending != null && pending.isFullReconcile())
+                {
+                    log.debug("[Sync] Starting coalesced follow-up sync: {}", pending);
+                    performLootSync(userInitiated);
+                }
+            }
         });
     }
 
@@ -2389,14 +2404,26 @@ public class RuneAlyticsPlugin extends Plugin
         if (accountKey == null) return;
         if (!currentPlayerIdentity.isLinkedAccount(accountKey)) return;
 
-        // Claim the slot synchronously while still logged in; the live-sync
-        // path therefore cannot also upload and double-count.
-        if (!state.tryStartSync()) return;
+        SyncRequest request = new SyncRequest(
+            SyncRequest.Priority.LOGOUT,
+            false,
+            "logout_flush_upload_only"
+        );
+
+        if (!syncCoordinator.tryStartSync(request)) return;
 
         executorService.submit(() ->
         {
             try     { runSyncPipeline(accountKey, false, false); }
-            finally { state.endSync(); }
+            finally
+            {
+                SyncRequest pending = syncCoordinator.endSync();
+                if (pending != null && pending.isFullReconcile())
+                {
+                    log.debug("[Sync] Starting coalesced follow-up sync after logout: {}", pending);
+                    performLootSync(false);
+                }
+            }
         });
     }
 
@@ -2411,9 +2438,25 @@ public class RuneAlyticsPlugin extends Plugin
      */
     private void runSyncPipeline(String accountKey, boolean pull, boolean userInitiated)
     {
+        // Capture immutable context at sync start so stale results cannot
+        // alter a different account/session after logout/switch
+        final SyncContext syncContext = new SyncContext(
+            currentPlayerIdentity.getVerifiedUsername(),
+            currentPlayerIdentity.getAccountKey(),
+            state.getSessionGeneration(),
+            userInitiated ? "manual" : "auto"
+        );
+
+        // Capture local revision before sync starts. If loot arrives during sync,
+        // the revision will increment, and we'll merge instead of replace.
+        final long syncStartRevision = lootManager.getCurrentRevision();
+
+        PerformanceMetrics metrics = new PerformanceMetrics();
+
         try
         {
-            log.debug("[plugin] Loot sync start (account='{}', pull={})", accountKey, pull);
+            log.debug("[plugin] Loot sync start (account='{}', pull={} session={})",
+                accountKey, pull, syncContext.getSessionGeneration());
 
             if (userInitiated && lootTrackerPanel != null)
             {
@@ -2423,6 +2466,7 @@ public class RuneAlyticsPlugin extends Plugin
             // 1. Legacy per-kill website history pull + upload.
             //    Pull from website first to establish baseline before merge.
             lootManager.syncLegacyBlocking(accountKey, pull, userInitiated);
+            metrics.markLegacySyncComplete();
 
             if (userInitiated && lootTrackerPanel != null)
             {
@@ -2435,12 +2479,27 @@ public class RuneAlyticsPlugin extends Plugin
             //    then applies the result back to local storage.
             LootSyncMergeService.MergeResult result =
                     lootSyncMergeService.performMergeForAccount(accountKey, userInitiated);
+            metrics.markMergeComplete(
+                lootManager.getStorageRecordCount(),
+                lootManager.getStorageUniqueItemCount()
+            );
+
+            // Validate context before applying merge result
+            // If account switched or session changed, discard result
+            if (!syncContext.isStillValid(state))
+            {
+                log.debug("[plugin] Discarding stale sync result (context no longer valid): {}", syncContext);
+                return;
+            }
 
             // The merge writes straight to LootStorageData, bypassing the
             // in-memory display cache — rebuild it now so the panel reflects
             // the merged KCs/drops (and any newly-empty placeholders get
             // purged) instead of showing a stale pre-merge snapshot.
             lootManager.refreshFromStorage(userInitiated);
+            metrics.markUiRefreshComplete();
+
+            metrics.logSummary(accountKey, syncContext.getReason());
 
             SwingUtilities.invokeLater(() ->
             {
@@ -2454,7 +2513,8 @@ public class RuneAlyticsPlugin extends Plugin
             // Catch Throwable (not just Exception) so an Error — e.g. an
             // ItemManager "must be called on client thread" assertion — still
             // resets the Sync button instead of leaving it stuck on "Syncing…".
-            log.debug("[plugin] Loot sync failed", t);
+            log.debug("[plugin] Loot sync failed (account='{}' session={}): {}",
+                accountKey, syncContext.getSessionGeneration(), t.getMessage());
             if (userInitiated)
             {
                 SwingUtilities.invokeLater(() -> {

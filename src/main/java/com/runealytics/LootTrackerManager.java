@@ -2228,6 +2228,52 @@ public class LootTrackerManager
         return bd != null ? bd.getTotalLootValue() : 0L;
     }
 
+    /**
+     * Get the current revision number of local storage.
+     * Incremented whenever new loot is added, used to detect if fresh loot
+     * arrived during a synchronization.
+     */
+    public long getCurrentRevision()
+    {
+        LootStorageData data = storageManager.getCurrentData();
+        return data != null ? data.getRevision() : 0L;
+    }
+
+    /**
+     * Get count of all loot records in current storage.
+     * Used for performance metrics.
+     */
+    public int getStorageRecordCount()
+    {
+        LootStorageData data = storageManager.getCurrentData();
+        if (data == null) return 0;
+        int count = 0;
+        for (LootStorageData.BossKillData bd : data.getBossKills().values())
+        {
+            if (bd.getKills() != null) count += bd.getKills().size();
+        }
+        return count;
+    }
+
+    /**
+     * Get count of unique items in current storage.
+     * Used for performance metrics.
+     */
+    public int getStorageUniqueItemCount()
+    {
+        LootStorageData data = storageManager.getCurrentData();
+        if (data == null) return 0;
+        java.util.Set<Integer> uniqueItems = new java.util.HashSet<>();
+        for (LootStorageData.BossKillData bd : data.getBossKills().values())
+        {
+            for (LootStorageData.AggregatedDrop drop : bd.getAggregatedDrops().values())
+            {
+                if (drop.getItemId() > 0) uniqueItems.add(drop.getItemId());
+            }
+        }
+        return uniqueItems.size();
+    }
+
     public List<BossKillStats> getAllBossStats()
     {
         return new ArrayList<>(bossKillStats.values());

@@ -27,6 +27,14 @@ public class RuneAlyticsState
     private volatile long lastSyncTime;
 
     /**
+     * Session generation number — incremented on each login.
+     * Used by async tasks to detect if they belong to a stale account/session.
+     * A task that captured sessionGeneration=5 should discard its result if
+     * the current sessionGeneration is 6 (account switched).
+     */
+    private volatile long sessionGeneration = 0;
+
+    /**
      * Server feature flag ({@code "xp_session"}): when {@code true}, the plugin
      * POSTs full XP-session snapshots to {@code /api/plugin/xp/session}. Refreshed
      * from every {@code /plugin/features} fetch. Defaults {@code false} so nothing
@@ -91,6 +99,16 @@ public class RuneAlyticsState
         currentAccountSubtype = "normal";
         currentLocation = null;
         visibleMapPlayers = Collections.emptyList();
+        sessionGeneration++;
+    }
+
+    /**
+     * Get the current session generation number.
+     * Async tasks use this to validate that their results belong to the current session.
+     */
+    public long getSessionGeneration()
+    {
+        return sessionGeneration;
     }
 
     public boolean canSync()

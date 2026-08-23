@@ -11,6 +11,15 @@ public class LootStorageData
     @SerializedName("username")
     private String username;
 
+    /**
+     * Monotonically increasing revision number.
+     * Incremented every time new loot is added to local storage.
+     * Used to detect when newer loot has arrived during a synchronization,
+     * preventing the sync result from overwriting unsynchronized local drops.
+     */
+    @SerializedName("revision")
+    private long revision = 0;
+
     @SerializedName("last_sync")
     private long lastSyncTimestamp;
 

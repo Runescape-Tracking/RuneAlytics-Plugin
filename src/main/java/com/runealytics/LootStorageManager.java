@@ -267,6 +267,10 @@ public class LootStorageManager
 
         bossData.setTotalLootValue(bossData.getTotalLootValue() + killValue);
 
+        // Increment revision to signal that new loot has been added
+        // Used by sync to detect if fresh drops arrived during synchronization
+        currentData.setRevision(currentData.getRevision() + 1);
+
         scheduleSave();
 
         log.debug("Added kill #{} for {} - {} drops, {} gp",
