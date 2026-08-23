@@ -1473,6 +1473,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         valueLabel.setFont(CALIBRI_VALUE);
         valueLabel.setBorder(new EmptyBorder(0, 4, 0, 8));
         valueLabel.setVerticalAlignment(JLabel.CENTER);
+        if (totalValue > 0)
+            valueLabel.setToolTipText(String.format("%,d GP", totalValue));
 
         // Count hidden items for this boss
         long hiddenItemCount = drops.stream()
@@ -1670,6 +1672,14 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 refreshDisplay();
             });
             menu.add(toggleHide);
+
+            JMenuItem deleteItem = new JMenuItem("Delete \"" + drop.getItemName() + "\"");
+            deleteItem.addActionListener(e -> {
+                lootManager.deleteDropForNpc(npcName, drop.getItemId());
+                invalidateFingerprint();
+                refreshDisplay();
+            });
+            menu.add(deleteItem);
 
             // Add right-click listener to both slot and iconLabel to ensure menu shows
             MouseAdapter rightClickAdapter = new MouseAdapter()

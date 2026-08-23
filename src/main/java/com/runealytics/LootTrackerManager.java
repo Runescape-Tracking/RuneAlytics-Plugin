@@ -2793,6 +2793,50 @@ public class LootTrackerManager
     }
 
     /**
+     * Permanently delete an item from a boss's loot history.
+     * Removes the item from all kill records for that boss and recalculates totals.
+     */
+    public void deleteDropForNpc(String npcName, int itemId)
+    {
+        LootStorageData data = storageManager.getCurrentData();
+        if (data == null) return;
+
+        LootStorageData.BossKillData bossData = data.getBossKills().get(npcName);
+        if (bossData == null) return;
+
+        long totalValueRemoved = 0;
+
+        // Remove from all kill records
+        for (LootStorageData.KillRecord kill : bossData.getKills())
+        {
+            for (Iterator<LootStorageData.DropRecord> it = kill.getDrops().iterator(); it.hasNext(); )
+            {
+                LootStorageData.DropRecord drop = it.next();
+                if (drop.getItemId() == itemId)
+                {
+                    totalValueRemoved += drop.getTotalValue();
+                    it.remove();
+                }
+            }
+        }
+
+        // Remove from aggregated drops and recalculate totals
+        bossData.getAggregatedDrops().remove(itemId);
+        bossData.setTotalLootValue(Math.max(0, bossData.getTotalLootValue() - totalValueRemoved));
+
+        // Remove from hidden drops if it's there
+        Set<Integer> hidden = data.getHiddenDropsByBoss().get(npcName);
+        if (hidden != null)
+        {
+            hidden.remove(itemId);
+            if (hidden.isEmpty()) data.getHiddenDropsByBoss().remove(npcName);
+        }
+
+        storageManager.scheduleSave();
+        log.debug("Deleted item {} from boss {}, removed {} gp", itemId, npcName, totalValueRemoved);
+    }
+
+    /**
      * Pushes the in-memory hidden-drops map down to {@link LootStorageData} so
      * it survives a restart. Independent of RuneLite's own ignore feature.
      */
