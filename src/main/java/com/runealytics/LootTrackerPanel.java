@@ -112,6 +112,13 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     private final Map<String, javax.swing.Timer> lootDebounceMap = new ConcurrentHashMap<>();
 
+    // ── Enhanced indexing for incremental updates ─────────────────────────────
+    /** Maps source group key to list of boss names in display order.
+     *  Enables incremental reordering when sort/filter changes. */
+    private final Map<String, List<String>> bossBySourceGroup = new ConcurrentHashMap<>();
+    /** Current display order for fast lookup when reordering. */
+    private List<String> currentBossOrder = new ArrayList<>();
+
     // Re-entrancy guard: serialises refreshes so overlapping events coalesce
     // into a single rebuild instead of racing on the shared executor.
     private final AtomicBoolean refreshing = new AtomicBoolean(false);
@@ -873,6 +880,102 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         });
     }
 
+    /**
+     * Incremental update for a single boss kill count and name label.
+     * Used when a kill event arrives for a boss that's already displayed.
+     * Does not rebuild the entire panel, just updates existing labels.
+     */
+    public void updateBossKillLabel(String npcName, int newKillCount)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            JLabel nameLabel = bossNameLabelMap.get(npcName);
+            if (nameLabel != null)
+            {
+                nameLabel.setText(buildNameLabel(npcName, newKillCount));
+            }
+        });
+    }
+
+    /**
+     * Incremental update for a single boss total loot value.
+     * Used when item values are updated without structure change.
+     */
+    public void updateBossValue(String npcName, long totalValue)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            JLabel valueLabel = bossValueLabelMap.get(npcName);
+            if (valueLabel != null)
+            {
+                valueLabel.setText(totalValue > 0 ? formatGp(totalValue) : "");
+            }
+        });
+    }
+
+    /**
+     * Reorder all boss cards to match the given order without rebuilding.
+     * Used when sort mode or filter changes but the boss set remains the same.
+     * Pre-condition: All bosses in newOrder must already be in bossListPanel.
+     */
+    public void reorderBossCards(List<String> newOrder)
+    {
+        if (newOrder.equals(currentBossOrder)) return; // No reordering needed
+
+        SwingUtilities.invokeLater(() ->
+        {
+            try
+            {
+                // Build a new component list in the desired order
+                List<Component> reorderedComps = new ArrayList<>();
+                for (String npcName : newOrder)
+                {
+                    JPanel card = bossCardMap.get(npcName);
+                    if (card != null) reorderedComps.add(card);
+                    // Skip struts for now, they'll be re-added below
+                }
+
+                // Remove all but keep component maps intact
+                bossListPanel.removeAll();
+
+                // Re-add in new order with struts
+                for (int i = 0; i < reorderedComps.size(); i++)
+                {
+                    if (i > 0) bossListPanel.add(Box.createVerticalStrut(5));
+                    bossListPanel.add(reorderedComps.get(i));
+                }
+
+                currentBossOrder = newOrder;
+                bossListPanel.revalidate();
+                bossListPanel.repaint();
+            }
+            catch (Throwable ex)
+            {
+                log.debug("Boss card reordering failed, falling back to refresh", ex);
+                refreshDisplay();
+            }
+        });
+    }
+
+    /**
+     * Toggle visibility of a boss card without rebuilding the entire panel.
+     * Used when a filter change only affects one or a few bosses.
+     * Pre-condition: Card must exist in bossCardMap.
+     */
+    public void setBossCardVisibility(String npcName, boolean visible)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            JPanel card = bossCardMap.get(npcName);
+            if (card != null && card.isVisible() != visible)
+            {
+                card.setVisible(visible);
+                bossListPanel.revalidate();
+                bossListPanel.repaint();
+            }
+        });
+    }
+
     private void rebuildBossCardGrid(String npcName, List<BossKillStats.AggregatedDrop> drops)
     {
         // Swap only the inner item grid inside the existing wrapper, preserving the
@@ -951,6 +1054,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
                         if (inPlace)
                         {
+                            currentBossOrder = newOrder;
                             for (BossKillStats stats : sorted)
                                 updateLoot(stats.getNpcName(), stats);
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
@@ -967,6 +1071,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         bossValueLabelMap.clear();
                         bossNameLabelMap.clear();
                         bossGridWrapperMap.clear();
+                        bossBySourceGroup.clear();
+                        currentBossOrder.clear();
                         lootDebounceMap.values().forEach(javax.swing.Timer::stop);
                         lootDebounceMap.clear();
 
@@ -978,8 +1084,15 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         {
                             for (BossKillStats stats : sorted)
                             {
+                                String npcName = stats.getNpcName();
                                 bossListPanel.add(buildBossCard(stats));
                                 bossListPanel.add(Box.createVerticalStrut(5));
+
+                                // Populate source group index for incremental updates
+                                currentBossOrder.add(npcName);
+                                String sourceGroup = getSourceGroupKey(npcName);
+                                bossBySourceGroup.computeIfAbsent(sourceGroup, k -> new ArrayList<>())
+                                        .add(npcName);
                             }
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                             totalValueLabel.setText("Value " + formatGp(totalVal));
@@ -1010,6 +1123,14 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 refreshing.set(false);
             }
         });
+    }
+
+    /** Returns the source group key for a boss (COMBAT, PICKPOCKET, or SKILL). */
+    private String getSourceGroupKey(String npcName)
+    {
+        if (lootManager.isPickpocketSource(npcName)) return "PICKPOCKET";
+        if (lootManager.isSkillingSource(npcName))   return "SKILLING";
+        return "COMBAT";
     }
 
     private boolean passesFilter(String npcName)
@@ -1062,12 +1183,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         for (BossKillStats s : copy)
         {
             if (!passesFilter(s.getNpcName()) || isEmptyBossEntry(s)) continue;
-            // Only fingerprint structure (boss name, kill count, timestamp)
-            // Exclude getTotalLootValue() since it changes with every item update
-            // and triggers unnecessary rebuilds. The fast path updates values in place.
+            // Only fingerprint structure: boss name + kill count + sort order
+            // Exclude timestamp (changes on every kill) and values (change with items)
+            // This allows fast path to trigger for incremental updates while detecting
+            // structural changes (new bosses, removed bosses, reordering, filter changes)
             sb.append(s.getNpcName())
                     .append(':').append(s.getKillCount())
-                    .append(':').append(s.getLastKillTimestamp())
                     .append(';');
         }
         return sb.toString();
