@@ -183,6 +183,10 @@ public class RuneAlyticsPlugin extends Plugin
     private final SyncCoordinator syncCoordinator = new SyncCoordinator();
     /** Dedicated executor for loot sync operations (separate from RuneLite's shared pool). */
     private ScheduledExecutorService syncExecutor;
+    /** Health monitor for loot sync executor to detect starvation. */
+    private ExecutorHealthMonitor syncExecutorMonitor;
+    /** Health monitor for shared executor to detect starvation. */
+    private ExecutorHealthMonitor sharedExecutorMonitor;
 
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
@@ -423,6 +427,12 @@ public class RuneAlyticsPlugin extends Plugin
         // Create dedicated executor for loot sync operations (separate from RuneLite's pool)
         syncExecutor = SyncExecutorFactory.createSyncExecutor();
 
+        // Start health monitors for both executors to detect starvation
+        syncExecutorMonitor = new ExecutorHealthMonitor(syncExecutor, "loot-sync");
+        syncExecutorMonitor.start();
+        sharedExecutorMonitor = new ExecutorHealthMonitor(executorService, "shared");
+        sharedExecutorMonitor.start();
+
         // Build the root panel on the EDT, then register the nav button.
         buildOnEdt(() -> mainPanel = injector.getInstance(RuneAlyticsPanel.class));
 
@@ -506,6 +516,10 @@ public class RuneAlyticsPlugin extends Plugin
             whispererFlushTask.cancel(false);
             whispererFlushTask = null;
         }
+
+        // Stop health monitors before shutting down executors.
+        try { if (syncExecutorMonitor != null) syncExecutorMonitor.stop(); } catch (Exception e) { log.debug("Sync executor health monitor stop failed: {}", e.getMessage()); }
+        try { if (sharedExecutorMonitor != null) sharedExecutorMonitor.stop(); } catch (Exception e) { log.debug("Shared executor health monitor stop failed: {}", e.getMessage()); }
 
         // Flush accumulated XP before the executor shuts down.
         try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.debug("XP flush on shutdown failed: {}", e.getMessage()); }
@@ -1740,6 +1754,11 @@ public class RuneAlyticsPlugin extends Plugin
      * + upload {@value #BANK_SYNC_DEBOUNCE_MS} ms after the last change. The
      * snapshot is built on the client thread (ItemManager reads are
      * client-thread-only) and only the HTTP call is handed to the executor.
+     *
+     * <p><strong>Phase 4 Architecture:</strong> Bank sync intentionally uses the
+     * shared {@code executorService} (not the dedicated {@code syncExecutor}) to keep
+     * bank sync independent and ensure it doesn't interfere with loot sync operations.
+     * Both executors are monitored for starvation via {@link ExecutorHealthMonitor}.</p>
      */
     private void scheduleBankSync()
     {
