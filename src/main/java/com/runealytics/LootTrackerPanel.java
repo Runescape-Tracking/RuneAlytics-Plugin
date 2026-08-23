@@ -1610,11 +1610,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             if (isPet)
                 slot.setBackground(new Color(50, 40, 10));
             else
-                slot.setBackground(hidden ? new Color(50, 28, 28) : new Color(35, 35, 35));
+                // Hidden items have a more distinct dark red background
+                slot.setBackground(hidden ? new Color(60, 30, 30) : new Color(35, 35, 35));
 
             Color borderColor = isPet ? new Color(200, 160, 40)
-                    : hidden ? new Color(80, 40, 40) : new Color(58, 58, 58);
-            slot.setBorder(BorderFactory.createLineBorder(borderColor, isPet ? 2 : 1));
+                    : hidden ? new Color(220, 40, 40) : new Color(58, 58, 58);  // Bright red for hidden items
+            slot.setBorder(BorderFactory.createLineBorder(borderColor, hidden ? 2 : (isPet ? 2 : 1)));
             slot.setPreferredSize(new Dimension(ITEM_SIZE, ITEM_SIZE));
             slot.setToolTipText(tooltip);
 
