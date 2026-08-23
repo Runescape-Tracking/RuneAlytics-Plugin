@@ -605,6 +605,15 @@ public class LootStorageManager
 
                 // This is a NEW kill - add it
                 serverKill.setSyncedToServer(true);
+
+                // Filter out deleted drops before adding the kill. This prevents
+                // deleted items from reappearing when server data is merged back.
+                Set<Integer> deletedForBoss = currentData.getDeletedDropsByBoss().get(npcName);
+                if (deletedForBoss != null && !deletedForBoss.isEmpty())
+                {
+                    serverKill.getDrops().removeIf(drop -> deletedForBoss.contains(drop.getItemId()));
+                }
+
                 localBoss.getKills().add(serverKill);
                 killsAdded++;
                 bossKillsAdded++;

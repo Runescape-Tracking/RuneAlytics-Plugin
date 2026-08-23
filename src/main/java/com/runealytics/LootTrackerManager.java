@@ -1815,6 +1815,11 @@ public class LootTrackerManager
         // blacklist existed, so old duplicate/junk containers disappear too.
         boolean migrated = migrateBossKillKeys(data);
 
+        // Clean up deleted items from storage - removes any dropped items that
+        // should have been deleted but persisted (e.g. if deleted before being
+        // synced). This ensures deleted items don't reappear when syncing.
+        boolean clearedDeletedItems = cleanupDeletedItemsFromStorage(data);
+
         bossKillStats.clear();
 
         List<String> emptyPlaceholderKeys = new ArrayList<>();
@@ -1917,12 +1922,13 @@ public class LootTrackerManager
                     emptyPlaceholderKeys.size(), emptyPlaceholderKeys);
         }
 
-        // Persist once, outside the loop, if any drop's value was backfilled
-        // or empty placeholder entries were purged.
-        if (backfilled || purgedPlaceholders || migrated)
+        // Persist once, outside the loop, if any drop's value was backfilled,
+        // empty placeholder entries were purged, boss keys were migrated, or
+        // deleted items were cleaned up.
+        if (backfilled || purgedPlaceholders || migrated || clearedDeletedItems)
         {
             log.debug("[Loot] Backfilled missing GE/alch values and/or purged placeholders "
-                    + "and/or migrated boss keys — saving");
+                    + "and/or migrated boss keys and/or cleaned up deleted items — saving");
             storageManager.scheduleSave();
         }
 
@@ -2014,6 +2020,49 @@ public class LootTrackerManager
                 }
             }
         }
+    }
+
+    /**
+     * Removes deleted items from all kill records in storage. Prevents deleted
+     * items from reappearing when server data is merged back during sync.
+     *
+     * @return true if any deleted items were found and removed
+     */
+    private boolean cleanupDeletedItemsFromStorage(LootStorageData data)
+    {
+        Map<String, Set<Integer>> deletedByBoss = data.getDeletedDropsByBoss();
+        if (deletedByBoss == null || deletedByBoss.isEmpty()) return false;
+
+        boolean removed = false;
+        for (LootStorageData.BossKillData bossData : data.getBossKills().values())
+        {
+            Set<Integer> deleted = deletedByBoss.get(bossData.getNpcName());
+            if (deleted == null || deleted.isEmpty()) continue;
+
+            // Remove deleted items from all kill records
+            if (bossData.getKills() != null)
+            {
+                for (LootStorageData.KillRecord kill : bossData.getKills())
+                {
+                    if (kill.getDrops() != null)
+                    {
+                        removed |= kill.getDrops().removeIf(drop -> deleted.contains(drop.getItemId()));
+                    }
+                }
+            }
+
+            // Remove deleted items from aggregated drops
+            if (bossData.getAggregatedDrops() != null)
+            {
+                for (int itemId : deleted)
+                {
+                    if (bossData.getAggregatedDrops().remove(itemId) != null)
+                        removed = true;
+                }
+            }
+        }
+
+        return removed;
     }
 
     /**
@@ -2806,6 +2855,7 @@ public class LootTrackerManager
      * Permanently delete an item from a boss's loot history.
      * Removes the item from all kill records for that boss and recalculates totals.
      * Updates both storage and in-memory cache.
+     * Tracks deletion so deleted items don't reappear during sync.
      */
     public void deleteDropForNpc(String npcName, int itemId)
     {
@@ -2862,6 +2912,11 @@ public class LootTrackerManager
             hidden.remove(itemId);
             if (hidden.isEmpty()) data.getHiddenDropsByBoss().remove(npcName);
         }
+
+        // Track the deletion so it survives sync - prevents deleted items from
+        // reappearing when server data is merged back in
+        Set<Integer> deleted = data.getDeletedDropsByBoss().computeIfAbsent(npcName, k -> new HashSet<>());
+        deleted.add(itemId);
 
         storageManager.scheduleSave();
         log.debug("Deleted item {} from boss {}, removed {} gp", itemId, npcName, totalValueRemoved);

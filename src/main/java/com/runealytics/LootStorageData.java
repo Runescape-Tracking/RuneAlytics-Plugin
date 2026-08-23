@@ -34,6 +34,14 @@ public class LootStorageData
     private Map<String, Set<Integer>> hiddenDropsByBoss = new HashMap<>();
 
     /**
+     * Per-boss set of item IDs the user has permanently deleted from RuneAlytics,
+     * keyed by normalised boss name. These are stripped from incoming server data
+     * during sync so deleted items don't reappear.
+     */
+    @SerializedName("deleted_drops_by_boss")
+    private Map<String, Set<Integer>> deletedDropsByBoss = new HashMap<>();
+
+    /**
      * Normalised names of bosses the user has hidden from the panel entirely.
      * Display-only; does not affect what gets synced to the server.
      */
