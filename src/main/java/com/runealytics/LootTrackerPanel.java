@@ -1061,6 +1061,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
      */
     public void reconcileBulkUpdate(List<BossKillStats> updatedStats)
     {
+        long startMs = System.currentTimeMillis();
         // Defer to background to avoid blocking EDT with data processing
         executorService.execute(() ->
         {
@@ -1073,6 +1074,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 if (newFp.equals(lastDisplayFingerprint))
                 {
                     // Structure same: just update values and kill counts
+                    long edtStartMs = System.currentTimeMillis();
                     SwingUtilities.invokeLater(() ->
                     {
                         long totalVal = 0;
@@ -1091,11 +1093,19 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         }
                         totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                         totalValueLabel.setText("Value " + formatGp(totalVal));
+
+                        long edtMs = System.currentTimeMillis() - edtStartMs;
+                        long totalMs = System.currentTimeMillis() - startMs;
+                        log.debug(LogCategory.UI_UPDATE.format(
+                            "Bulk reconciliation (incremental): %d bosses, total %dms, EDT %dms",
+                            updatedStats.size(), totalMs, edtMs));
                     });
                     return;
                 }
 
                 // Structure changed: invalidate and trigger full refresh
+                log.debug(LogCategory.UI_UPDATE.format(
+                    "Bulk reconciliation (structure changed): falling back to full refresh"));
                 lastDisplayFingerprint = null;
                 SwingUtilities.invokeLater(this::refreshDisplay);
             }
@@ -1140,6 +1150,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     {
         if (!refreshing.compareAndSet(false, true)) return;
 
+        long startMs = System.currentTimeMillis();
         executorService.execute(() ->
         {
             try
@@ -1150,6 +1161,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                 if (fp.equals(lastDisplayFingerprint))
                 {
                     refreshing.set(false);
+                    long elapsedMs = System.currentTimeMillis() - startMs;
+                    log.debug(LogCategory.UI_UPDATE.format("Fast path: skipped rebuild (%dms)", elapsedMs));
                     return;
                 }
                 lastDisplayFingerprint = fp;
@@ -1185,11 +1198,18 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
                         if (inPlace)
                         {
+                            long edtStartMs = System.currentTimeMillis();
                             currentBossOrder = newOrder;
                             for (BossKillStats stats : sorted)
                                 updateLoot(stats.getNpcName(), stats);
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                             totalValueLabel.setText("Value " + formatGp(totalVal));
+
+                            long totalMs = System.currentTimeMillis() - startMs;
+                            long edtMs = System.currentTimeMillis() - edtStartMs;
+                            log.debug(LogCategory.UI_UPDATE.format(
+                                "Fast path: %d bosses updated (total %dms, EDT %dms)",
+                                sorted.size(), totalMs, edtMs));
                             return;
                         }
 
@@ -1232,10 +1252,17 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         displayedOrder     = newOrder;
                         displayedHighlight = highlightedBoss;
 
+                        long edtStartMs = System.currentTimeMillis();
                         bossListPanel.revalidate();
                         bossListPanel.repaint();
                         scrollPane.revalidate();
                         scrollPane.getVerticalScrollBar().setValue(savedScroll);
+
+                        long edtMs = System.currentTimeMillis() - edtStartMs;
+                        long totalMs = System.currentTimeMillis() - startMs;
+                        log.debug(LogCategory.UI_UPDATE.format(
+                            "Slow path: rebuilt %d bosses (total %dms, layout %dms)",
+                            sorted.size(), totalMs, edtMs));
                     }
                     catch (Throwable ex)
                     {

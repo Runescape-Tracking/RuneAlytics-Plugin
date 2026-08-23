@@ -32,7 +32,9 @@ public enum LogCategory
 	/** Bank sync operations */
 	BANK_SYNC("bank-sync"),
 	/** Generic plugin events */
-	PLUGIN("plugin");
+	PLUGIN("plugin"),
+	/** Loot tracker UI updates and performance */
+	UI_UPDATE("ui-update");
 
 	public final String label;
 
