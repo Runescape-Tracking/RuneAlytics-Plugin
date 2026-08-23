@@ -2180,6 +2180,16 @@ public class LootTrackerManager
         return Collections.unmodifiableMap(bossKillStats);
     }
 
+    /**
+     * Get the current BossKillStats for a specific boss.
+     * Returns the cached stats object, which reflects all in-memory mutations
+     * (deletes, updates) that haven't necessarily been synced yet.
+     */
+    public BossKillStats getBossKillStats(String npcName)
+    {
+        return bossKillStats.get(npcName);
+    }
+
     public List<BossKillStats.AggregatedDrop> getStorageDropsForBoss(String npcName)
     {
         LootStorageData data = storageManager.getCurrentData();

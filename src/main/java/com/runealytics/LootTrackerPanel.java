@@ -802,6 +802,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         // javax.swing.Timer must be created and started on the EDT. This is
         // invoked from the client thread (loot events), so marshal the whole
         // create-register-start sequence onto the EDT.
+        // NOTE: We only capture npcName, not stats, to avoid holding stale data
+        // if the item is deleted before the timer fires.
         Runnable schedule = () ->
         {
             javax.swing.Timer existing = lootDebounceMap.get(npcName);
@@ -809,7 +811,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
             javax.swing.Timer t = new javax.swing.Timer(80, e -> {
                 lootDebounceMap.remove(npcName);
-                updateLoot(npcName, stats);
+                updateLoot(npcName);  // ← Fetch fresh stats from manager
             });
             t.setRepeats(false);
             lootDebounceMap.put(npcName, t);
@@ -822,10 +824,14 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             SwingUtilities.invokeLater(schedule);
     }
 
-    public void updateLoot(String npcName, BossKillStats stats)
+    public void updateLoot(String npcName)
     {
         if (!passesFilter(npcName)) return;
         if (!showIgnoredItems && lootManager.isBossHidden(npcName)) return;
+
+        // Fetch fresh stats from manager to avoid stale data from debounced callbacks
+        BossKillStats stats = lootManager.getBossKillStats(npcName);
+        if (stats == null) return;
 
         List<BossKillStats.AggregatedDrop> drops = lootManager.getStorageDropsForBoss(npcName);
         long totalValue = drops.stream().mapToLong(BossKillStats.AggregatedDrop::getTotalValue).sum();
@@ -877,12 +883,13 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             }
 
             final JPanel newGridFinal = newGrid;
+            final BossKillStats statsFinal = stats;
             SwingUtilities.invokeLater(() ->
             {
                 JLabel vl = bossValueLabelMap.get(npcName);
                 JLabel nl = bossNameLabelMap.get(npcName);
                 if (vl != null) vl.setText(totalValue > 0 ? formatGp(totalValue) : "");
-                if (nl != null) nl.setText(buildNameLabel(npcName, stats.getKillCount()));
+                if (nl != null) nl.setText(buildNameLabel(npcName, statsFinal.getKillCount()));
 
                 if (newGridFinal != null)
                 {
