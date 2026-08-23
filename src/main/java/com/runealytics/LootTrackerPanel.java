@@ -841,20 +841,31 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         // Defer itemManager calls to avoid blocking the EDT
         executorService.execute(() ->
         {
-            boolean needsRebuild = false;
-            for (BossKillStats.AggregatedDrop drop : drops)
+            // Only rebuild if the number of items changed, not individual items
+            int existingItemCount = (int) itemSlotMap.keySet().stream()
+                    .filter(k -> k.startsWith(npcName + "_"))
+                    .count();
+            boolean needsRebuild = drops.size() != existingItemCount;
+
+            if (!needsRebuild)
             {
-                JLabel existing = itemSlotMap.get(npcName + "_" + drop.getItemId());
-                if (existing != null)
+                // Same number of items: just update existing images
+                for (BossKillStats.AggregatedDrop drop : drops)
                 {
-                    // ItemManager call deferred off-thread to avoid EDT blocking
-                    AsyncBufferedImage img = itemManager.getImage(
-                            drop.getItemId(), drop.getTotalQuantity(), drop.getTotalQuantity() > 1);
-                    img.addTo(existing);
-                }
-                else
-                {
-                    needsRebuild = true;
+                    JLabel existing = itemSlotMap.get(npcName + "_" + drop.getItemId());
+                    if (existing != null)
+                    {
+                        // ItemManager call deferred off-thread to avoid EDT blocking
+                        AsyncBufferedImage img = itemManager.getImage(
+                                drop.getItemId(), drop.getTotalQuantity(), drop.getTotalQuantity() > 1);
+                        img.addTo(existing);
+                    }
+                    else
+                    {
+                        // Item exists in drops but not in display - need rebuild
+                        needsRebuild = true;
+                        break;
+                    }
                 }
             }
 
@@ -1198,6 +1209,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         {
                             long edtStartMs = System.currentTimeMillis();
                             currentBossOrder = newOrder;
+                            displayedOrder = newOrder;
+                            displayedHighlight = highlightedBoss;
                             for (BossKillStats stats : sorted)
                                 updateLoot(stats.getNpcName(), stats);
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
