@@ -1211,16 +1211,18 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                             currentBossOrder = newOrder;
                             displayedOrder = newOrder;
                             displayedHighlight = highlightedBoss;
-                            for (BossKillStats stats : sorted)
-                                updateLoot(stats.getNpcName(), stats);
+
+                            // Fast path: structure unchanged, just sync totals.
+                            // Per-boss debounce mechanism (80ms) handles individual boss updates.
+                            // Don't loop all bosses to avoid repainting every card on every data refresh.
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                             totalValueLabel.setText("Value " + formatGp(totalVal));
 
                             long totalMs = System.currentTimeMillis() - startMs;
                             long edtMs = System.currentTimeMillis() - edtStartMs;
                             log.debug(LogCategory.UI_UPDATE.format(
-                                "Fast path: %d bosses updated (total %dms, EDT %dms)",
-                                sorted.size(), totalMs, edtMs));
+                                "Fast path: structure stable, totals synced (total %dms, EDT %dms)",
+                                totalMs, edtMs));
                             return;
                         }
 
@@ -1234,11 +1236,11 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         if (sameBossSet)
                         {
                             long edtStartMs = System.currentTimeMillis();
-                            // Same boss set, just reordered: update values and reorder cards
-                            for (BossKillStats stats : sorted)
-                                updateLoot(stats.getNpcName(), stats);
 
-                            // Reorder cards without removeAll
+                            // Mid path: boss set unchanged, but order changed (e.g., sort by value).
+                            // Don't call updateLoot() on all bosses - per-boss mechanism handles those.
+                            // Just reorder the existing cards and sync totals.
+
                             List<Component> reorderedComps = new ArrayList<>();
                             for (String npcName : newOrder)
                             {
@@ -1264,7 +1266,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                             long totalMs = System.currentTimeMillis() - startMs;
                             long edtMs = System.currentTimeMillis() - edtStartMs;
                             log.debug(LogCategory.UI_UPDATE.format(
-                                "Mid path: %d bosses reordered (total %dms, EDT %dms)",
+                                "Mid path: reordered %d bosses (total %dms, EDT %dms)",
                                 sorted.size(), totalMs, edtMs));
                             return;
                         }
