@@ -188,6 +188,14 @@ public class RuneAlyticsPlugin extends Plugin
     /** Health monitor for shared executor to detect starvation. */
     private ExecutorHealthMonitor sharedExecutorMonitor;
 
+    // ── Caching ───────────────────────────────────────────────────────────────
+    /** Caches static item metadata (name, alch value, etc.). */
+    private final ItemMetadataCache itemMetadataCache = new ItemMetadataCache();
+    /** Caches Grand Exchange prices with 5-minute TTL. */
+    private final GePriceCache gePriceCache = new GePriceCache();
+    /** Caches merge results, invalidated when tracker files change. */
+    private final TrackerResultsCache trackerResultsCache = new TrackerResultsCache();
+
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
     private NavigationButton         navButton;
@@ -520,6 +528,11 @@ public class RuneAlyticsPlugin extends Plugin
         // Stop health monitors before shutting down executors.
         try { if (syncExecutorMonitor != null) syncExecutorMonitor.stop(); } catch (Exception e) { log.debug("Sync executor health monitor stop failed: {}", e.getMessage()); }
         try { if (sharedExecutorMonitor != null) sharedExecutorMonitor.stop(); } catch (Exception e) { log.debug("Shared executor health monitor stop failed: {}", e.getMessage()); }
+
+        // Clear all caches on shutdown.
+        try { itemMetadataCache.clear(); } catch (Exception e) { log.debug("Item metadata cache clear failed: {}", e.getMessage()); }
+        try { gePriceCache.clear(); } catch (Exception e) { log.debug("GE price cache clear failed: {}", e.getMessage()); }
+        try { trackerResultsCache.clear(); } catch (Exception e) { log.debug("Tracker results cache clear failed: {}", e.getMessage()); }
 
         // Flush accumulated XP before the executor shuts down.
         try { xpTrackerManager.flushImmediate(); } catch (Exception e) { log.debug("XP flush on shutdown failed: {}", e.getMessage()); }
@@ -2588,6 +2601,31 @@ public class RuneAlyticsPlugin extends Plugin
     {
         return currentPlayerIdentity;
     }
+
+    /**
+     * Exposes the item metadata cache for use by other components.
+     */
+    public ItemMetadataCache getItemMetadataCache()
+    {
+        return itemMetadataCache;
+    }
+
+    /**
+     * Exposes the GE price cache for use by other components.
+     */
+    public GePriceCache getGePriceCache()
+    {
+        return gePriceCache;
+    }
+
+    /**
+     * Exposes the tracker results cache for use by other components.
+     */
+    public TrackerResultsCache getTrackerResultsCache()
+    {
+        return trackerResultsCache;
+    }
+
     @net.runelite.client.task.Schedule(
             period = 60000,
             unit   = ChronoUnit.MILLIS,
