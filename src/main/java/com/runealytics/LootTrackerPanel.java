@@ -1211,8 +1211,52 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                             return;
                         }
 
-                        // Slow path: structure changed (boss added/removed/reordered,
-                        // filter or highlight change) → rebuild the list.
+                        // Mid path: same boss set but different order (e.g., sort by value changed)
+                        // Reorder cards without removeAll
+                        boolean sameBossSet = !sorted.isEmpty()
+                                && bossCardMap.size() == newOrder.size()
+                                && java.util.Objects.equals(highlightedBoss, displayedHighlight)
+                                && bossCardMap.keySet().containsAll(newOrder);
+
+                        if (sameBossSet)
+                        {
+                            long edtStartMs = System.currentTimeMillis();
+                            // Same boss set, just reordered: update values and reorder cards
+                            for (BossKillStats stats : sorted)
+                                updateLoot(stats.getNpcName(), stats);
+
+                            // Reorder cards without removeAll
+                            List<Component> reorderedComps = new ArrayList<>();
+                            for (String npcName : newOrder)
+                            {
+                                JPanel card = bossCardMap.get(npcName);
+                                if (card != null) reorderedComps.add(card);
+                            }
+
+                            bossListPanel.removeAll();  // Clear only for reordering
+                            for (int i = 0; i < reorderedComps.size(); i++)
+                            {
+                                if (i > 0) bossListPanel.add(Box.createVerticalStrut(5));
+                                bossListPanel.add(reorderedComps.get(i));
+                            }
+
+                            currentBossOrder = newOrder;
+                            displayedOrder = newOrder;
+                            displayedHighlight = highlightedBoss;
+                            totalKillsLabel.setText("Kills " + formatNumber(totalKills));
+                            totalValueLabel.setText("Value " + formatGp(totalVal));
+                            bossListPanel.revalidate();
+                            bossListPanel.repaint();
+
+                            long totalMs = System.currentTimeMillis() - startMs;
+                            long edtMs = System.currentTimeMillis() - edtStartMs;
+                            log.debug(LogCategory.UI_UPDATE.format(
+                                "Mid path: %d bosses reordered (total %dms, EDT %dms)",
+                                sorted.size(), totalMs, edtMs));
+                            return;
+                        }
+
+                        // Slow path: boss set changed (added/removed) → rebuild the list.
                         int savedScroll = scrollPane.getVerticalScrollBar().getValue();
                         bossListPanel.removeAll();
                         itemSlotMap.clear();
