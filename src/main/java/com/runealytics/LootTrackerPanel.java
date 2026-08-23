@@ -976,6 +976,137 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         });
     }
 
+    /**
+     * Remove a single boss card incrementally without full rebuild.
+     * Used when a boss is cleared or removed from data.
+     * Falls back to full refresh if card doesn't exist.
+     *
+     * @param npcName the boss to remove
+     */
+    public void removeBossCard(String npcName)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            JPanel card = bossCardMap.get(npcName);
+            if (card == null)
+            {
+                // Card doesn't exist, just refresh
+                invalidateFingerprint();
+                refreshDisplay();
+                return;
+            }
+
+            try
+            {
+                // Remove strut before the card (if it exists)
+                Component[] components = bossListPanel.getComponents();
+                int cardIndex = -1;
+                for (int i = 0; i < components.length; i++)
+                {
+                    if (components[i] == card)
+                    {
+                        cardIndex = i;
+                        break;
+                    }
+                }
+
+                if (cardIndex >= 0)
+                {
+                    // Remove strut before (if exists and is a strut)
+                    if (cardIndex > 0 && components[cardIndex - 1] instanceof javax.swing.Box.Filler)
+                        bossListPanel.remove(cardIndex - 1);
+                    // Remove the card itself
+                    bossListPanel.remove(card);
+                }
+
+                // Update indexes
+                bossCardMap.remove(npcName);
+                bossValueLabelMap.remove(npcName);
+                bossNameLabelMap.remove(npcName);
+                bossGridWrapperMap.remove(npcName);
+                currentBossOrder.remove(npcName);
+
+                // Remove item slots for this boss
+                itemSlotMap.keySet().removeIf(k -> k.startsWith(npcName + "_"));
+
+                // Clear debounce timer for this boss
+                javax.swing.Timer debounce = lootDebounceMap.get(npcName);
+                if (debounce != null) debounce.stop();
+                lootDebounceMap.remove(npcName);
+
+                invalidateFingerprint();
+                bossListPanel.revalidate();
+                bossListPanel.repaint();
+            }
+            catch (Throwable ex)
+            {
+                log.debug("Incremental boss removal failed, falling back to refresh", ex);
+                invalidateFingerprint();
+                refreshDisplay();
+            }
+        });
+    }
+
+    /**
+     * Reconcile bulk data updates (e.g., after sync reconciliation).
+     * Attempts incremental updates if the boss set hasn't changed;
+     * falls back to full refresh if structure changed.
+     *
+     * Called by LootTrackerManager after:
+     * - Sync reconciliation (3-way merge)
+     * - Data import
+     * - Any large data change
+     *
+     * @param updatedStats the new boss stats after reconciliation
+     */
+    public void reconcileBulkUpdate(List<BossKillStats> updatedStats)
+    {
+        // Defer to background to avoid blocking EDT with data processing
+        executorService.execute(() ->
+        {
+            try
+            {
+                // Build new fingerprint with updated data
+                String newFp = buildDisplayFingerprint(updatedStats, highlightedBoss);
+
+                // If structure hasn't changed, do incremental updates
+                if (newFp.equals(lastDisplayFingerprint))
+                {
+                    // Structure same: just update values and kill counts
+                    SwingUtilities.invokeLater(() ->
+                    {
+                        long totalVal = 0;
+                        int totalKills = 0;
+                        for (BossKillStats stats : updatedStats)
+                        {
+                            if (!passesFilter(stats.getNpcName())
+                                    || isEmptyBossEntry(stats)) continue;
+
+                            totalVal += stats.getTotalLootValue();
+                            totalKills += stats.getKillCount();
+
+                            // Update labels incrementally
+                            updateBossKillLabel(stats.getNpcName(), stats.getKillCount());
+                            updateBossValue(stats.getNpcName(), stats.getTotalLootValue());
+                        }
+                        totalKillsLabel.setText("Kills " + formatNumber(totalKills));
+                        totalValueLabel.setText("Value " + formatGp(totalVal));
+                    });
+                    return;
+                }
+
+                // Structure changed: invalidate and trigger full refresh
+                lastDisplayFingerprint = null;
+                SwingUtilities.invokeLater(this::refreshDisplay);
+            }
+            catch (Throwable ex)
+            {
+                log.debug("Bulk reconciliation failed, forcing full refresh", ex);
+                SwingUtilities.invokeLater(this::refreshDisplay);
+            }
+        });
+    }
+
     private void rebuildBossCardGrid(String npcName, List<BossKillStats.AggregatedDrop> drops)
     {
         // Swap only the inner item grid inside the existing wrapper, preserving the

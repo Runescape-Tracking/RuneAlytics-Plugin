@@ -1927,7 +1927,11 @@ public class LootTrackerManager
         }
 
         log.debug("refreshLootDisplay: {} bosses loaded", bossKillStats.size());
-        if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
+        if (panel != null)
+        {
+            List<BossKillStats> statsSnapshot = new ArrayList<>(bossKillStats.values());
+            SwingUtilities.invokeLater(() -> panel.reconcileBulkUpdate(statsSnapshot));
+        }
     }
 
     /**
@@ -2736,7 +2740,7 @@ public class LootTrackerManager
         hiddenDrops.remove(npcName);
         lastPlayerLootTime.remove(npcName);
         storageManager.saveData();
-        if (panel != null) SwingUtilities.invokeLater(() -> panel.refreshDisplay());
+        if (panel != null) SwingUtilities.invokeLater(() -> panel.removeBossCard(npcName));
     }
 
     public void prestigeBoss(String npcName)
@@ -2759,7 +2763,8 @@ public class LootTrackerManager
 
             if (panel != null)
             {
-                SwingUtilities.invokeLater(() -> panel.refreshDisplay());
+                // After prestige, kill count is reset to 0
+                SwingUtilities.invokeLater(() -> panel.updateBossKillLabel(npcName, 0));
             }
         }
     }
