@@ -62,6 +62,8 @@ public class DefaultRuneLiteLootTrackerReader
     private static final String RSPROFILE_KEY_PREFIX = "rsprofile.rsprofile.";
     private static final String DISPLAY_NAME_SUFFIX  = ".displayName";
 
+    private final RuneLiteTrackerFileCache fileCache = new RuneLiteTrackerFileCache();
+
     @Inject
     public DefaultRuneLiteLootTrackerReader() {}
 
@@ -273,11 +275,20 @@ public class DefaultRuneLiteLootTrackerReader
 
     private Properties loadProperties(File propFile)
     {
+        // Check cache first: if the file hasn't changed (same lastModified + size),
+        // return the cached Properties object without re-reading from disk.
+        Map<String, ?> cached = fileCache.getCachedIfUnchanged(propFile);
+        if (cached != null && cached instanceof Properties)
+        {
+            return (Properties) cached;
+        }
+
         Properties props = new Properties();
         try (InputStreamReader isr = new InputStreamReader(
                 new FileInputStream(propFile), StandardCharsets.UTF_8))
         {
             props.load(isr);
+            fileCache.put(propFile, props);
             return props;
         }
         catch (Exception e)

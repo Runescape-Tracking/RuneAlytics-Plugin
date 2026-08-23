@@ -181,6 +181,8 @@ public class RuneAlyticsPlugin extends Plugin
     // ── Sync coordination ─────────────────────────────────────────────────────
     /** Coordinates one-at-a-time sync operations with proper coalescing. */
     private final SyncCoordinator syncCoordinator = new SyncCoordinator();
+    /** Dedicated executor for loot sync operations (separate from RuneLite's shared pool). */
+    private ScheduledExecutorService syncExecutor;
 
     // ── UI ───────────────────────────────────────────────────────────────────
     @Getter private RuneAlyticsPanel mainPanel;
@@ -418,6 +420,9 @@ public class RuneAlyticsPlugin extends Plugin
     {
         log.debug("RuneAlytics starting");
 
+        // Create dedicated executor for loot sync operations (separate from RuneLite's pool)
+        syncExecutor = SyncExecutorFactory.createSyncExecutor();
+
         // Build the root panel on the EDT, then register the nav button.
         buildOnEdt(() -> mainPanel = injector.getInstance(RuneAlyticsPanel.class));
 
@@ -511,6 +516,9 @@ public class RuneAlyticsPlugin extends Plugin
         try { matchmakingManager.reset();         } catch (Exception e) { log.debug("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
         try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.debug("Matchmaking overlay removal failed: {}", e.getMessage()); }
         try { overlayManager.remove(liveMapOverlay);     } catch (Exception e) { log.debug("Live-map overlay removal failed: {}", e.getMessage()); }
+
+        // Shutdown the dedicated sync executor.
+        try { SyncExecutorFactory.shutdown(syncExecutor); } catch (Exception e) { log.debug("Sync executor shutdown failed: {}", e.getMessage()); }
 
         // Remove the nav button.
         if (navButton != null)
@@ -2364,7 +2372,7 @@ public class RuneAlyticsPlugin extends Plugin
             userInitiated ? "manual_user_click" : "auto_trigger"
         );
 
-        executorService.submit(() ->
+        syncExecutor.submit(() ->
         {
             if (!syncCoordinator.tryStartSync(request))
             {
@@ -2412,7 +2420,7 @@ public class RuneAlyticsPlugin extends Plugin
 
         if (!syncCoordinator.tryStartSync(request)) return;
 
-        executorService.submit(() ->
+        syncExecutor.submit(() ->
         {
             try     { runSyncPipeline(accountKey, false, false); }
             finally
@@ -2452,6 +2460,7 @@ public class RuneAlyticsPlugin extends Plugin
         final long syncStartRevision = lootManager.getCurrentRevision();
 
         PerformanceMetrics metrics = new PerformanceMetrics();
+        SyncWatchdog watchdog = new SyncWatchdog();
 
         try
         {
@@ -2467,6 +2476,13 @@ public class RuneAlyticsPlugin extends Plugin
             //    Pull from website first to establish baseline before merge.
             lootManager.syncLegacyBlocking(accountKey, pull, userInitiated);
             metrics.markLegacySyncComplete();
+
+            if (watchdog.hasTimedOut())
+            {
+                log.warn("[watchdog] Sync timed out during legacy sync phase ({}ms elapsed)",
+                        watchdog.getElapsedMs());
+                throw new RuntimeException("Sync operation timed out");
+            }
 
             if (userInitiated && lootTrackerPanel != null)
             {
@@ -2484,6 +2500,13 @@ public class RuneAlyticsPlugin extends Plugin
                 lootManager.getStorageUniqueItemCount()
             );
 
+            if (watchdog.hasTimedOut())
+            {
+                log.warn("[watchdog] Sync timed out during merge phase ({}ms elapsed)",
+                        watchdog.getElapsedMs());
+                throw new RuntimeException("Sync operation timed out");
+            }
+
             // Validate context before applying merge result
             // If account switched or session changed, discard result
             if (!syncContext.isStillValid(state))
@@ -2499,6 +2522,12 @@ public class RuneAlyticsPlugin extends Plugin
             lootManager.refreshFromStorage(userInitiated);
             metrics.markUiRefreshComplete();
 
+            if (watchdog.hasTimedOut())
+            {
+                log.warn("[watchdog] Sync timed out during UI refresh phase ({}ms elapsed)",
+                        watchdog.getElapsedMs());
+            }
+
             metrics.logSummary(accountKey, syncContext.getReason());
 
             SwingUtilities.invokeLater(() ->
@@ -2513,8 +2542,8 @@ public class RuneAlyticsPlugin extends Plugin
             // Catch Throwable (not just Exception) so an Error — e.g. an
             // ItemManager "must be called on client thread" assertion — still
             // resets the Sync button instead of leaving it stuck on "Syncing…".
-            log.debug("[plugin] Loot sync failed (account='{}' session={}): {}",
-                accountKey, syncContext.getSessionGeneration(), t.getMessage());
+            log.debug("[plugin] Loot sync failed (account='{}' session={} elapsed={}ms): {}",
+                accountKey, syncContext.getSessionGeneration(), watchdog.getElapsedMs(), t.getMessage());
             if (userInitiated)
             {
                 SwingUtilities.invokeLater(() -> {
