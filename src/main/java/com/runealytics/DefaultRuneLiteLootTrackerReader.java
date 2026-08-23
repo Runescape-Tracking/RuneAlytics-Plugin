@@ -277,10 +277,10 @@ public class DefaultRuneLiteLootTrackerReader
     {
         // Check cache first: if the file hasn't changed (same lastModified + size),
         // return the cached Properties object without re-reading from disk.
-        Map<String, ?> cached = fileCache.getCachedIfUnchanged(propFile);
-        if (cached != null && cached instanceof Properties)
+        Properties cached = fileCache.getCachedIfUnchanged(propFile);
+        if (cached != null)
         {
-            return (Properties) cached;
+            return cached;
         }
 
         Properties props = new Properties();

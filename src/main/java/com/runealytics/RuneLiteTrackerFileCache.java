@@ -3,7 +3,7 @@ package com.runealytics;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
-import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -21,9 +21,9 @@ public class RuneLiteTrackerFileCache
 	{
 		final long lastModified;
 		final long fileSize;
-		final Map<String, ?> data;
+		final Properties data;
 
-		CacheEntry(long lastModified, long fileSize, Map<String, ?> data)
+		CacheEntry(long lastModified, long fileSize, Properties data)
 		{
 			this.lastModified = lastModified;
 			this.fileSize = fileSize;
@@ -31,7 +31,7 @@ public class RuneLiteTrackerFileCache
 		}
 	}
 
-	private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
 	/**
 	 * Attempts to retrieve cached data for the given file.
@@ -39,7 +39,7 @@ public class RuneLiteTrackerFileCache
 	 * @param file the file to check
 	 * @return cached data if file hasn't changed, or null if cache miss or file doesn't exist
 	 */
-	public Map<String, ?> getCachedIfUnchanged(File file)
+	public Properties getCachedIfUnchanged(File file)
 	{
 		if (file == null || !file.exists()) return null;
 
@@ -64,7 +64,7 @@ public class RuneLiteTrackerFileCache
 	 * @param file the file that was read
 	 * @param data the parsed data to cache
 	 */
-	public void put(File file, Map<String, ?> data)
+	public void put(File file, Properties data)
 	{
 		if (file == null || !file.exists()) return;
 
