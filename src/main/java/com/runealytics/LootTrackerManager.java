@@ -2905,6 +2905,12 @@ public class LootTrackerManager
                     }
                 }
             }
+            // Also remove from preloaded drops (for kills synced from server with no per-kill records)
+            List<BossKillStats.AggregatedDrop> preloaded = stats.getPreloadedDrops();
+            if (preloaded != null)
+            {
+                preloaded.removeIf(drop -> drop.getItemId() == itemId);
+            }
             stats.setTotalLootValue(Math.max(0, stats.getTotalLootValue() - totalValueRemoved));
         }
 
