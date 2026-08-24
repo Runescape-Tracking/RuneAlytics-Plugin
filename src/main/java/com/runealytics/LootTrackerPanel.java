@@ -847,16 +847,22 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         // Defer itemManager calls to avoid blocking the EDT
         executorService.execute(() ->
         {
-            // Only rebuild if the number of items changed, not individual items
+            // Filter to visible items (respect hidden/ignored state)
+            List<BossKillStats.AggregatedDrop> visibleDrops = new ArrayList<>();
+            for (BossKillStats.AggregatedDrop d : drops)
+                if (!lootManager.isDropHidden(npcName, d.getItemId()) || showIgnoredItems)
+                    visibleDrops.add(d);
+
+            // Only rebuild if the number of visible items changed, not individual items
             int existingItemCount = (int) itemSlotMap.keySet().stream()
                     .filter(k -> k.startsWith(npcName + "_"))
                     .count();
-            boolean needsRebuild = drops.size() != existingItemCount;
+            boolean needsRebuild = visibleDrops.size() != existingItemCount;
 
             if (!needsRebuild)
             {
-                // Same number of items: just update existing images
-                for (BossKillStats.AggregatedDrop drop : drops)
+                // Same number of visible items: just update existing images
+                for (BossKillStats.AggregatedDrop drop : visibleDrops)
                 {
                     JLabel existing = itemSlotMap.get(npcName + "_" + drop.getItemId());
                     if (existing != null)
@@ -868,7 +874,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     }
                     else
                     {
-                        // Item exists in drops but not in display - need rebuild
+                        // Item exists in visible drops but not in display - need rebuild
                         needsRebuild = true;
                         break;
                     }
