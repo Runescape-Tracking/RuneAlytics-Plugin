@@ -1682,16 +1682,16 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             toggleHide.addActionListener(e -> {
                 if (hidden) lootManager.unhideDropForNpc(npcName, drop.getItemId());
                 else        lootManager.hideDropForNpc  (npcName, drop.getItemId());
-                invalidateFingerprint();
-                refreshDisplay();
+                // Immediately update the grid for this boss (don't wait for debounce)
+                SwingUtilities.invokeLater(() -> updateLoot(npcName));
             });
             menu.add(toggleHide);
 
             JMenuItem deleteItem = new JMenuItem("Delete \"" + drop.getItemName() + "\"");
             deleteItem.addActionListener(e -> {
                 lootManager.deleteDropForNpc(npcName, drop.getItemId());
-                invalidateFingerprint();
-                refreshDisplay();
+                // Immediately update the grid for this boss (don't wait for debounce)
+                SwingUtilities.invokeLater(() -> updateLoot(npcName));
             });
             menu.add(deleteItem);
 
