@@ -2248,9 +2248,16 @@ public class LootTrackerManager
         if (bd == null || bd.getAggregatedDrops() == null || bd.getAggregatedDrops().isEmpty())
             return Collections.emptyList();
 
+        // Get deleted items for this boss to filter them out
+        Set<Integer> deletedItems = data.getDeletedDropsByBoss().get(npcName);
+
         List<BossKillStats.AggregatedDrop> result = new ArrayList<>();
         for (LootStorageData.AggregatedDrop agg : bd.getAggregatedDrops().values())
         {
+            // Skip deleted items
+            if (deletedItems != null && deletedItems.contains(agg.getItemId()))
+                continue;
+
             BossKillStats.AggregatedDrop drop = new BossKillStats.AggregatedDrop(
                     agg.getItemId(),
                     agg.getItemName(),
