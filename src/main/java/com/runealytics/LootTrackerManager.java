@@ -2039,6 +2039,8 @@ public class LootTrackerManager
             Set<Integer> deleted = deletedByBoss.get(bossData.getNpcName());
             if (deleted == null || deleted.isEmpty()) continue;
 
+            boolean bossChanged = false;
+
             // Remove deleted items from all kill records
             if (bossData.getKills() != null)
             {
@@ -2046,7 +2048,7 @@ public class LootTrackerManager
                 {
                     if (kill.getDrops() != null)
                     {
-                        removed |= kill.getDrops().removeIf(drop -> deleted.contains(drop.getItemId()));
+                        bossChanged |= kill.getDrops().removeIf(drop -> deleted.contains(drop.getItemId()));
                     }
                 }
             }
@@ -2057,12 +2059,44 @@ public class LootTrackerManager
                 for (int itemId : deleted)
                 {
                     if (bossData.getAggregatedDrops().remove(itemId) != null)
-                        removed = true;
+                        bossChanged = true;
                 }
+            }
+
+            if (bossChanged)
+            {
+                bossData.setTotalLootValue(recalculateBossTotalValue(bossData));
+                removed = true;
             }
         }
 
         return removed;
+    }
+
+    /** Sums remaining drop values after a deleted-item purge. */
+    private static long recalculateBossTotalValue(LootStorageData.BossKillData bossData)
+    {
+        long remaining = 0;
+        if (bossData.getKills() != null && !bossData.getKills().isEmpty())
+        {
+            for (LootStorageData.KillRecord kill : bossData.getKills())
+            {
+                if (kill.getDrops() == null) continue;
+                for (LootStorageData.DropRecord drop : kill.getDrops())
+                {
+                    remaining += drop.getTotalValue();
+                }
+            }
+            return remaining;
+        }
+        if (bossData.getAggregatedDrops() != null)
+        {
+            for (LootStorageData.AggregatedDrop agg : bossData.getAggregatedDrops().values())
+            {
+                remaining += agg.getTotalValue();
+            }
+        }
+        return remaining;
     }
 
     /**
@@ -2888,6 +2922,15 @@ public class LootTrackerManager
             }
         }
 
+        // Merge-only sources (website / RuneLite tracker) have aggregated
+        // totals but no per-kill records — fall back to the aggregate value
+        // so the displayed total actually drops.
+        LootStorageData.AggregatedDrop removedAgg = bossData.getAggregatedDrops().get(itemId);
+        if (totalValueRemoved == 0 && removedAgg != null)
+        {
+            totalValueRemoved = removedAgg.getTotalValue();
+        }
+
         // Also update the in-memory BossKillStats cache so panel sees the change
         BossKillStats stats = bossKillStats.get(npcName);
         if (stats != null)
@@ -2918,7 +2961,15 @@ public class LootTrackerManager
         bossData.getAggregatedDrops().remove(itemId);
         bossData.setTotalLootValue(Math.max(0, bossData.getTotalLootValue() - totalValueRemoved));
 
-        // Remove from hidden drops if it's there
+        // Clear the hide flag in both the in-memory map (what the panel
+        // reads) and persisted storage so a deleted item is not still
+        // treated as hidden after the next rehydrate.
+        Set<Integer> memHidden = hiddenDrops.get(npcName);
+        if (memHidden != null)
+        {
+            memHidden.remove(itemId);
+            if (memHidden.isEmpty()) hiddenDrops.remove(npcName);
+        }
         Set<Integer> hidden = data.getHiddenDropsByBoss().get(npcName);
         if (hidden != null)
         {

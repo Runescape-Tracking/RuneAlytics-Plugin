@@ -46,5 +46,10 @@ public class RewardSourcesTest
         assertTrue(RewardSources.BY_WIDGET.containsKey(RewardSources.WIDGET_GAUNTLET));
         assertEquals("Corrupted Gauntlet",
                 RewardSources.BY_WIDGET.get(RewardSources.WIDGET_CORRUPTED_GAUNTLET).displayName);
+        assertTrue(RewardSources.BY_WIDGET.containsKey(RewardSources.WIDGET_DOOM));
+        RewardSources.Source doom = RewardSources.BY_WIDGET.get(RewardSources.WIDGET_DOOM);
+        assertEquals("Doom of Mokhaiotl", doom.displayName);
+        assertNull(doom.containerId);
+        assertEquals(100, doom.widgetMaxChildren);
     }
 }

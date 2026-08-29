@@ -18,6 +18,8 @@ public class BossNamesTest
         assertEquals("Phantom Muspah", BossNames.normalize("muspah"));
         assertEquals("Moons of Peril", BossNames.normalize("Lunar Chest"));
         assertEquals("Moons of Peril", BossNames.normalize("lunar"));
+        assertEquals("Doom of Mokhaiotl", BossNames.normalize("Doom of Mokhaiotl"));
+        assertEquals("Doom of Mokhaiotl", BossNames.normalize("doom of mokhaiotl"));
     }
 
     @Test

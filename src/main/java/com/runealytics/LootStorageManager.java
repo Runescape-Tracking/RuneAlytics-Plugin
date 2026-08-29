@@ -263,6 +263,7 @@ public class LootStorageManager
             // created; refresh them here in case the first drop had a 0 value.
             if (aggDrop.getGePrice() <= 0 && drop.getGePrice() > 0)  aggDrop.setGePrice(drop.getGePrice());
             if (aggDrop.getHighAlch() <= 0 && drop.getHighAlch() > 0) aggDrop.setHighAlch(drop.getHighAlch());
+            if (drop.isPet()) aggDrop.setPet(true);
         }
 
         bossData.setTotalLootValue(bossData.getTotalLootValue() + killValue);
@@ -322,6 +323,7 @@ public class LootStorageManager
 
             if (agg.getGePrice() <= 0 && drop.getGePrice() > 0)   agg.setGePrice(drop.getGePrice());
             if (agg.getHighAlch() <= 0 && drop.getHighAlch() > 0) agg.setHighAlch(drop.getHighAlch());
+            if (drop.isPet()) agg.setPet(true);
         }
 
         scheduleSave();
@@ -644,6 +646,7 @@ public class LootStorageManager
 
                     if (aggDrop.getGePrice() <= 0 && drop.getGePrice() > 0)   aggDrop.setGePrice(drop.getGePrice());
                     if (aggDrop.getHighAlch() <= 0 && drop.getHighAlch() > 0) aggDrop.setHighAlch(drop.getHighAlch());
+                    if (drop.isPet()) aggDrop.setPet(true);
                     dropsAdded++;
                 }
             }
