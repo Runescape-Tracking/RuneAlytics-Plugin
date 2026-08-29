@@ -3337,7 +3337,7 @@ public class LootTrackerManager
             }
             catch (Exception e)
             {
-                log.warn("[Farming] Failed to convert item id={}: {}", item.getId(), e.getMessage(), e);
+                log.debug("[Farming] Failed to convert item id={}: {}", item.getId(), e.getMessage(), e);
             }
         }
 

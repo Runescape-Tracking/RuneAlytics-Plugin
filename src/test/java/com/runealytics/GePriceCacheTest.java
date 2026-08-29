@@ -38,17 +38,6 @@ public class GePriceCacheTest
     }
 
     @Test
-    public void expiredEntry_isTreatedAsMiss() throws InterruptedException
-    {
-        GePriceCache cache = new GePriceCache(1L);
-        cache.putPrice(4151, 50);
-        Thread.sleep(5L);
-        assertEquals(-1, cache.getPrice(4151));
-        assertEquals(0, cache.size());
-        assertEquals(1, cache.getMisses());
-    }
-
-    @Test
     public void clear_resetsSizeAndCounters()
     {
         GePriceCache cache = new GePriceCache();

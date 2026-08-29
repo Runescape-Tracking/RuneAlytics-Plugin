@@ -2507,10 +2507,6 @@ public class RuneAlyticsPlugin extends Plugin
             userInitiated ? "manual" : "auto"
         );
 
-        // Capture local revision before sync starts. If loot arrives during sync,
-        // the revision will increment, and we'll merge instead of replace.
-        final long syncStartRevision = lootManager.getCurrentRevision();
-
         PerformanceMetrics metrics = new PerformanceMetrics();
         SyncWatchdog watchdog = new SyncWatchdog();
 
@@ -2531,7 +2527,7 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (watchdog.hasTimedOut())
             {
-                log.warn("[watchdog] Sync timed out during legacy sync phase ({}ms elapsed)",
+                log.debug("[watchdog] Sync timed out during legacy sync phase ({}ms elapsed)",
                         watchdog.getElapsedMs());
                 throw new RuntimeException("Sync operation timed out");
             }
@@ -2554,7 +2550,7 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (watchdog.hasTimedOut())
             {
-                log.warn("[watchdog] Sync timed out during merge phase ({}ms elapsed)",
+                log.debug("[watchdog] Sync timed out during merge phase ({}ms elapsed)",
                         watchdog.getElapsedMs());
                 throw new RuntimeException("Sync operation timed out");
             }
@@ -2576,7 +2572,7 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (watchdog.hasTimedOut())
             {
-                log.warn("[watchdog] Sync timed out during UI refresh phase ({}ms elapsed)",
+                log.debug("[watchdog] Sync timed out during UI refresh phase ({}ms elapsed)",
                         watchdog.getElapsedMs());
             }
 
@@ -2653,7 +2649,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (pressure == MemoryPressureDetector.MemoryPressure.HIGH ||
             pressure == MemoryPressureDetector.MemoryPressure.CRITICAL)
         {
-            log.warn(LogCategory.MEMORY.format(
+            log.debug(LogCategory.MEMORY.format(
                 "High memory pressure detected: %d%% heap used. " +
                 "Consider closing other applications.", heapPercent));
         }
@@ -2973,7 +2969,7 @@ public class RuneAlyticsPlugin extends Plugin
                     return;
                 }
             }
-            catch (NumberFormatException e)
+            catch (NumberFormatException ignore)
             {
             }
         }

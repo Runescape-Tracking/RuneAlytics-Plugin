@@ -486,13 +486,13 @@ public class LootSyncMergeService
             if (!latch.await(NAME_RESOLVE_TIMEOUT_MS, TimeUnit.MILLISECONDS))
             {
                 // This is logged at warn level always since it indicates a potential performance issue
-                log.warn("[merge] Timed out resolving {} RuneLite item name(s); using fallbacks",
+                log.debug("[merge] Timed out resolving {} RuneLite item name(s); using fallbacks",
                         itemIds.size());
             }
         }
         catch (InterruptedException e)
         {
-            log.warn("[merge] Interrupted while resolving item names; using fallbacks");
+            log.debug("[merge] Interrupted while resolving item names; using fallbacks");
         }
 
         // Backfill any IDs the client thread didn't resolve in time.

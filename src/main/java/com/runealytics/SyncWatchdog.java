@@ -17,52 +17,52 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class SyncWatchdog
 {
-	/** Maximum time a sync operation is allowed to run (milliseconds). */
-	private static final long SYNC_TIMEOUT_MS = 30_000; // 30 seconds
+    /** Maximum time a sync operation is allowed to run (milliseconds). */
+    private static final long SYNC_TIMEOUT_MS = 30_000; // 30 seconds
 
-	private final long startTimeMs;
+    private final long startTimeMs;
 
-	public SyncWatchdog()
-	{
-		this.startTimeMs = System.currentTimeMillis();
-	}
+    public SyncWatchdog()
+    {
+        this.startTimeMs = System.currentTimeMillis();
+    }
 
-	/**
-	 * @return {@code true} if the watchdog has detected a timeout
-	 */
-	public boolean hasTimedOut()
-	{
-		long elapsedMs = System.currentTimeMillis() - startTimeMs;
-		return elapsedMs > SYNC_TIMEOUT_MS;
-	}
+    /**
+     * @return {@code true} if the watchdog has detected a timeout
+     */
+    public boolean hasTimedOut()
+    {
+        long elapsedMs = System.currentTimeMillis() - startTimeMs;
+        return elapsedMs > SYNC_TIMEOUT_MS;
+    }
 
-	/**
-	 * @return elapsed time since sync start (milliseconds)
-	 */
-	public long getElapsedMs()
-	{
-		return System.currentTimeMillis() - startTimeMs;
-	}
+    /**
+     * @return elapsed time since sync start (milliseconds)
+     */
+    public long getElapsedMs()
+    {
+        return System.currentTimeMillis() - startTimeMs;
+    }
 
-	/**
-	 * @return remaining time before timeout (milliseconds), or 0 if already timed out
-	 */
-	public long getRemainingMs()
-	{
-		long remaining = SYNC_TIMEOUT_MS - getElapsedMs();
-		return Math.max(0, remaining);
-	}
+    /**
+     * @return remaining time before timeout (milliseconds), or 0 if already timed out
+     */
+    public long getRemainingMs()
+    {
+        long remaining = SYNC_TIMEOUT_MS - getElapsedMs();
+        return Math.max(0, remaining);
+    }
 
-	/**
-	 * Logs a warning if elapsed time is significant (> 15 seconds).
-	 * Useful for detecting slow syncs before they timeout.
-	 */
-	public void logWarningIfSlow()
-	{
-		long elapsed = getElapsedMs();
-		if (elapsed > 15_000) // 15 seconds
-		{
-			log.warn("[watchdog] Sync operation running slowly: {}ms elapsed", elapsed);
-		}
-	}
+    /**
+     * Logs a warning if elapsed time is significant (> 15 seconds).
+     * Useful for detecting slow syncs before they timeout.
+     */
+    public void logWarningIfSlow()
+    {
+        long elapsed = getElapsedMs();
+        if (elapsed > 15_000) // 15 seconds
+        {
+            log.debug("[watchdog] Sync operation running slowly: {}ms elapsed", elapsed);
+        }
+    }
 }

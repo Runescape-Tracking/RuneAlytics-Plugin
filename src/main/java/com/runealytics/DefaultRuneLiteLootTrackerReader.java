@@ -133,7 +133,6 @@ public class DefaultRuneLiteLootTrackerReader
         }
 
         Map<String, SourceTotals> result = new HashMap<>();
-        int filesWithLoot     = 0;
         Set<String> allSeenDisplayNames = new HashSet<>();
 
         for (File propFile : files)
@@ -157,7 +156,7 @@ public class DefaultRuneLiteLootTrackerReader
             }
 
             // 2. Read only loot stored under those keys.
-            if (readLootForKeys(propFile.getName(), props, matchingKeys, result)) filesWithLoot++;
+            readLootForKeys(propFile.getName(), props, matchingKeys, result);
         }
 
         // Drop sources that ended up with neither a kill count nor any item —
@@ -253,7 +252,6 @@ public class DefaultRuneLiteLootTrackerReader
                 // across multiple drops_<TYPE>_<name> entries for one source.
                 totals.killCount = Math.max(totals.killCount, kills);
 
-                int itemsBefore = totals.items.size();
                 for (int i = 0; i + 1 < flatDrops.size(); i += 2)
                 {
                     int  itemId = flatDrops.get(i).getAsInt();
@@ -265,7 +263,7 @@ public class DefaultRuneLiteLootTrackerReader
 
                 entriesParsed++;
             }
-            catch (Exception e)
+            catch (Exception ignore)
             {
             }
         }
