@@ -265,7 +265,7 @@ public class DefaultRuneLiteLootTrackerReader
             }
             catch (Exception ignore)
             {
-                log.debug("Error parsing RuneLite loot entry: {}", e.getMessage());
+                log.debug("Error parsing RuneLite loot entry");
             }
         }
 
