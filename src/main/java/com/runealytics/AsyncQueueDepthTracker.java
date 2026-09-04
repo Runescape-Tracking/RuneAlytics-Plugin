@@ -83,7 +83,7 @@ public class AsyncQueueDepthTracker
 
             if (queueSize > QUEUE_DEPTH_WARNING_THRESHOLD)
             {
-                log.warn("[queue] {} executor queue is building up: {} pending tasks " +
+                log.debug("[queue] {} executor queue is building up: {} pending tasks " +
                     "(> {} threshold). Check for executor starvation or slow tasks.",
                     executorName, queueSize, QUEUE_DEPTH_WARNING_THRESHOLD);
             }

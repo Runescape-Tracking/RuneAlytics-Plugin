@@ -80,7 +80,7 @@ public class ExecutorHealthMonitor
 
                 if (delayMs > STARVATION_THRESHOLD_MS)
                 {
-                    log.warn("[health] {} executor is starved: probe delayed {}ms (> {}ms threshold)",
+                    log.debug("[health] {} executor is starved: probe delayed {}ms (> {}ms threshold)",
                         executorName, delayMs, STARVATION_THRESHOLD_MS);
                 }
                 else if (delayMs > PROBE_TIMEOUT_MS / 2)
@@ -94,7 +94,7 @@ public class ExecutorHealthMonitor
         }
         catch (Exception e)
         {
-            log.warn("[health] Failed to submit health probe to {}: {}",
+            log.debug("[health] Failed to submit health probe to {}: {}",
                 executorName, e.getMessage());
         }
     }

@@ -62,7 +62,7 @@ public class ClanManager
         }
         currentClan = newClan;
 
-        log.info("[Clan] Joined clan: {} tag={}", clanName, clanTag != null ? clanTag : "none");
+        log.debug("[Clan] Joined clan: {} tag={}", clanName, clanTag != null ? clanTag : "none");
         listeners.forEach(l -> l.onClanJoined(newClan));
     }
 
@@ -76,7 +76,7 @@ public class ClanManager
             return;
         }
 
-        log.info("[Clan] Left clan: {}", currentClan.getClanName());
+        log.debug("[Clan] Left clan: {}", currentClan.getClanName());
         currentClan = null;
         listeners.forEach(ClanUpdateListener::onClanLeft);
     }

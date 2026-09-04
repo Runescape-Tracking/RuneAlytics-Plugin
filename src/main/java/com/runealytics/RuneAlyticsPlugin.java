@@ -2527,7 +2527,7 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (watchdog.hasTimedOut())
             {
-                log.warn("[watchdog] Sync timed out during legacy sync phase ({}ms elapsed)",
+                log.debug("[watchdog] Sync timed out during legacy sync phase ({}ms elapsed)",
                         watchdog.getElapsedMs());
                 throw new RuntimeException("Sync operation timed out");
             }
@@ -2550,7 +2550,7 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (watchdog.hasTimedOut())
             {
-                log.warn("[watchdog] Sync timed out during merge phase ({}ms elapsed)",
+                log.debug("[watchdog] Sync timed out during merge phase ({}ms elapsed)",
                         watchdog.getElapsedMs());
                 throw new RuntimeException("Sync operation timed out");
             }
@@ -2572,7 +2572,7 @@ public class RuneAlyticsPlugin extends Plugin
 
             if (watchdog.hasTimedOut())
             {
-                log.warn("[watchdog] Sync timed out during UI refresh phase ({}ms elapsed)",
+                log.debug("[watchdog] Sync timed out during UI refresh phase ({}ms elapsed)",
                         watchdog.getElapsedMs());
             }
 
@@ -2649,7 +2649,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (pressure == MemoryPressureDetector.MemoryPressure.HIGH ||
             pressure == MemoryPressureDetector.MemoryPressure.CRITICAL)
         {
-            log.warn(LogCategory.MEMORY.format(
+            log.debug(LogCategory.MEMORY.format(
                 "High memory pressure detected: %d%% heap used. " +
                 "Consider closing other applications.", heapPercent));
         }
@@ -2971,6 +2971,7 @@ public class RuneAlyticsPlugin extends Plugin
             }
             catch (NumberFormatException e)
             {
+                log.debug("Failed to parse numeric value: {}", e.getMessage());
             }
         }
 

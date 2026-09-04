@@ -100,7 +100,7 @@ public class MemoryPressureDetector
             // Warn loudly if we hit critical
             if (pressure == MemoryPressure.CRITICAL && !hasWarnedCritical)
             {
-                log.warn("[memory] CRITICAL memory pressure detected: {}% heap used. " +
+                log.debug("[memory] CRITICAL memory pressure detected: {}% heap used. " +
                     "Sync operations may be slow or fail. Consider closing other applications.",
                     heapPercent);
                 hasWarnedCritical = true;

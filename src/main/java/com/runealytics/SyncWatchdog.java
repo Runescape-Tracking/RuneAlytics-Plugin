@@ -62,7 +62,7 @@ public class SyncWatchdog
         long elapsed = getElapsedMs();
         if (elapsed > 15_000) // 15 seconds
         {
-            log.warn("[watchdog] Sync operation running slowly: {}ms elapsed", elapsed);
+            log.debug("[watchdog] Sync operation running slowly: {}ms elapsed", elapsed);
         }
     }
 }

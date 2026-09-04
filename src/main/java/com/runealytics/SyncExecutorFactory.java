@@ -27,8 +27,7 @@ public class SyncExecutorFactory
     public static ScheduledExecutorService createSyncExecutor()
     {
         ThreadFactory threadFactory = r -> {
-            Thread t = new Thread(r);
-            t.setName("RuneAlytics-Sync");
+            Thread t = new Thread(r, "RuneAlytics-Sync");
             t.setDaemon(true);
             return t;
         };
