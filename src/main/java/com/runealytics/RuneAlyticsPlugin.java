@@ -2507,10 +2507,6 @@ public class RuneAlyticsPlugin extends Plugin
             userInitiated ? "manual" : "auto"
         );
 
-        // Capture local revision before sync starts. If loot arrives during sync,
-        // the revision will increment, and we'll merge instead of replace.
-        final long syncStartRevision = lootManager.getCurrentRevision();
-
         PerformanceMetrics metrics = new PerformanceMetrics();
         SyncWatchdog watchdog = new SyncWatchdog();
 
