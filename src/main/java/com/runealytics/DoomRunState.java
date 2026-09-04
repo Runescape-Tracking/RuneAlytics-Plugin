@@ -237,12 +237,11 @@ public class DoomRunState
     }
 
     /**
-     * Returns true if this run is ready to record as a kill.
-     * Ready after reward is claimed with items, or after run is completed.
+     * Returns true if this run has claimed items ready to record.
      */
     public boolean isReadyToRecord()
     {
-        return (state == State.REWARD_CLAIMED || state == State.COMPLETED) && claimedItems != null && !claimedItems.isEmpty();
+        return claimedItems != null && !claimedItems.isEmpty();
     }
 
     /**
