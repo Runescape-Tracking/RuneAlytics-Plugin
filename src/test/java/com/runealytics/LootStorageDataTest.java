@@ -105,5 +105,36 @@ public class LootStorageDataTest
         assertTrue(fresh.getBossKills().isEmpty());
         assertTrue(fresh.getHiddenBosses().isEmpty());
         assertTrue(fresh.getHiddenDropsByBoss().isEmpty());
+        assertTrue(fresh.getDeletedDropsByBoss().isEmpty());
+        assertTrue(fresh.getLastGameKcByBoss().isEmpty());
+    }
+
+    @Test
+    public void serialization_usesVisibilitySnakeCaseKeys()
+    {
+        LootStorageData data = new LootStorageData();
+        data.getHiddenBosses().add("Zulrah");
+        data.getHiddenDropsByBoss().computeIfAbsent("Zulrah", k -> new java.util.HashSet<>()).add(4151);
+        data.getDeletedDropsByBoss().computeIfAbsent("Zulrah", k -> new java.util.HashSet<>()).add(995);
+
+        String json = gson.toJson(data);
+        assertTrue(json.contains("\"hidden_bosses\""));
+        assertTrue(json.contains("\"hidden_drops_by_boss\""));
+        assertTrue(json.contains("\"deleted_drops_by_boss\""));
+    }
+
+    @Test
+    public void roundTrip_preservesHiddenAndDeletedItemIds()
+    {
+        LootStorageData data = new LootStorageData();
+        data.getHiddenBosses().add("Vorkath");
+        data.getHiddenDropsByBoss().computeIfAbsent("Vorkath", k -> new java.util.HashSet<>()).add(21907);
+        data.getDeletedDropsByBoss().computeIfAbsent("Vorkath", k -> new java.util.HashSet<>()).add(22124);
+
+        LootStorageData restored = gson.fromJson(gson.toJson(data), LootStorageData.class);
+
+        assertTrue(restored.getHiddenBosses().contains("Vorkath"));
+        assertTrue(restored.getHiddenDropsByBoss().get("Vorkath").contains(21907));
+        assertTrue(restored.getDeletedDropsByBoss().get("Vorkath").contains(22124));
     }
 }

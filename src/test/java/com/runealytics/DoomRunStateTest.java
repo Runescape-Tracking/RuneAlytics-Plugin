@@ -72,10 +72,12 @@ public class DoomRunStateTest
         run.startProgression();
         run.completeFloor(4);
         run.claimReward(sampleItems);
+        assertTrue("Claimed reward is ready to record", run.isReadyToRecord());
+
         run.complete();
 
         assertEquals("Should be in COMPLETED", DoomRunState.State.COMPLETED, run.getState());
-        assertTrue("Should be ready to record", run.isReadyToRecord());
+        assertFalse("Completed runs have already been recorded", run.isReadyToRecord());
     }
 
     @Test

@@ -2969,7 +2969,7 @@ public class RuneAlyticsPlugin extends Plugin
                     return;
                 }
             }
-            catch (NumberFormatException e)
+            catch (NumberFormatException ignore)
             {
                 log.debug("Failed to parse numeric value: {}", e.getMessage());
             }

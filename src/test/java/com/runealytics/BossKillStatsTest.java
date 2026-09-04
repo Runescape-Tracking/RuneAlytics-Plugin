@@ -143,4 +143,32 @@ public class BossKillStatsTest
         assertEquals(100_000L, sorted.get(2).getTotalValue());
         assertFalse(sorted.get(1).isPet());
     }
+
+    @Test
+    public void prestige_clearsPreloadedDrops()
+    {
+        BossKillStats stats = new BossKillStats("Zulrah", 2042);
+        stats.setPreloadedDrops(Collections.singletonList(
+                new BossKillStats.AggregatedDrop(1, "Scale", 10, 100L, 1, 10L, 5L)));
+
+        stats.prestige();
+
+        assertTrue(stats.getPreloadedDrops().isEmpty());
+        assertTrue(stats.getAggregatedDrops().isEmpty());
+    }
+
+    @Test
+    public void getAggregatedDrops_afterPreloadedMutation_excludesRemovedItem()
+    {
+        BossKillStats stats = new BossKillStats("Zulrah", 2042);
+        stats.setPreloadedDrops(new ArrayList<>(Arrays.asList(
+                new BossKillStats.AggregatedDrop(4151, "Whip", 1, 100L, 1, 50L, 10L),
+                new BossKillStats.AggregatedDrop(995, "Coins", 50, 50L, 1, 1L, 0L))));
+
+        stats.getPreloadedDrops().removeIf(d -> d.getItemId() == 4151);
+
+        List<BossKillStats.AggregatedDrop> drops = stats.getAggregatedDrops();
+        assertEquals(1, drops.size());
+        assertEquals(995, drops.get(0).getItemId());
+    }
 }

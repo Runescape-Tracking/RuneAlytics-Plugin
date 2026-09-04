@@ -277,4 +277,44 @@ public class LootStorageManagerTest
         assertEquals(3, b.getPrestige()); // max(3, 1)
         assertEquals(100L, b.getTotalLootValue()); // recalculated from the single existing kill
     }
+
+    @Test
+    public void mergeServerData_stripsDeletedDropsFromIncomingKills()
+    {
+        manager.getCurrentData().getDeletedDropsByBoss()
+                .computeIfAbsent("Zulrah", k -> new java.util.HashSet<>()).add(4151);
+
+        Map<String, LootStorageData.BossKillData> server = new HashMap<>();
+        server.put("Zulrah", boss("Zulrah", 1, 0,
+                kill(9_000L, 1, false,
+                        drop(4151, 1, 100L, 50, 10),
+                        drop(995, 50, 50L, 1, 0))));
+        manager.mergeServerData(server);
+
+        LootStorageData.BossKillData merged = manager.getCurrentData().getBossKills().get("Zulrah");
+        assertEquals(1, merged.getKills().size());
+        assertEquals(1, merged.getKills().get(0).getDrops().size());
+        assertEquals(995, merged.getKills().get(0).getDrops().get(0).getItemId());
+        assertFalse(merged.getAggregatedDrops().containsKey(4151));
+        assertTrue(merged.getAggregatedDrops().containsKey(995));
+        assertEquals(50L, merged.getTotalLootValue());
+    }
+
+    @Test
+    public void mergeServerData_keepsKillWhenEveryDropWasDeleted()
+    {
+        manager.getCurrentData().getDeletedDropsByBoss()
+                .computeIfAbsent("Zulrah", k -> new java.util.HashSet<>()).add(4151);
+
+        Map<String, LootStorageData.BossKillData> server = new HashMap<>();
+        server.put("Zulrah", boss("Zulrah", 1, 0,
+                kill(9_000L, 1, false, drop(4151, 1, 100L, 50, 10))));
+        manager.mergeServerData(server);
+
+        LootStorageData.BossKillData merged = manager.getCurrentData().getBossKills().get("Zulrah");
+        assertEquals(1, merged.getKills().size());
+        assertTrue(merged.getKills().get(0).getDrops().isEmpty());
+        assertTrue(merged.getAggregatedDrops().isEmpty());
+        assertEquals(0L, merged.getTotalLootValue());
+    }
 }

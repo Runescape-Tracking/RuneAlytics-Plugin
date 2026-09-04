@@ -179,6 +179,20 @@ public class LootTrackerManagerTest
         assertEquals("Corrupted Gauntlet",
                 manager.detectChestSource("your corrupted gauntlet is complete"));
         assertEquals("The Gauntlet", manager.detectChestSource("your gauntlet is complete"));
+        assertEquals("Theatre of Blood",
+                manager.detectChestSource("theatre of blood complete"));
+        assertEquals("Tombs of Amascut",
+                manager.detectChestSource("tombs of amascut challenge complete"));
+        assertEquals("Doom of Mokhaiotl",
+                manager.detectChestSource("you have defeated the doom of mokhaiotl"));
+        assertEquals("Royal Titans",
+                manager.detectChestSource("you have defeated the royal titans"));
+        assertEquals("Fortis Colosseum",
+                manager.detectChestSource("you have completed the fortis colosseum"));
+        assertEquals("Phosani's Nightmare",
+                manager.detectChestSource("you have defeated phosani's nightmare"));
+        assertEquals("The Nightmare",
+                manager.detectChestSource("you have defeated the nightmare"));
     }
 
     @Test
