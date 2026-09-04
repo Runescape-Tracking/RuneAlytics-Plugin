@@ -242,7 +242,7 @@ public class DoomRunState
      */
     public boolean isReadyToRecord()
     {
-        return state == State.REWARD_CLAIMED && !claimedItems.isEmpty();
+        return (state == State.REWARD_CLAIMED || state == State.COMPLETED) && !claimedItems.isEmpty();
     }
 
     /**
