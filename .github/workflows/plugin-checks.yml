@@ -27,7 +27,7 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Clear Gradle cache
-        run: ./gradlew clean
+        run: ./gradlew --no-daemon clean
 
       - name: Compile (fails on build breakage, like the plugin-hub build)
         run: ./gradlew --no-daemon compileJava
