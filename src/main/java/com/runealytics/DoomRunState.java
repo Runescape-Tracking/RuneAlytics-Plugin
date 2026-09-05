@@ -237,8 +237,8 @@ public class DoomRunState
     }
 
     /**
-     * Returns true if this run is ready to record as a kill.
-     * (Reward claimed and items populated)
+     * Returns true if the claimed reward is waiting to be recorded.
+     * False after {@link #complete()} because that runs once loot is saved.
      */
     public boolean isReadyToRecord()
     {

@@ -485,7 +485,6 @@ public class LootSyncMergeService
         {
             if (!latch.await(NAME_RESOLVE_TIMEOUT_MS, TimeUnit.MILLISECONDS))
             {
-                // This is logged at warn level always since it indicates a potential performance issue
                 log.debug("[merge] Timed out resolving {} RuneLite item name(s); using fallbacks",
                         itemIds.size());
             }

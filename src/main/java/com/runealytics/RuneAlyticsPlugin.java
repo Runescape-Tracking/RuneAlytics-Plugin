@@ -2971,6 +2971,7 @@ public class RuneAlyticsPlugin extends Plugin
             }
             catch (NumberFormatException ignore)
             {
+                log.debug("Failed to parse numeric value");
             }
         }
 
