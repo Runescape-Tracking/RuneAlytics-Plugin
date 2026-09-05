@@ -237,11 +237,12 @@ public class DoomRunState
     }
 
     /**
-     * Returns true if this run has claimed items ready to record.
+     * Returns true if the claimed reward is waiting to be recorded.
+     * False after {@link #complete()} because that runs once loot is saved.
      */
     public boolean isReadyToRecord()
     {
-        return claimedItems != null && !claimedItems.isEmpty();
+        return state == State.REWARD_CLAIMED && !claimedItems.isEmpty();
     }
 
     /**
