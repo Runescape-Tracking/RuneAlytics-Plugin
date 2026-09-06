@@ -197,8 +197,6 @@ public class RuneAlyticsPlugin extends Plugin
     private final TrackerResultsCache trackerResultsCache = new TrackerResultsCache();
 
     // ── Monitoring ────────────────────────────────────────────────────────────
-    /** Detects memory pressure to warn when system is running low on memory. */
-    private final MemoryPressureDetector memoryPressureDetector = new MemoryPressureDetector();
     /** Tracks queue depth of sync executor (if available). */
     private AsyncQueueDepthTracker syncQueueTracker;
     /** Tracks queue depth of shared executor (if available). */
@@ -458,8 +456,6 @@ public class RuneAlyticsPlugin extends Plugin
                 (java.util.concurrent.ThreadPoolExecutor) executorService, "shared");
             log.debug("[monitoring] Shared executor queue depth tracking enabled");
         }
-
-        log.debug("[monitoring] Memory pressure detector initialized");
 
         // Build the root panel on the EDT, then register the nav button.
         buildOnEdt(() -> mainPanel = injector.getInstance(RuneAlyticsPanel.class));
@@ -2610,19 +2606,14 @@ public class RuneAlyticsPlugin extends Plugin
      */
     private void logMonitoringMetrics()
     {
-        // Check memory pressure
-        int heapPercent = memoryPressureDetector.getHeapUsagePercent();
-        MemoryPressureDetector.MemoryPressure pressure = memoryPressureDetector.getCurrentPressure();
-
         // Cache statistics
         double itemCacheHitRate = itemMetadataCache.getHitRate();
         double geCacheHitRate = gePriceCache.getHitRate();
         double trackerCacheHitRate = trackerResultsCache.getHitRate();
 
         log.debug(LogCategory.PERF.format(
-            "Sync metrics - Memory: %d%% (%s) | ItemCache: %.1f%% (%d/%d) | " +
+            "Sync metrics - ItemCache: %.1f%% (%d/%d) | " +
             "GECache: %.1f%% (%d/%d) | MergeCache: %.1f%% (%d/%d)",
-            heapPercent, pressure,
             itemCacheHitRate, itemMetadataCache.getHits(),
             itemMetadataCache.getHits() + itemMetadataCache.getMisses(),
             geCacheHitRate, gePriceCache.getHits(),
@@ -2643,15 +2634,6 @@ public class RuneAlyticsPlugin extends Plugin
                 sharedQueueTracker.getTotalSubmitted(),
                 sharedQueueTracker.getTotalCompleted()
             ));
-        }
-
-        // Warn if memory pressure is high
-        if (pressure == MemoryPressureDetector.MemoryPressure.HIGH ||
-            pressure == MemoryPressureDetector.MemoryPressure.CRITICAL)
-        {
-            log.debug(LogCategory.MEMORY.format(
-                "High memory pressure detected: %d%% heap used. " +
-                "Consider closing other applications.", heapPercent));
         }
     }
 
@@ -2694,14 +2676,6 @@ public class RuneAlyticsPlugin extends Plugin
     public TrackerResultsCache getTrackerResultsCache()
     {
         return trackerResultsCache;
-    }
-
-    /**
-     * Exposes the memory pressure detector for monitoring system memory.
-     */
-    public MemoryPressureDetector getMemoryPressureDetector()
-    {
-        return memoryPressureDetector;
     }
 
     /**
