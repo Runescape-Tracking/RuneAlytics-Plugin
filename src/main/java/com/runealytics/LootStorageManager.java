@@ -202,11 +202,16 @@ public class LootStorageManager
                         int prestige, List<LootStorageData.DropRecord> drops,
                         PlayerLocationSnapshot location)
     {
+        // Snapshot first so a caller mutating the list cannot desync the
+        // pre-computed totals from the stored kill, or throw CME mid-add.
+        List<LootStorageData.DropRecord> snapshot =
+                drops == null ? new ArrayList<>() : new ArrayList<>(drops);
+
         // Pre-compute aggregated stats outside lock to reduce contention
         long killValue = 0;
         Map<Integer, LootStorageData.AggregatedDrop> precomputedAggs = new HashMap<>();
 
-        for (LootStorageData.DropRecord drop : drops)
+        for (LootStorageData.DropRecord drop : snapshot)
         {
             killValue += drop.getTotalValue();
 
@@ -242,13 +247,13 @@ public class LootStorageManager
                         return newBoss;
                     });
 
-            // Create kill record with defensive copy of drops (so caller can't mutate stored kills)
+            // Create kill record with the snapshot (caller can't mutate stored kills)
             LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
             killRecord.setTimestamp(System.currentTimeMillis());
             killRecord.setKillNumber(killNumber);
             killRecord.setWorld(world);
             killRecord.setCombatLevel(combatLevel);
-            killRecord.setDrops(new ArrayList<>(drops));  // Defensive copy
+            killRecord.setDrops(snapshot);
             killRecord.setSyncedToServer(false);
             killRecord.setLocation(location);
 
@@ -259,7 +264,7 @@ public class LootStorageManager
             bossData.setKillCount(killNumber);
             bossData.setPrestige(prestige);
 
-            for (LootStorageData.DropRecord drop : drops)
+            for (LootStorageData.DropRecord drop : snapshot)
             {
                 LootStorageData.AggregatedDrop aggDrop = bossData.getAggregatedDrops()
                         .computeIfAbsent(drop.getItemId(), k -> precomputedAggs.get(drop.getItemId()));
@@ -281,7 +286,7 @@ public class LootStorageManager
         }
 
         log.debug("Added kill #{} for {} - {} drops, {} gp",
-                killNumber, npcName, drops.size(), killValue);
+                killNumber, npcName, snapshot.size(), killValue);
     }
 
     /**

@@ -3,9 +3,14 @@ package com.runealytics;
 import com.google.gson.Gson;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -113,6 +118,102 @@ public class LootStorageManagerTest
 
         assertEquals(1, manager.getCurrentData().getBossKills()
                 .get("Zulrah").getKills().get(0).getDrops().size());
+    }
+
+    @Test
+    public void addKill_nullDrops_recordsEmptyKill()
+    {
+        manager.addKill("Zulrah", 2042, 100, 1, 330, 0, null);
+
+        LootStorageData.BossKillData b = manager.getCurrentData().getBossKills().get("Zulrah");
+        assertEquals(1, b.getKills().size());
+        assertTrue(b.getKills().get(0).getDrops().isEmpty());
+        assertEquals(0L, b.getTotalLootValue());
+    }
+
+    @Test
+    public void addKill_marksPetOnAggregateAndIncrementsRevision()
+    {
+        long before = manager.getCurrentData().getRevision();
+        LootStorageData.DropRecord pet = drop(12646, 1, 0L, 0, 0);
+        pet.setPet(true);
+
+        manager.addKill("Zulrah", 2042, 100, 1, 330, 0, Arrays.asList(pet));
+
+        LootStorageData.AggregatedDrop agg =
+                manager.getCurrentData().getBossKills().get("Zulrah").getAggregatedDrops().get(12646);
+        assertTrue(agg.isPet());
+        assertEquals(before + 1, manager.getCurrentData().getRevision());
+    }
+
+    @Test
+    public void addKill_sameItemTwiceInOneKill_sumsAggregate()
+    {
+        manager.addKill("Zulrah", 2042, 100, 1, 330, 0, Arrays.asList(
+                drop(995, 50, 50L, 1, 0),
+                drop(995, 25, 25L, 1, 0)));
+
+        LootStorageData.AggregatedDrop agg =
+                manager.getCurrentData().getBossKills().get("Zulrah").getAggregatedDrops().get(995);
+        assertEquals(75, agg.getTotalQuantity());
+        assertEquals(2, agg.getDropCount());
+        assertEquals(75L, agg.getTotalValue());
+    }
+
+    @Test
+    public void addKill_storesLocationOnKillRecord()
+    {
+        PlayerLocationSnapshot loc = new PlayerLocationSnapshot(
+                0, 3200, 3200, 12850, 10, 20, 400, 400,
+                "Misthalin", "Lumbridge", false, 330, 1_700_000_000L);
+
+        manager.addKill("Zulrah", 2042, 100, 1, 330, 0,
+                Collections.singletonList(drop(4151, 1, 100L, 50, 10)), loc);
+
+        PlayerLocationSnapshot stored = manager.getCurrentData().getBossKills()
+                .get("Zulrah").getKills().get(0).getLocation();
+        assertEquals(330, stored.getWorld());
+        assertEquals(3200, stored.getWorldX());
+        assertEquals("Lumbridge", stored.getAreaName());
+    }
+
+    @Test
+    public void addKill_concurrentSameBoss_keepsEveryKill() throws Exception
+    {
+        int n = 40;
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(n);
+        for (int i = 0; i < n; i++)
+        {
+            final int killNumber = i + 1;
+            pool.execute(() -> {
+                try
+                {
+                    start.await();
+                    manager.addKill("Zulrah", 2042, 100, killNumber, 330, 0,
+                            Collections.singletonList(drop(4151, 1, 10L, 10, 1)));
+                }
+                catch (InterruptedException ignore)
+                {
+                    // CountDownLatch.wait was cancelled; still count this worker done.
+                }
+                finally
+                {
+                    done.countDown();
+                }
+            });
+        }
+
+        start.countDown();
+        assertTrue(done.await(5, TimeUnit.SECONDS));
+        pool.shutdown();
+
+        LootStorageData.BossKillData b = manager.getCurrentData().getBossKills().get("Zulrah");
+        assertEquals(n, b.getKills().size());
+        assertEquals(n * 10L, b.getTotalLootValue());
+        assertEquals(n, b.getAggregatedDrops().get(4151).getTotalQuantity());
+        assertEquals(n, manager.getCurrentData().getRevision());
     }
 
     // ── appendDropsToLastKill ────────────────────────────────────────────────

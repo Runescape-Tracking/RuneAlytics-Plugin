@@ -52,6 +52,14 @@ public class MatchmakingManager
     private volatile int matchGeneration;
 
     private volatile int     tickCounter;
+    /**
+     * Advances on every game tick that still has a session, including while a
+     * network request is in flight. {@link #tickCounter} does not — it is the
+     * poll/accept clock and freezes for the duration of {@code requestInFlight}.
+     * Hint-arrow search must use this clock or an odd frozen {@code tickCounter}
+     * would keep a stale opponent arrow for the whole request.
+     */
+    private volatile int     hintSearchTick;
     private volatile boolean requestInFlight;
     private volatile boolean acceptInFlight;
     private volatile boolean beginInFlight;
@@ -240,8 +248,10 @@ public class MatchmakingManager
             refreshPlayerState();
 
             // Update the hint arrow every tick so it never goes stale during a
-            // network call.
+            // network call. hintSearchTick keeps alternating even when
+            // tickCounter is frozen by requestInFlight.
             updateHintArrow();
+            hintSearchTick++;
 
             // Recompute and cache the minimap target once per tick; the overlay
             // reads the cached value each frame.
@@ -428,6 +438,7 @@ public class MatchmakingManager
         session                           = null;
         cachedNormalizedOpponentRsn       = null;
         tickCounter                       = 0;
+        hintSearchTick                    = 0;
         requestInFlight                   = false;
         acceptInFlight                    = false;
         beginInFlight                     = false;
@@ -974,9 +985,13 @@ public class MatchmakingManager
         if (isMatchCompletedOrCanceled()) { clearHintArrow(); return; }
 
         // ── 1. Always prefer the opponent in Pending, Ready, and Fighting ────
-        // Only search for opponent every 2 ticks to avoid O(n) player search on every tick
+        // Search every other tick to avoid an O(n) player scan on every tick.
+        // A skipped search must NOT be treated as "opponent vanished" or the
+        // hint arrow flickers between the player and the rally tile. Use
+        // hintSearchTick (always advances) — not tickCounter, which freezes
+        // while requestInFlight and would pin a stale opponent arrow.
         Player opponent = null;
-        if (tickCounter % 2 == 0)
+        if (hintSearchTick % 2 == 0)
         {
             // Cache normalized opponent RSN to avoid string allocations on every search
             if (cachedNormalizedOpponentRsn == null)
@@ -984,6 +999,10 @@ public class MatchmakingManager
                 cachedNormalizedOpponentRsn = normalizeRsn(session.getOpponentRsn());
             }
             opponent = findPlayerByNormalizedName(cachedNormalizedOpponentRsn);
+        }
+        else if (lastHintPlayerName != null)
+        {
+            return;
         }
 
         if (opponent != null)
