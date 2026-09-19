@@ -905,7 +905,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     {
                         gridWrapper.removeAll();
                         gridWrapper.add(newGridFinal, BorderLayout.NORTH);
-                        gridWrapper.invalidate();
+                        gridWrapper.revalidate();
                         gridWrapper.repaint();
 
                         // Only repaint the card, not the entire panel
@@ -1279,7 +1279,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                             displayedHighlight = highlightedBoss;
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                             totalValueLabel.setText("Value " + formatGp(totalVal));
-                            bossListPanel.invalidate();
+                            bossListPanel.revalidate();
                             bossListPanel.repaint();
 
                             long totalMs = System.currentTimeMillis() - startMs;
@@ -1329,9 +1329,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         displayedHighlight = highlightedBoss;
 
                         long edtStartMs = System.currentTimeMillis();
-                        bossListPanel.invalidate();
+                        bossListPanel.revalidate();
                         bossListPanel.repaint();
-                        scrollPane.invalidate();
+                        scrollPane.revalidate();
                         scrollPane.getVerticalScrollBar().setValue(savedScroll);
 
                         long edtMs = System.currentTimeMillis() - edtStartMs;
