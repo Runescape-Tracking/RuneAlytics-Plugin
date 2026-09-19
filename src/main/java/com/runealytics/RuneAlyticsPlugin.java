@@ -129,6 +129,11 @@ public class RuneAlyticsPlugin extends Plugin
             "loot-jar", "loot", "pickpocket", "pick-pocket"
     );
 
+    // ─ Pre-compiled regex patterns to avoid recompilation on hot paths ─
+    private static final Pattern HTML_TAG_PATTERN = Pattern.compile("<[^>]*>");
+    private static final Pattern KILL_COUNT_PATTERN = Pattern.compile("kill count is:?\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NON_DIGIT_PATTERN = Pattern.compile("[^0-9]");
+
     private final Map<String, List<ItemStack>> skillingSnapshot = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Long>            skillingExpiry   = new java.util.concurrent.ConcurrentHashMap<>();
     /** Inventory state captured at end of previous tick, used to detect farming harvests. */
@@ -1156,29 +1161,29 @@ public class RuneAlyticsPlugin extends Plugin
         String option = event.getMenuOption();
         if (option == null) return;
 
+        // Fast pre-filter: ignore irrelevant clicks before any string work.
+        String lowerOption = option.toLowerCase();
+        if (!RELEVANT_MENU_OPTIONS.contains(lowerOption)) return;
+
         // ── DOOM CLAIM / CONFIRM DETECTION ─────────────────────────────────
         // Listen for Claim Loot / Confirm buttons
-        if (doomRewardOpen && option != null)
+        if (doomRewardOpen)
         {
-            String lowerOpt = option.toLowerCase();
-            if (lowerOpt.contains("claim") && lowerOpt.contains("loot"))
+            if (lowerOption.contains("claim") && lowerOption.contains("loot"))
             {
                 doomClaimPending = true;
             }
-            else if (doomConfirmationOpen && lowerOpt.equals("confirm"))
+            else if (doomConfirmationOpen && lowerOption.equals("confirm"))
             {
                 commitDoomReward();
             }
         }
 
-        // Fast pre-filter: ignore irrelevant clicks before any string work.
-        String lowerOption = option.toLowerCase();
-        if (!RELEVANT_MENU_OPTIONS.contains(lowerOption)) return;
-
         String rawTarget = event.getMenuTarget();
         if (rawTarget == null || rawTarget.isEmpty()) return;
 
-        String targetName = rawTarget.replaceAll("<[^>]*>", "").trim();
+        // Strip HTML tags using pre-compiled pattern
+        String targetName = HTML_TAG_PATTERN.matcher(rawTarget).replaceAll("").trim();
         if (targetName.isEmpty()) return;
 
         // ── Lamp / book / genie / scroll XP suppression ──────────────────────
@@ -1389,10 +1394,8 @@ public class RuneAlyticsPlugin extends Plugin
         // ── The Whisperer ────────────────────────────────────────────────────
         if (lower.contains("whisperer") && lower.contains("kill count"))
         {
-            String stripped = msg.replaceAll("<[^>]*>", "");
-            Matcher kcM = Pattern
-                    .compile("kill count is:?\\s*(\\d+)", Pattern.CASE_INSENSITIVE)
-                    .matcher(stripped);
+            String stripped = HTML_TAG_PATTERN.matcher(msg).replaceAll("");
+            Matcher kcM = KILL_COUNT_PATTERN.matcher(stripped);
 
             whispererParsedKC = kcM.find() ? Integer.parseInt(kcM.group(1)) : -1;
 
@@ -2952,7 +2955,7 @@ public class RuneAlyticsPlugin extends Plugin
         {
             try
             {
-                String valueStr = text.replaceAll("[^0-9]", "");
+                String valueStr = NON_DIGIT_PATTERN.matcher(text).replaceAll("");
                 if (!valueStr.isEmpty())
                 {
                     result[0] = Long.parseLong(valueStr);
