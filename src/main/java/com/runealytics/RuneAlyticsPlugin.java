@@ -687,7 +687,11 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
-        lootManager.processNpcLoot(npc, items);
+        // Defer loot processing to a background executor to avoid lag spikes
+        // from expensive itemManager lookups on the client thread.
+        final NPC npcFinal = npc;
+        final List<ItemStack> itemsFinal = items;
+        executorService.execute(() -> lootManager.processNpcLoot(npcFinal, itemsFinal));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
