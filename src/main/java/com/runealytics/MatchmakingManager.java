@@ -41,6 +41,9 @@ public class MatchmakingManager
     private volatile MatchmakingSession       session;
     private volatile MatchmakingUpdateListener listener;
 
+    /** Cached normalized opponent RSN to avoid string allocations on every player search. */
+    private volatile String cachedNormalizedOpponentRsn;
+
     /**
      * Monotonic match generation, incremented on every {@link #reset()} and
      * {@link #loadMatch(String)}. In-flight executor tasks check it via
@@ -422,21 +425,22 @@ public class MatchmakingManager
         // Bump the generation so in-flight executor tasks for the old match
         // drop their results.
         matchGeneration++;
-        session                  = null;
-        tickCounter              = 0;
-        requestInFlight          = false;
-        acceptInFlight           = false;
-        beginInFlight            = false;
-        reportInFlight           = false;
-        itemsReportInFlight      = false;
-        resultReported           = false;
-        itemsReported            = false;
-        combatReported           = false;
-        combatInFlight           = false;
-        gearChangedDuringFight   = false;
-        acceptCooldownUntilTick  = 0;
-        beginCooldownUntilTick   = 0;
-        cachedMinimapTarget      = null;
+        session                           = null;
+        cachedNormalizedOpponentRsn       = null;
+        tickCounter                       = 0;
+        requestInFlight                   = false;
+        acceptInFlight                    = false;
+        beginInFlight                     = false;
+        reportInFlight                    = false;
+        itemsReportInFlight               = false;
+        resultReported                    = false;
+        itemsReported                     = false;
+        combatReported                    = false;
+        combatInFlight                    = false;
+        gearChangedDuringFight            = false;
+        acceptCooldownUntilTick           = 0;
+        beginCooldownUntilTick            = 0;
+        cachedMinimapTarget               = null;
         // Keep snapshots — they remain valid across match resets.
         clearHintArrow();
     }
@@ -974,7 +978,12 @@ public class MatchmakingManager
         Player opponent = null;
         if (tickCounter % 2 == 0)
         {
-            opponent = findPlayerByName(session.getOpponentRsn());
+            // Cache normalized opponent RSN to avoid string allocations on every search
+            if (cachedNormalizedOpponentRsn == null)
+            {
+                cachedNormalizedOpponentRsn = normalizeRsn(session.getOpponentRsn());
+            }
+            opponent = findPlayerByNormalizedName(cachedNormalizedOpponentRsn);
         }
 
         if (opponent != null)
@@ -1066,13 +1075,24 @@ public class MatchmakingManager
     private Player findPlayerByName(String name)
     {
         String target = normalizeRsn(name);
-        if (target.isEmpty()) return null;
+        return findPlayerByNormalizedName(target);
+    }
+
+    /**
+     * Find a player by their normalized RSN.
+     * This avoids repeated string normalization calls inside the player loop.
+     * @param normalizedTarget the opponent RSN that has already been normalized
+     * @return the opponent player, or null if not in render distance
+     */
+    private Player findPlayerByNormalizedName(String normalizedTarget)
+    {
+        if (normalizedTarget == null || normalizedTarget.isEmpty()) return null;
         // Normalized comparison: RuneLite's Actor.getName() uses NBSP (U+00A0)
         // while server-side RSNs use regular spaces or underscores.
         for (Player player : client.getPlayers())
         {
             if (player == null) continue;
-            if (normalizeRsn(player.getName()).equalsIgnoreCase(target)) return player;
+            if (normalizeRsn(player.getName()).equalsIgnoreCase(normalizedTarget)) return player;
         }
         return null;
     }
