@@ -974,7 +974,9 @@ public class MatchmakingManager
         if (isMatchCompletedOrCanceled()) { clearHintArrow(); return; }
 
         // ── 1. Always prefer the opponent in Pending, Ready, and Fighting ────
-        // Only search for opponent every 2 ticks to avoid O(n) player search on every tick
+        // Search every other tick to avoid an O(n) player scan on every tick.
+        // A skipped search must NOT be treated as "opponent vanished" or the
+        // hint arrow flickers between the player and the rally tile.
         Player opponent = null;
         if (tickCounter % 2 == 0)
         {
@@ -984,6 +986,10 @@ public class MatchmakingManager
                 cachedNormalizedOpponentRsn = normalizeRsn(session.getOpponentRsn());
             }
             opponent = findPlayerByNormalizedName(cachedNormalizedOpponentRsn);
+        }
+        else if (lastHintPlayerName != null)
+        {
+            return;
         }
 
         if (opponent != null)

@@ -472,8 +472,10 @@ public class LootTrackerManager
         if (!config.enableLootTracking() || npcName == null || npcName.isEmpty())
             return;
 
+        final List<ItemStack> itemList = items == null ? Collections.emptyList() : items;
+
         log.debug("NPC loot (deferred): '{}' id={} cb={} items={}",
-                npcName, npcId, combatLevel, items.size());
+                npcName, npcId, combatLevel, itemList.size());
 
         String name = normalizeBossName(npcName);
         boolean isBoss = isBoss(npcId, name);
@@ -486,14 +488,16 @@ public class LootTrackerManager
             return;
         }
 
-        // ItemManager calls (canonicalize, getItemComposition, etc.) may not be
-        // thread-safe and are optimized for client thread. Invoke on client thread
-        // to ensure correct ItemManager behavior.
-        java.util.concurrent.atomic.AtomicReference<List<LootStorageData.DropRecord>> dropsRef =
-                new java.util.concurrent.atomic.AtomicReference<>();
-        clientThread.invoke(() -> dropsRef.set(convertToDropRecords(items)));
-        List<LootStorageData.DropRecord> drops = dropsRef.get();
-        recordKillWithLocation(name, npcId, combatLevel, world, drops, location);
+        // ItemManager lookups must run on the client thread. ClientThread.invoke
+        // is async when called off-thread, so convert AND persist must both live
+        // inside the callback — reading an AtomicReference immediately after
+        // invoke() races and records a null drop list.
+        clientThread.invoke(() ->
+        {
+            List<LootStorageData.DropRecord> drops = convertToDropRecords(itemList);
+            executorService.execute(() ->
+                    recordKillWithLocation(name, npcId, combatLevel, world, drops, location));
+        });
     }
 
     /**
@@ -526,16 +530,18 @@ public class LootTrackerManager
         if (!config.enableLootTracking() || normalizedName == null) return false;
         if (items == null || items.isEmpty()) return false;
 
-        BossKillStats stats = bossKillStats.get(normalizedName);
+        // Callers (including the plugin event path) may pass a raw NPC name.
+        String name = normalizeBossName(normalizedName);
+        BossKillStats stats = bossKillStats.get(name);
         if (stats == null || stats.getKillHistory().isEmpty()) return false;
 
         LootStorageData.KillRecord lastKill =
                 stats.getKillHistory().get(stats.getKillHistory().size() - 1);
         if (!lastKill.getDrops().isEmpty()) return false; // last kill wasn't zero-loot
 
-        appendDropsToLastKill(normalizedName, items);
+        appendDropsToLastKill(name, items);
         log.debug("Upgraded zero-loot kill for '{}' with {} late drop(s) from a delayed NpcLootReceived",
-                normalizedName, items.size());
+                name, items.size());
         return true;
     }
 

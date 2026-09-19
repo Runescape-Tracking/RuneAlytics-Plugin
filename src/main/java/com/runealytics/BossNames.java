@@ -126,13 +126,20 @@ public final class BossNames
         if (l.contains("wintertodt"))                     return "Wintertodt";
         if (l.contains("zalcano"))                        return "Zalcano";
 
-        // Clues: check exact phrase first (avoids second contains on short-circuit)
-        if (l.contains("beginner clue"))                  return "Beginner Clue";
-        if (l.contains("easy clue"))                      return "Easy Clue";
-        if (l.contains("medium clue"))                    return "Medium Clue";
-        if (l.contains("hard clue"))                      return "Hard Clue";
-        if (l.contains("elite clue"))                     return "Elite Clue";
-        if (l.contains("master clue"))                    return "Master Clue";
+        // Exact phrase first, then split-word fallback for "Clue scroll (hard)"
+        // style names where the tier and "clue" are not adjacent.
+        if (l.contains("beginner clue") || (l.contains("beginner") && l.contains("clue")))
+            return "Beginner Clue";
+        if (l.contains("easy clue") || (l.contains("easy") && l.contains("clue")))
+            return "Easy Clue";
+        if (l.contains("medium clue") || (l.contains("medium") && l.contains("clue")))
+            return "Medium Clue";
+        if (l.contains("hard clue") || (l.contains("hard") && l.contains("clue")))
+            return "Hard Clue";
+        if (l.contains("elite clue") || (l.contains("elite") && l.contains("clue")))
+            return "Elite Clue";
+        if (l.contains("master clue") || (l.contains("master") && l.contains("clue")))
+            return "Master Clue";
 
         return raw.trim();
     }

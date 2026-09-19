@@ -29,10 +29,33 @@ public class BossNamesTest
         String[] samples = {
                 null, "", "cox", "TOB", "Pickpocket: Guard", "Zulrah",
                 "  Random Boss  ", "next", "nex", "hard clue",
+                "Clue scroll (hard)", "Clue Scroll (beginner)",
         };
         for (String s : samples)
         {
             assertEquals(LootTrackerManager.normalizeBossName(s), BossNames.normalize(s));
         }
+    }
+
+    @Test
+    public void clueScrollParentheticalNames_mapToTier()
+    {
+        // RuneLite loot-tracker / casket sources use "Clue scroll (tier)",
+        // where the tier and "clue" are not adjacent as "hard clue".
+        assertEquals("Beginner Clue", BossNames.normalize("Clue Scroll (beginner)"));
+        assertEquals("Easy Clue", BossNames.normalize("Clue scroll (easy)"));
+        assertEquals("Medium Clue", BossNames.normalize("clue (medium)"));
+        assertEquals("Hard Clue", BossNames.normalize("Clue scroll (hard)"));
+        assertEquals("Elite Clue", BossNames.normalize("Clue scroll (elite)"));
+        assertEquals("Master Clue", BossNames.normalize("Clue Scroll (master)"));
+        assertEquals("Hard Clue", BossNames.normalize("hard clue"));
+        assertEquals("Master Clue", BossNames.normalize("a master clue scroll"));
+    }
+
+    @Test
+    public void corruptedGauntletBeatsPlainGauntletAfterReorder()
+    {
+        assertEquals("Corrupted Gauntlet", BossNames.normalize("corrupted gauntlet"));
+        assertEquals("The Gauntlet", BossNames.normalize("The Gauntlet"));
     }
 }

@@ -297,6 +297,29 @@ public class MatchmakingManagerTest
     }
 
     @Test
+    public void onGameTick_fighting_keepsOpponentHintOnOffSearchTick() throws Exception
+    {
+        installActiveSession(session("M", "Fighting", null, true,
+                new MatchmakingRally(1500, 1600, 0)));
+
+        Player opponent = playerNamed("Foe");
+        WorldPoint opponentLoc = new WorldPoint(3200, 3200, 0);
+        when(opponent.getWorldLocation()).thenReturn(opponentLoc);
+        when(client.getPlayers()).thenReturn(Collections.singletonList(opponent));
+
+        mgr.onGameTick();
+        verify(client).setHintArrow(opponent);
+
+        clearInvocations(client);
+        mgr.onGameTick();
+
+        // Odd tick skips the player search; it must not flip the hint to rally.
+        verify(client, never()).setHintArrow(any(WorldPoint.class));
+        verify(client, never()).clearHintArrow();
+        assertEquals(opponentLoc, mgr.getMinimapTarget());
+    }
+
+    @Test
     public void onGameTick_fighting_noOpponentRendered_fallsBackToRally() throws Exception
     {
         installActiveSession(session("M", "Fighting", null, true,

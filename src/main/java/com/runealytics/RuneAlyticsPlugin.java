@@ -691,7 +691,7 @@ public class RuneAlyticsPlugin extends Plugin
             // upgradeRecentZeroLootKillDeferred calls appendDropsToLastKill which calls
             // convertToDropRecords, which makes ItemManager calls that require the client thread.
             // Use invokeLater to ensure it runs on client thread, not background executor.
-            final String npcNameFinal = npc.getName();
+            final String npcNameFinal = LootTrackerManager.normalizeBossName(npc.getName());
             clientThread.invokeLater(() ->
                     lootManager.upgradeRecentZeroLootKillDeferred(npcNameFinal, items));
             return;
@@ -706,8 +706,8 @@ public class RuneAlyticsPlugin extends Plugin
         final PlayerLocationSnapshot location =
                 PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
 
-        // Defer loot processing to background executor to avoid lag spikes
-        // from expensive itemManager lookups on the client thread.
+        // Persist off the client thread. ItemManager lookups are marshalled
+        // back onto the client thread inside processNpcLootDeferred.
         executorService.execute(() ->
                 lootManager.processNpcLootDeferred(npcName, npcId, combatLevel, world, itemsFinal, location));
     }
@@ -1601,8 +1601,7 @@ public class RuneAlyticsPlugin extends Plugin
             impJarInventorySnapshot = null;
         }
 
-        // ── Expire skilling sessions and update farming snapshot ────────────────
-        // Only process if we have active skilling sessions to avoid unnecessary work
+        // Expire skilling sessions only when any are active.
         if (!skillingSnapshot.isEmpty())
         {
             long nowMs = System.currentTimeMillis();
@@ -1615,16 +1614,15 @@ public class RuneAlyticsPlugin extends Plugin
                 }
                 return false;
             });
+        }
 
-            // Pre-farming snapshot for next tick — capture inventory state at end
-            // of tick so we have a "before" state for farming XP events that fire
-            // in the next tick. By this point, all items from THIS tick's farming
-            // have already been added to inventory, so when the next XP event fires,
-            // we can use this snapshot to detect the delta.
-            if (config.enableLootTracking())
-            {
-                preFarmingSnapshot = getCurrentInventory();
-            }
+        // Farming harvests typically start on a tick with no open skilling
+        // session. The baseline inventory must be captured every tick while
+        // loot tracking is on; otherwise the XP handler falls back to
+        // getCurrentInventory() and misses the harvest delta.
+        if (config.enableLootTracking())
+        {
+            preFarmingSnapshot = getCurrentInventory();
         }
     }
 
