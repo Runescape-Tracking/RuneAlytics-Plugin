@@ -687,10 +687,13 @@ public class RuneAlyticsPlugin extends Plugin
         // instead of recording a brand new one — otherwise the kill count
         // doubles for every kill that races the zero-loot flush.
         Long flushedAt = recentZeroLootFlushes.remove(npc.getIndex());
-        if (flushedAt != null
-                && System.currentTimeMillis() - flushedAt < ZERO_LOOT_UPGRADE_WINDOW_MS
-                && lootManager.upgradeRecentZeroLootKill(npc, items))
+        if (flushedAt != null && System.currentTimeMillis() - flushedAt < ZERO_LOOT_UPGRADE_WINDOW_MS)
         {
+            // Defer appendDropsToLastKill to background executor to avoid blocking
+            // client thread with itemManager lookups during convertToDropRecords
+            final String npcNameFinal = npc.getName();
+            executorService.execute(() ->
+                    lootManager.upgradeRecentZeroLootKillDeferred(npcNameFinal, items));
             return;
         }
 

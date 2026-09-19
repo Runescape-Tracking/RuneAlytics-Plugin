@@ -507,16 +507,24 @@ public class LootTrackerManager
         if (items == null || items.isEmpty()) return false;
 
         String name = normalizeBossName(npc.getName());
-        BossKillStats stats = bossKillStats.get(name);
+        return upgradeRecentZeroLootKillDeferred(name, items);
+    }
+
+    public boolean upgradeRecentZeroLootKillDeferred(String normalizedName, List<ItemStack> items)
+    {
+        if (!config.enableLootTracking() || normalizedName == null) return false;
+        if (items == null || items.isEmpty()) return false;
+
+        BossKillStats stats = bossKillStats.get(normalizedName);
         if (stats == null || stats.getKillHistory().isEmpty()) return false;
 
         LootStorageData.KillRecord lastKill =
                 stats.getKillHistory().get(stats.getKillHistory().size() - 1);
         if (!lastKill.getDrops().isEmpty()) return false; // last kill wasn't zero-loot
 
-        appendDropsToLastKill(name, items);
+        appendDropsToLastKill(normalizedName, items);
         log.debug("Upgraded zero-loot kill for '{}' with {} late drop(s) from a delayed NpcLootReceived",
-                name, items.size());
+                normalizedName, items.size());
         return true;
     }
 
