@@ -3351,14 +3351,19 @@ public class LootTrackerManager
         {
             try
             {
-                ItemComposition comp = itemManager.getItemComposition(item.getId());
-                int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, item.getId());
+                int itemId = item.getId();
+                ItemComposition comp = itemManager.getItemComposition(itemId);
+                int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, itemId);
                 long totalValue = (long) gePrice * item.getQuantity();
 
-                ItemComposition canonicalComp = itemManager.getItemComposition(itemManager.canonicalize(item.getId()));
+                // Only lookup canonical composition if it differs from the original
+                int canonicalId = itemManager.canonicalize(itemId);
+                ItemComposition canonicalComp = (canonicalId != itemId)
+                        ? itemManager.getItemComposition(canonicalId)
+                        : comp;
 
                 LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
-                drop.setItemId   (item.getId());
+                drop.setItemId   (itemId);
                 drop.setItemName (comp.getName());
                 drop.setQuantity (item.getQuantity());
                 drop.setGePrice  (gePrice);
