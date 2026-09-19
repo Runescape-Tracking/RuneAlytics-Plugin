@@ -29,7 +29,6 @@ import okhttp3.OkHttpClient;
 import javax.inject.Inject;
 import javax.swing.*;
 import java.awt.image.BufferedImage;
-import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ScheduledExecutorService;
@@ -128,6 +127,11 @@ public class RuneAlyticsPlugin extends Plugin
             "rub", "read", "open", "use", "claim", "activate", "tear",
             "loot-jar", "loot", "pickpocket", "pick-pocket"
     );
+
+    // ─ Pre-compiled regex patterns to avoid recompilation on hot paths ─
+    private static final Pattern HTML_TAG_PATTERN = Pattern.compile("<[^>]*>");
+    private static final Pattern KILL_COUNT_PATTERN = Pattern.compile("kill count is:?\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NON_DIGIT_PATTERN = Pattern.compile("[^0-9]");
 
     private final Map<String, List<ItemStack>> skillingSnapshot = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Long>            skillingExpiry   = new java.util.concurrent.ConcurrentHashMap<>();
@@ -259,8 +263,8 @@ public class RuneAlyticsPlugin extends Plugin
      * ItemSpawned near the player is collected and attributed to the kill.
      */
     private boolean         whispererGroundItemWindow = false;
-    /** Timestamp when {@link #whispererGroundItemWindow} was opened. */
-    private Instant         whispererKillTime         = null;
+    /** Timestamp (ms) when {@link #whispererGroundItemWindow} was opened. */
+    private long            whispererKillTime         = 0L;
     /**
      * Accumulates {@link ItemStack}s collected via {@code ItemSpawned} while
      * {@link #whispererGroundItemWindow} is open.
@@ -272,7 +276,7 @@ public class RuneAlyticsPlugin extends Plugin
     private int whispererParsedKC = -1;
 
     private NPC             lastKilledBoss           = null;
-    private Instant         lastKillTime             = null;
+    private long            lastKillTime             = 0L;
 
     // ── Ring of Wealth coin auto-pickup detection ─────────────────────────────
     /** Item ID for coins — used to identify RoW auto-collected drops. */
@@ -312,6 +316,8 @@ public class RuneAlyticsPlugin extends Plugin
 
     /** All mutations happen on the client thread (event handlers / invokeLater), so a plain list is safe. */
     private final List<GroundLootSession> groundLootSessions = new ArrayList<>();
+    /** Throttle ground loot session cleanup to avoid O(n) removeIf on every ItemSpawned. */
+    private long lastGroundSessionCleanupMs = 0;
 
     private String lastChestSource = null;
 
@@ -577,14 +583,14 @@ public class RuneAlyticsPlugin extends Plugin
     private void clearTransientLootState()
     {
         lastKilledBoss            = null;
-        lastKillTime              = null;
+        lastKillTime              = 0L;
         lastChestSource           = null;
         inventorySnapshot         = null;
         waitingForTemporossLoot   = false;
         waitingForWintertodtLoot  = false;
         crateLootWaitExpiry       = 0L;
         whispererGroundItemWindow = false;
-        whispererKillTime         = null;
+        whispererKillTime         = 0L;
         whispererGroundItems.clear();
         // Cancel the pending Whisperer flush.
         if (whispererFlushTask != null)
@@ -649,7 +655,7 @@ public class RuneAlyticsPlugin extends Plugin
         damagedNpcs.remove(npc.getIndex());
 
         lastKilledBoss = npc;
-        lastKillTime   = Instant.now();
+        lastKillTime   = System.currentTimeMillis();
 
         // Open a dedicated ground-loot attribution window for THIS kill, so an
         // AOE kill of several NPCs at once doesn't pool everyone's drops onto
@@ -657,7 +663,7 @@ public class RuneAlyticsPlugin extends Plugin
         WorldPoint killLoc = npc.getWorldLocation();
         if (killLoc != null)
         {
-            groundLootSessions.add(new GroundLootSession(npc, killLoc, Instant.now().toEpochMilli()));
+            groundLootSessions.add(new GroundLootSession(npc, killLoc, System.currentTimeMillis()));
         }
 
         // Snapshot inventory to diff against if Ring of Wealth auto-collects coins.
@@ -680,14 +686,30 @@ public class RuneAlyticsPlugin extends Plugin
         // instead of recording a brand new one — otherwise the kill count
         // doubles for every kill that races the zero-loot flush.
         Long flushedAt = recentZeroLootFlushes.remove(npc.getIndex());
-        if (flushedAt != null
-                && System.currentTimeMillis() - flushedAt < ZERO_LOOT_UPGRADE_WINDOW_MS
-                && lootManager.upgradeRecentZeroLootKill(npc, items))
+        if (flushedAt != null && System.currentTimeMillis() - flushedAt < ZERO_LOOT_UPGRADE_WINDOW_MS)
         {
+            // upgradeRecentZeroLootKillDeferred calls appendDropsToLastKill which calls
+            // convertToDropRecords, which makes ItemManager calls that require the client thread.
+            // Use invokeLater to ensure it runs on client thread, not background executor.
+            final String npcNameFinal = LootTrackerManager.normalizeBossName(npc.getName());
+            clientThread.invokeLater(() ->
+                    lootManager.upgradeRecentZeroLootKillDeferred(npcNameFinal, items));
             return;
         }
 
-        lootManager.processNpcLoot(npc, items);
+        // Capture all client-thread data (NPC ref, player location become invalid after events)
+        final String npcName = npc.getName();
+        final int npcId = npc.getId();
+        final int combatLevel = npc.getCombatLevel();
+        final int world = client.getWorld();
+        final List<ItemStack> itemsFinal = new ArrayList<>(items);
+        final PlayerLocationSnapshot location =
+                PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
+
+        // Persist off the client thread. ItemManager lookups are marshalled
+        // back onto the client thread inside processNpcLootDeferred.
+        executorService.execute(() ->
+                lootManager.processNpcLootDeferred(npcName, npcId, combatLevel, world, itemsFinal, location));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1145,29 +1167,29 @@ public class RuneAlyticsPlugin extends Plugin
         String option = event.getMenuOption();
         if (option == null) return;
 
+        // Fast pre-filter: ignore irrelevant clicks before any string work.
+        String lowerOption = option.toLowerCase();
+        if (!RELEVANT_MENU_OPTIONS.contains(lowerOption)) return;
+
         // ── DOOM CLAIM / CONFIRM DETECTION ─────────────────────────────────
         // Listen for Claim Loot / Confirm buttons
-        if (doomRewardOpen && option != null)
+        if (doomRewardOpen)
         {
-            String lowerOpt = option.toLowerCase();
-            if (lowerOpt.contains("claim") && lowerOpt.contains("loot"))
+            if (lowerOption.contains("claim") && lowerOption.contains("loot"))
             {
                 doomClaimPending = true;
             }
-            else if (doomConfirmationOpen && lowerOpt.equals("confirm"))
+            else if (doomConfirmationOpen && lowerOption.equals("confirm"))
             {
                 commitDoomReward();
             }
         }
 
-        // Fast pre-filter: ignore irrelevant clicks before any string work.
-        String lowerOption = option.toLowerCase();
-        if (!RELEVANT_MENU_OPTIONS.contains(lowerOption)) return;
-
         String rawTarget = event.getMenuTarget();
         if (rawTarget == null || rawTarget.isEmpty()) return;
 
-        String targetName = rawTarget.replaceAll("<[^>]*>", "").trim();
+        // Strip HTML tags using pre-compiled pattern
+        String targetName = HTML_TAG_PATTERN.matcher(rawTarget).replaceAll("").trim();
         if (targetName.isEmpty()) return;
 
         // ── Lamp / book / genie / scroll XP suppression ──────────────────────
@@ -1257,8 +1279,13 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Normal ground item logic ──────────────────────────────────────────
         if (itemLoc == null || groundLootSessions.isEmpty()) return;
 
-        long now = Instant.now().toEpochMilli();
-        groundLootSessions.removeIf(s -> now - s.killTimeMs > GROUND_ITEM_WINDOW_MS);
+        long now = System.currentTimeMillis();
+        // Throttle cleanup: only run every 100ms to avoid O(n) removeIf on every item
+        if (now - lastGroundSessionCleanupMs > 100)
+        {
+            groundLootSessions.removeIf(s -> now - s.killTimeMs > GROUND_ITEM_WINDOW_MS);
+            lastGroundSessionCleanupMs = now;
+        }
         if (groundLootSessions.isEmpty()) return;
 
         // Multiple kills (same or different NPC types) can have open, overlapping
@@ -1378,16 +1405,14 @@ public class RuneAlyticsPlugin extends Plugin
         // ── The Whisperer ────────────────────────────────────────────────────
         if (lower.contains("whisperer") && lower.contains("kill count"))
         {
-            String stripped = msg.replaceAll("<[^>]*>", "");
-            Matcher kcM = Pattern
-                    .compile("kill count is:?\\s*(\\d+)", Pattern.CASE_INSENSITIVE)
-                    .matcher(stripped);
+            String stripped = HTML_TAG_PATTERN.matcher(msg).replaceAll("");
+            Matcher kcM = KILL_COUNT_PATTERN.matcher(stripped);
 
             whispererParsedKC = kcM.find() ? Integer.parseInt(kcM.group(1)) : -1;
 
             lastChestSource           = "The Whisperer";
             whispererGroundItemWindow = true;
-            whispererKillTime         = Instant.now();
+            whispererKillTime         = System.currentTimeMillis();
             whispererGroundItems.clear();
 
             log.debug("The Whisperer: KC detected (game KC={}) – ground-item collection window opened",
@@ -1401,9 +1426,9 @@ public class RuneAlyticsPlugin extends Plugin
         if (lower.contains("funny feeling like you're being followed")
                 || lower.contains("sneaking into your backpack"))
         {
-            if (lastKilledBoss != null && lastKillTime != null)
+            if (lastKilledBoss != null && lastKillTime > 0L)
             {
-                long elapsedSec = ChronoUnit.SECONDS.between(lastKillTime, Instant.now());
+                long elapsedSec = (System.currentTimeMillis() - lastKillTime) / 1000;
                 if (elapsedSec < BOSS_CLEAR_TIMEOUT_SECONDS)
                 {
                     final NPC           boss = lastKilledBoss;
@@ -1525,25 +1550,25 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         // ── Expire stale boss ground-item attribution ──────────────────────────
-        if (lastKillTime != null
-                && ChronoUnit.SECONDS.between(lastKillTime, Instant.now())
-                > BOSS_CLEAR_TIMEOUT_SECONDS)
+        if (lastKillTime > 0L
+                && System.currentTimeMillis() - lastKillTime
+                > BOSS_CLEAR_TIMEOUT_SECONDS * 1000)
         {
             lastKilledBoss = null;
-            lastKillTime   = null;
+            lastKillTime   = 0L;
         }
 
         // ── Expire the Whisperer ground-item window ───────────────────────────
-        if (whispererGroundItemWindow && whispererKillTime != null)
+        if (whispererGroundItemWindow && whispererKillTime > 0L)
         {
-            long elapsed = Instant.now().toEpochMilli() - whispererKillTime.toEpochMilli();
+            long elapsed = System.currentTimeMillis() - whispererKillTime;
             if (elapsed > WHISPERER_GROUND_ITEM_WINDOW_MS + 5_000)
             {
                 log.debug("Whisperer ground-item window force-expired with {} items unclaimed",
                         whispererGroundItems.size());
                 whispererGroundItemWindow = false;
                 whispererGroundItems.clear();
-                whispererKillTime = null;
+                whispererKillTime = 0L;
             }
         }
 
@@ -1576,24 +1601,29 @@ public class RuneAlyticsPlugin extends Plugin
             impJarInventorySnapshot = null;
         }
 
-        // ── Expire skilling sessions ──────────────────────────────────────────
-        long nowMs = System.currentTimeMillis();
-        skillingExpiry.entrySet().removeIf(entry -> {
-            if (nowMs > entry.getValue())
-            {
-                skillingSnapshot.remove(entry.getKey());
-                log.debug("Skilling session ticked out: {}", entry.getKey());
-                return true;
-            }
-            return false;
-        });
+        // Expire skilling sessions only when any are active.
+        if (!skillingSnapshot.isEmpty())
+        {
+            long nowMs = System.currentTimeMillis();
+            skillingExpiry.entrySet().removeIf(entry -> {
+                if (nowMs > entry.getValue())
+                {
+                    skillingSnapshot.remove(entry.getKey());
+                    log.debug("Skilling session ticked out: {}", entry.getKey());
+                    return true;
+                }
+                return false;
+            });
+        }
 
-        // ── Pre-farming snapshot for next tick ──────────────────────────────────
-        // Capture inventory state at end of tick so we have a "before" state for
-        // farming XP events that fire in the next tick. By this point, all items
-        // from THIS tick's farming have already been added to inventory, so when
-        // the next XP event fires, we can use this snapshot to detect the delta.
-        preFarmingSnapshot = getCurrentInventory();
+        // Farming harvests typically start on a tick with no open skilling
+        // session. The baseline inventory must be captured every tick while
+        // loot tracking is on; otherwise the XP handler falls back to
+        // getCurrentInventory() and misses the harvest delta.
+        if (config.enableLootTracking())
+        {
+            preFarmingSnapshot = getCurrentInventory();
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -2936,7 +2966,7 @@ public class RuneAlyticsPlugin extends Plugin
         {
             try
             {
-                String valueStr = text.replaceAll("[^0-9]", "");
+                String valueStr = NON_DIGIT_PATTERN.matcher(text).replaceAll("");
                 if (!valueStr.isEmpty())
                 {
                     result[0] = Long.parseLong(valueStr);

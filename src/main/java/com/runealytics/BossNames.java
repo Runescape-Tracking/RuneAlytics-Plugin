@@ -56,13 +56,13 @@ public final class BossNames
 
         String l = raw.toLowerCase();
 
+        // Most specific names first, then progressively broader matches
         if (l.contains("doom of mokhaiotl"))              return "Doom of Mokhaiotl";
-
         if (l.contains("corrupted gauntlet"))             return "Corrupted Gauntlet";
-        if (l.contains("gauntlet"))                       return "The Gauntlet";
         if (l.contains("chambers") || l.contains("cox"))  return "Chambers of Xeric";
         if (l.contains("theatre") || l.contains("tob"))   return "Theatre of Blood";
         if (l.contains("tombs") || l.contains("toa"))     return "Tombs of Amascut";
+        if (l.contains("gauntlet"))                       return "The Gauntlet";
 
         if (l.contains("zilyana"))                        return "Commander Zilyana";
         if (l.contains("graardor"))                       return "General Graardor";
@@ -89,6 +89,7 @@ public final class BossNames
         if (l.contains("royal titans") || l.contains("eldric") || l.contains("branda"))
             return "Royal Titans";
         if (l.contains("hueycoatl"))                      return "The Hueycoatl";
+        // Check full phrase first before multi-part checks
         if (l.contains("moons of peril") || l.contains("blue moon")
                 || l.contains("blood moon") || l.contains("eclipse moon")
                 || l.contains("lunar chest") || l.equals("lunar"))
@@ -125,6 +126,8 @@ public final class BossNames
         if (l.contains("wintertodt"))                     return "Wintertodt";
         if (l.contains("zalcano"))                        return "Zalcano";
 
+        // Exact phrase first, then split-word fallback for "Clue scroll (hard)"
+        // style names where the tier and "clue" are not adjacent.
         if (l.contains("beginner clue") || (l.contains("beginner") && l.contains("clue")))
             return "Beginner Clue";
         if (l.contains("easy clue") || (l.contains("easy") && l.contains("clue")))

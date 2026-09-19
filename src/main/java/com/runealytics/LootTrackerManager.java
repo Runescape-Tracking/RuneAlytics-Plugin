@@ -324,6 +324,11 @@ public class LootTrackerManager
      */
     private final Map<String, Long> lastPlayerLootTime = new ConcurrentHashMap<>();
 
+    // ── Debounced listener notifications (batch rapid loot updates) ─────────────
+    private static final long LISTENER_UPDATE_DEBOUNCE_MS = 50;
+    private final Map<String, BossKillStats> pendingListenerUpdates = new ConcurrentHashMap<>();
+    private final Map<String, LootStorageData.KillRecord> pendingKillRecords = new ConcurrentHashMap<>();
+
     /**
      * Authoritative game-KC correlation (chat "kill count / chest count /
      * completion count" messages → kill records). Session-scoped; cleared in
@@ -451,6 +456,51 @@ public class LootTrackerManager
     }
 
     /**
+     * Deferred version of processNpcLoot that accepts primitive NPC data instead
+     * of an NPC reference. Safe to call from background executors where NPC refs
+     * may be stale. Does the same loot processing as processNpcLoot.
+     */
+    public void processNpcLootDeferred(String npcName, int npcId, int combatLevel,
+                                       int world, List<ItemStack> items)
+    {
+        processNpcLootDeferred(npcName, npcId, combatLevel, world, items, null);
+    }
+
+    public void processNpcLootDeferred(String npcName, int npcId, int combatLevel,
+                                       int world, List<ItemStack> items, PlayerLocationSnapshot location)
+    {
+        if (!config.enableLootTracking() || npcName == null || npcName.isEmpty())
+            return;
+
+        final List<ItemStack> itemList = items == null ? Collections.emptyList() : items;
+
+        log.debug("NPC loot (deferred): '{}' id={} cb={} items={}",
+                npcName, npcId, combatLevel, itemList.size());
+
+        String name = normalizeBossName(npcName);
+        boolean isBoss = isBoss(npcId, name);
+
+        if (!isBoss && !config.trackAllNpcs())
+        {
+            log.debug("Filtered NPC (not a tracked boss): '{}' id={} "
+                            + "→ enable 'Track All NPCs' or add id to TRACKED_BOSS_IDS",
+                    name, npcId);
+            return;
+        }
+
+        // ItemManager lookups must run on the client thread. ClientThread.invoke
+        // is async when called off-thread, so convert AND persist must both live
+        // inside the callback — reading an AtomicReference immediately after
+        // invoke() races and records a null drop list.
+        clientThread.invoke(() ->
+        {
+            List<LootStorageData.DropRecord> drops = convertToDropRecords(itemList);
+            executorService.execute(() ->
+                    recordKillWithLocation(name, npcId, combatLevel, world, drops, location));
+        });
+    }
+
+    /**
      * Attaches a late-arriving {@code NpcLootReceived} to a kill that was
      * already counted as zero-loot, instead of recording a new kill.
      *
@@ -472,6 +522,16 @@ public class LootTrackerManager
         if (items == null || items.isEmpty()) return false;
 
         String name = normalizeBossName(npc.getName());
+        return upgradeRecentZeroLootKillDeferred(name, items);
+    }
+
+    public boolean upgradeRecentZeroLootKillDeferred(String normalizedName, List<ItemStack> items)
+    {
+        if (!config.enableLootTracking() || normalizedName == null) return false;
+        if (items == null || items.isEmpty()) return false;
+
+        // Callers (including the plugin event path) may pass a raw NPC name.
+        String name = normalizeBossName(normalizedName);
         BossKillStats stats = bossKillStats.get(name);
         if (stats == null || stats.getKillHistory().isEmpty()) return false;
 
@@ -909,32 +969,61 @@ public class LootTrackerManager
             return;
         }
 
+        // Fetch item prices on client thread (fast, necessary), then defer to background
         List<LootStorageData.DropRecord> newDrops = convertToDropRecords(items);
         if (newDrops.isEmpty()) return;
 
-        // Update in-memory kill record
-        LootStorageData.KillRecord lastKill =
-                stats.getKillHistory().get(stats.getKillHistory().size() - 1);
-        lastKill.getDrops().addAll(newDrops);
-        lastKill.setSyncedToServer(false);
-
-        // Update in-memory aggregated stats
-        long addedValue = 0;
-        for (LootStorageData.DropRecord dr : newDrops)
+        // Defer to background and debounce with 50ms delay to batch rapid updates.
+        // Keep the in-memory stats update quick by computing the value sum upfront
+        // so we don't hold locks during storage I/O.
+        final long addedValue;
         {
-            addedValue += dr.getTotalValue();
-            if (dr.getTotalValue() > stats.getHighestDrop())
-                stats.setHighestDrop(dr.getTotalValue());
+            long sum = 0;
+            for (LootStorageData.DropRecord dr : newDrops)
+            {
+                sum += dr.getTotalValue();
+            }
+            addedValue = sum;
         }
-        stats.setTotalLootValue(stats.getTotalLootValue() + addedValue);
 
-        // Persist and re-sync
-        storageManager.appendDropsToLastKill(npcName, newDrops);
+        executorService.execute(() ->
+        {
+            synchronized (bossKillStats)
+            {
+                BossKillStats currentStats = bossKillStats.get(npcName);
+                if (currentStats == null || currentStats.getKillHistory().isEmpty()) return;
 
-        notifyListeners(stats, lastKill);
+                LootStorageData.KillRecord lastKill =
+                        currentStats.getKillHistory().get(currentStats.getKillHistory().size() - 1);
 
-        log.debug("appendDropsToLastKill: {} drop(s) added to '{}' last kill (+{} gp)",
-                newDrops.size(), npcName, addedValue);
+                // Quick in-memory update (no I/O, just data structure updates)
+                lastKill.getDrops().addAll(newDrops);
+                lastKill.setSyncedToServer(false);
+
+                // Update aggregated stats quickly
+                for (LootStorageData.DropRecord dr : newDrops)
+                {
+                    if (dr.getTotalValue() > currentStats.getHighestDrop())
+                        currentStats.setHighestDrop(dr.getTotalValue());
+                }
+                currentStats.setTotalLootValue(currentStats.getTotalLootValue() + addedValue);
+            }
+
+            // Persist to storage (off-thread, scheduled for later)
+            storageManager.appendDropsToLastKill(npcName, newDrops);
+
+            // Schedule debounced listener notification (after stats and storage updated)
+            synchronized (bossKillStats)
+            {
+                BossKillStats stats2 = bossKillStats.get(npcName);
+                if (stats2 != null && !stats2.getKillHistory().isEmpty())
+                {
+                    LootStorageData.KillRecord lastKill =
+                            stats2.getKillHistory().get(stats2.getKillHistory().size() - 1);
+                    scheduleListenerUpdate(npcName, stats2, lastKill);
+                }
+            }
+        });
     }
 
     /**
@@ -1316,6 +1405,12 @@ public class LootTrackerManager
         recordKill(npcName, npcId, combatLevel, world, drops, -1);
     }
 
+    private void recordKillWithLocation(
+            String npcName, int npcId, int combatLevel, int world,
+            List<LootStorageData.DropRecord> drops, PlayerLocationSnapshot location)
+    {
+        recordKill(npcName, npcId, combatLevel, world, drops, -1, location);
+    }
 
     /**
      * The single write path for all loot sources. When {@code gameKC} is
@@ -1326,6 +1421,13 @@ public class LootTrackerManager
     private void recordKill(
             String npcName, int npcId, int combatLevel, int world,
             List<LootStorageData.DropRecord> drops, int gameKC)
+    {
+        recordKill(npcName, npcId, combatLevel, world, drops, gameKC, null);
+    }
+
+    private void recordKill(
+            String npcName, int npcId, int combatLevel, int world,
+            List<LootStorageData.DropRecord> drops, int gameKC, PlayerLocationSnapshot capturedLocation)
     {
         // 0. Correlate with the authoritative game KC parsed from chat. The
         //    KC message and the loot event fire within ticks of each other in
@@ -1359,13 +1461,10 @@ public class LootTrackerManager
                 ? gameKC
                 : stats.getKillCount() + 1;
 
-        // 3. Snapshot the player's location at kill time. Loot events fire on
-        //    the client thread, so reading the live client state here is safe.
-        //    captureRespectingPrivacy substitutes the Grand Exchange decoy when
-        //    visibility is private — a private player's real coordinates must
-        //    never be written into a kill record that later gets synced.
-        PlayerLocationSnapshot location =
-                PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
+        // 3. Use pre-captured location if available; otherwise capture on current thread.
+        PlayerLocationSnapshot location = capturedLocation != null
+                ? capturedLocation
+                : PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
 
         // 4. Create the storage-compatible record
         LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
@@ -1373,7 +1472,7 @@ public class LootTrackerManager
         killRecord.setKillNumber(killNumber);
         killRecord.setWorld(world);
         killRecord.setCombatLevel(combatLevel);
-        killRecord.setDrops(new ArrayList<>(drops));
+        killRecord.setDrops(drops);
         killRecord.setSyncedToServer(false); // picked up by the next batch
         killRecord.setGameMode(state.getCurrentGameMode());
         killRecord.setAccountType(state.getCurrentAccountSubtype());
@@ -1401,6 +1500,8 @@ public class LootTrackerManager
             storageManager.recordLastGameKc(npcName, gameKC);
         }
 
+        log.debug("recordKill: notifying {} listener(s) for '{}' kill #{} with {} drops",
+                listeners.size(), npcName, killNumber, drops.size());
         notifyListeners(stats, killRecord);
 
         // Kick off a debounced live sync so the website updates within a few
@@ -3073,29 +3174,26 @@ public class LootTrackerManager
     {
         if (name == null) return false;
         String l = name.toLowerCase();
-        return l.contains("mokhaiotl")   || l.contains("duke")        || l.contains("leviathan")
-                || l.contains("vardorvis")   || l.contains("whisperer")
-                || l.contains("zulrah")      || l.contains("vorkath")
-                || l.contains("cerberus")    || l.contains("nightmare")
-                || l.contains("gauntlet")    || l.contains("barrows")
-                || l.contains("yama")        || l.contains("tempoross")
-                || l.contains("wintertodt")  || l.contains("zalcano")
-                || l.contains("eldric")      || l.contains("branda")
-                || l.contains("hueycoatl")   || l.contains("araxxor")
-                || l.contains("scurrius")    || l.contains("amoxliatl")
-                || l.contains("colosseum")   || l.contains("skotizo")
-                || l.contains("hespori")     || l.contains("abyssal")
-                || l.contains("thermonuclear")
-                || l.contains("grotesque")   || l.contains("kalphite")
-                || l.contains("dagannoth")   || l.contains("corporeal")
-                || l.contains("tormented demon")
-                // Bosses previously only covered by the trackAllNpcs fallback —
-                // name-matched so they stay tracked as bosses even when
-                // trackAllNpcs is off (their NPC ids are not whitelisted).
-                || l.contains("muspah")      || l.contains("sarachnis")
-                || l.contains("obor")        || l.contains("bryophyta")
-                || l.contains("giant mole")  || l.contains("king black dragon")
-                || l.contains("chaos elemental");
+        // Check most common/recent kills first for early short-circuit
+        return l.contains("zulrah")      || l.contains("vorkath")
+                || l.contains("barrows")      || l.contains("nightmare")
+                || l.contains("gauntlet")     || l.contains("cerberus")
+                || l.contains("wintertodt")   || l.contains("tempoross")
+                || l.contains("zalcano")      || l.contains("mokhaiotl")
+                || l.contains("duke")         || l.contains("leviathan")
+                || l.contains("vardorvis")    || l.contains("whisperer")
+                || l.contains("yama")         || l.contains("eldric")
+                || l.contains("branda")       || l.contains("hueycoatl")
+                || l.contains("araxxor")      || l.contains("scurrius")
+                || l.contains("amoxliatl")    || l.contains("colosseum")
+                || l.contains("skotizo")      || l.contains("hespori")
+                || l.contains("abyssal")      || l.contains("thermonuclear")
+                || l.contains("grotesque")    || l.contains("kalphite")
+                || l.contains("dagannoth")    || l.contains("corporeal")
+                || l.contains("tormented demon") || l.contains("muspah")
+                || l.contains("sarachnis")    || l.contains("obor")
+                || l.contains("bryophyta")    || l.contains("giant mole")
+                || l.contains("king black dragon") || l.contains("chaos elemental");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -3264,40 +3362,45 @@ public class LootTrackerManager
     private List<LootStorageData.DropRecord> convertToDropRecords(List<ItemStack> items)
     {
         List<LootStorageData.DropRecord> drops = new ArrayList<>();
+        boolean isClientThread = client.isClientThread();
+        log.debug("convertToDropRecords: processing {} items (thread={}, isClientThread={})",
+                items.size(), Thread.currentThread().getName(), isClientThread);
 
         for (ItemStack item : items)
         {
-            ItemComposition comp = itemManager.getItemComposition(item.getId());
-            // Plain itemManager.getItemPrice() returns 0 for noted/charged/
-            // untradeable variants (e.g. Scythe of Vitur, noted items) — go
-            // through ItemValueResolver so those still report a real value by
-            // canonicalising or decomposing into their tradeable components.
-            int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, item.getId());
-            // long math: gePrice * quantity overflows int for large stacks of
-            // high-value items (e.g. big coin / rune drops) and would record a
-            // negative or garbage value.
+            int itemId = item.getId();
+
+            // Cache canonicalize upfront to avoid redundant calls
+            int canonicalId = itemManager.canonicalize(itemId);
+            ItemComposition comp = itemManager.getItemComposition(itemId);
+            ItemComposition canonicalComp = (canonicalId != itemId)
+                    ? itemManager.getItemComposition(canonicalId)
+                    : comp;
+
+            // Resolve GE price (ItemValueResolver caches canonicalize internally)
+            int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, itemId);
             long totalValue = (long) gePrice * item.getQuantity();
 
-            // Only the "junk" filter applies here — a genuinely 0-value item
-            // (untradeable / unpriced, e.g. a new or quest-only unique) is real
-            // loot RuneLite just can't price, not clutter to hide, so it's
-            // always kept regardless of the configured threshold.
-            if (totalValue > 0 && totalValue < config.minimumLootValue()) continue;
-
-            ItemComposition canonicalComp = itemManager.getItemComposition(itemManager.canonicalize(item.getId()));
+            if (totalValue > 0 && totalValue < config.minimumLootValue())
+            {
+                log.debug("  Item filtered by minimum value: id={} name={} value={}", itemId, comp != null ? comp.getName() : "?", totalValue);
+                continue;
+            }
 
             LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
-            drop.setItemId   (item.getId());
-            drop.setItemName (comp.getName());
+            drop.setItemId   (itemId);
+            drop.setItemName (comp != null ? comp.getName() : "Unknown Item");
             drop.setQuantity (item.getQuantity());
             drop.setGePrice  (gePrice);
-            drop.setHighAlch (Math.max(comp.getHaPrice(), canonicalComp.getHaPrice()));
+            drop.setHighAlch (comp != null ? Math.max(comp.getHaPrice(), canonicalComp != null ? canonicalComp.getHaPrice() : 0) : 0);
             drop.setTotalValue(totalValue);
             drop.setHidden   (false);
 
             drops.add(drop);
+            log.debug("  Drop recorded: id={} name={} qty={} gePrice={} totalValue={}", itemId, drop.getItemName(), item.getQuantity(), gePrice, totalValue);
         }
 
+        log.debug("convertToDropRecords: returning {} drops from {} items", drops.size(), items.size());
         return drops;
     }
 
@@ -3318,14 +3421,19 @@ public class LootTrackerManager
         {
             try
             {
-                ItemComposition comp = itemManager.getItemComposition(item.getId());
-                int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, item.getId());
+                int itemId = item.getId();
+                ItemComposition comp = itemManager.getItemComposition(itemId);
+                int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, itemId);
                 long totalValue = (long) gePrice * item.getQuantity();
 
-                ItemComposition canonicalComp = itemManager.getItemComposition(itemManager.canonicalize(item.getId()));
+                // Only lookup canonical composition if it differs from the original
+                int canonicalId = itemManager.canonicalize(itemId);
+                ItemComposition canonicalComp = (canonicalId != itemId)
+                        ? itemManager.getItemComposition(canonicalId)
+                        : comp;
 
                 LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
-                drop.setItemId   (item.getId());
+                drop.setItemId   (itemId);
                 drop.setItemName (comp.getName());
                 drop.setQuantity (item.getQuantity());
                 drop.setGePrice  (gePrice);
@@ -3351,6 +3459,33 @@ public class LootTrackerManager
     public void addListener(LootTrackerUpdateListener listener)
     {
         listeners.add(listener);
+    }
+
+    /**
+     * Schedules a debounced listener notification for the given NPC. Rapid updates
+     * within {@value #LISTENER_UPDATE_DEBOUNCE_MS}ms are batched into a single
+     * notification to prevent excessive UI updates and client thread blocking.
+     *
+     * <p>Notification runs on background thread. The panel (LootTrackerPanel) already
+     * defers its heavy UI work to background (buildItemGrid) and uses SwingUtilities
+     * for EDT marshalling, so we don't need to marshal back to client thread.</p>
+     */
+    private void scheduleListenerUpdate(String npcName, BossKillStats stats, LootStorageData.KillRecord kill)
+    {
+        pendingListenerUpdates.put(npcName, stats);
+        pendingKillRecords.put(npcName, kill);
+
+        // Schedule notification on background thread after debounce delay
+        executorService.schedule(() ->
+        {
+            BossKillStats debouncedStats = pendingListenerUpdates.remove(npcName);
+            LootStorageData.KillRecord debouncedKill = pendingKillRecords.remove(npcName);
+
+            if (debouncedStats != null && debouncedKill != null)
+            {
+                notifyListeners(debouncedStats, debouncedKill);
+            }
+        }, LISTENER_UPDATE_DEBOUNCE_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     private void notifyListeners(BossKillStats stats, LootStorageData.KillRecord kill)

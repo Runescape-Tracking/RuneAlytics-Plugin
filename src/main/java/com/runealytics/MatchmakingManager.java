@@ -41,6 +41,9 @@ public class MatchmakingManager
     private volatile MatchmakingSession       session;
     private volatile MatchmakingUpdateListener listener;
 
+    /** Cached normalized opponent RSN to avoid string allocations on every player search. */
+    private volatile String cachedNormalizedOpponentRsn;
+
     /**
      * Monotonic match generation, incremented on every {@link #reset()} and
      * {@link #loadMatch(String)}. In-flight executor tasks check it via
@@ -49,6 +52,14 @@ public class MatchmakingManager
     private volatile int matchGeneration;
 
     private volatile int     tickCounter;
+    /**
+     * Advances on every game tick that still has a session, including while a
+     * network request is in flight. {@link #tickCounter} does not — it is the
+     * poll/accept clock and freezes for the duration of {@code requestInFlight}.
+     * Hint-arrow search must use this clock or an odd frozen {@code tickCounter}
+     * would keep a stale opponent arrow for the whole request.
+     */
+    private volatile int     hintSearchTick;
     private volatile boolean requestInFlight;
     private volatile boolean acceptInFlight;
     private volatile boolean beginInFlight;
@@ -228,21 +239,25 @@ public class MatchmakingManager
      */
     public void onGameTick()
     {
-        // Refresh player state (inventory, gear, overhead, skull) on the client
-        // thread so every outbound call carries current data. Safe with no
-        // active match.
-        refreshPlayerState();
-
-        // Update the hint arrow every tick so it never goes stale during a
-        // network call.
+        // Only refresh player state if we have an active match to avoid expensive
+        // JSON serialization on every tick for players not using match finder.
         if (session != null)
         {
-            updateHintArrow();
-        }
+            // Refresh player state (inventory, gear, overhead, skull) on the client
+            // thread so every outbound call carries current data.
+            refreshPlayerState();
 
-        // Recompute and cache the minimap target once per tick; the overlay
-        // reads the cached value each frame.
-        cachedMinimapTarget = computeMinimapTarget();
+            // Update the hint arrow every tick so it never goes stale during a
+            // network call. hintSearchTick keeps alternating even when
+            // tickCounter is frozen by requestInFlight.
+            updateHintArrow();
+            hintSearchTick++;
+
+            // Recompute and cache the minimap target once per tick; the overlay
+            // reads the cached value each frame.
+            // Only compute when in an active match to avoid searching players unnecessarily.
+            cachedMinimapTarget = computeMinimapTarget();
+        }
 
         if (session == null || requestInFlight)
         {
@@ -288,9 +303,14 @@ public class MatchmakingManager
             return;
         }
 
-        // Rebuild player state so the next off-thread poll has the latest
-        // inventory/gear/status.
-        refreshPlayerState();
+        // Only refresh state if we're in an active match to avoid expensive
+        // JSON serialization on every inventory change (lag spike after kills).
+        if (session != null)
+        {
+            // Rebuild player state so the next off-thread poll has the latest
+            // inventory/gear/status.
+            refreshPlayerState();
+        }
 
         // Mark gear as changed during a fight so /report-items fires again
         if (statusIs("Fighting"))
@@ -415,21 +435,23 @@ public class MatchmakingManager
         // Bump the generation so in-flight executor tasks for the old match
         // drop their results.
         matchGeneration++;
-        session                  = null;
-        tickCounter              = 0;
-        requestInFlight          = false;
-        acceptInFlight           = false;
-        beginInFlight            = false;
-        reportInFlight           = false;
-        itemsReportInFlight      = false;
-        resultReported           = false;
-        itemsReported            = false;
-        combatReported           = false;
-        combatInFlight           = false;
-        gearChangedDuringFight   = false;
-        acceptCooldownUntilTick  = 0;
-        beginCooldownUntilTick   = 0;
-        cachedMinimapTarget      = null;
+        session                           = null;
+        cachedNormalizedOpponentRsn       = null;
+        tickCounter                       = 0;
+        hintSearchTick                    = 0;
+        requestInFlight                   = false;
+        acceptInFlight                    = false;
+        beginInFlight                     = false;
+        reportInFlight                    = false;
+        itemsReportInFlight               = false;
+        resultReported                    = false;
+        itemsReported                     = false;
+        combatReported                    = false;
+        combatInFlight                    = false;
+        gearChangedDuringFight            = false;
+        acceptCooldownUntilTick           = 0;
+        beginCooldownUntilTick            = 0;
+        cachedMinimapTarget               = null;
         // Keep snapshots — they remain valid across match resets.
         clearHintArrow();
     }
@@ -963,7 +985,26 @@ public class MatchmakingManager
         if (isMatchCompletedOrCanceled()) { clearHintArrow(); return; }
 
         // ── 1. Always prefer the opponent in Pending, Ready, and Fighting ────
-        Player opponent = findPlayerByName(session.getOpponentRsn());
+        // Search every other tick to avoid an O(n) player scan on every tick.
+        // A skipped search must NOT be treated as "opponent vanished" or the
+        // hint arrow flickers between the player and the rally tile. Use
+        // hintSearchTick (always advances) — not tickCounter, which freezes
+        // while requestInFlight and would pin a stale opponent arrow.
+        Player opponent = null;
+        if (hintSearchTick % 2 == 0)
+        {
+            // Cache normalized opponent RSN to avoid string allocations on every search
+            if (cachedNormalizedOpponentRsn == null)
+            {
+                cachedNormalizedOpponentRsn = normalizeRsn(session.getOpponentRsn());
+            }
+            opponent = findPlayerByNormalizedName(cachedNormalizedOpponentRsn);
+        }
+        else if (lastHintPlayerName != null)
+        {
+            return;
+        }
+
         if (opponent != null)
         {
             String name = normalizeRsn(opponent.getName());
@@ -980,9 +1021,14 @@ public class MatchmakingManager
         MatchmakingRally rally = session.getRally();
         if (rally == null) { clearHintArrow(); return; }
 
-        WorldPoint rallyPoint = new WorldPoint(rally.getX(), rally.getY(), rally.getPlane());
-        if (!rallyPoint.equals(lastRallyPoint) || lastHintPlayerName != null)
+        // Only create WorldPoint if rally coordinates changed or player name is set
+        if (lastRallyPoint == null
+                || lastRallyPoint.getX() != rally.getX()
+                || lastRallyPoint.getY() != rally.getY()
+                || lastRallyPoint.getPlane() != rally.getPlane()
+                || lastHintPlayerName != null)
         {
+            WorldPoint rallyPoint = new WorldPoint(rally.getX(), rally.getY(), rally.getPlane());
             client.setHintArrow(rallyPoint);
             lastRallyPoint     = rallyPoint;
             lastHintPlayerName = null;
@@ -1053,13 +1099,24 @@ public class MatchmakingManager
     private Player findPlayerByName(String name)
     {
         String target = normalizeRsn(name);
-        if (target.isEmpty()) return null;
+        return findPlayerByNormalizedName(target);
+    }
+
+    /**
+     * Find a player by their normalized RSN.
+     * This avoids repeated string normalization calls inside the player loop.
+     * @param normalizedTarget the opponent RSN that has already been normalized
+     * @return the opponent player, or null if not in render distance
+     */
+    private Player findPlayerByNormalizedName(String normalizedTarget)
+    {
+        if (normalizedTarget == null || normalizedTarget.isEmpty()) return null;
         // Normalized comparison: RuneLite's Actor.getName() uses NBSP (U+00A0)
         // while server-side RSNs use regular spaces or underscores.
         for (Player player : client.getPlayers())
         {
             if (player == null) continue;
-            if (normalizeRsn(player.getName()).equalsIgnoreCase(target)) return player;
+            if (normalizeRsn(player.getName()).equalsIgnoreCase(normalizedTarget)) return player;
         }
         return null;
     }

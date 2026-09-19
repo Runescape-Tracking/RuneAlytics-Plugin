@@ -198,84 +198,95 @@ public class LootStorageManager
      * can be uploaded per-kill in the bulk-sync payload. {@code location} may be
      * {@code null}, in which case the kill simply carries no location.
      */
-    public synchronized void addKill(String npcName, int npcId, int combatLevel, int killNumber, int world,
+    public void addKill(String npcName, int npcId, int combatLevel, int killNumber, int world,
                         int prestige, List<LootStorageData.DropRecord> drops,
                         PlayerLocationSnapshot location)
     {
-        if (currentData == null)
-        {
-            currentData = loadData();
-        }
+        // Snapshot first so a caller mutating the list cannot desync the
+        // pre-computed totals from the stored kill, or throw CME mid-add.
+        List<LootStorageData.DropRecord> snapshot =
+                drops == null ? new ArrayList<>() : new ArrayList<>(drops);
 
-        // Get or create boss data
-        LootStorageData.BossKillData bossData = currentData.getBossKills()
-                .computeIfAbsent(npcName, k -> {
-                    LootStorageData.BossKillData newBoss = new LootStorageData.BossKillData();
-                    newBoss.setNpcName(npcName);
-                    newBoss.setNpcId(npcId);
-                    newBoss.setKillCount(0);
-                    newBoss.setPrestige(prestige);
-                    newBoss.setTotalLootValue(0);
-                    return newBoss;
-                });
-
-        // Create kill record
-        LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
-        killRecord.setTimestamp(System.currentTimeMillis());
-        killRecord.setKillNumber(killNumber);
-        killRecord.setWorld(world);
-        killRecord.setCombatLevel(combatLevel);
-        killRecord.setDrops(new java.util.ArrayList<>(drops));
-        killRecord.setSyncedToServer(false);
-        killRecord.setLocation(location);
-
-        // Add kill to list
-        bossData.getKills().add(killRecord);
-
-        // Update aggregated stats
-        bossData.setKillCount(killNumber);
-        bossData.setPrestige(prestige);
-
+        // Pre-compute aggregated stats outside lock to reduce contention
         long killValue = 0;
-        for (LootStorageData.DropRecord drop : drops)
+        Map<Integer, LootStorageData.AggregatedDrop> precomputedAggs = new HashMap<>();
+
+        for (LootStorageData.DropRecord drop : snapshot)
         {
             killValue += drop.getTotalValue();
 
-            // Update aggregated drops
-            LootStorageData.AggregatedDrop aggDrop = bossData.getAggregatedDrops()
-                    .computeIfAbsent(drop.getItemId(), k -> {
-                        LootStorageData.AggregatedDrop newAgg = new LootStorageData.AggregatedDrop();
-                        newAgg.setItemId(drop.getItemId());
-                        newAgg.setItemName(drop.getItemName());
-                        newAgg.setTotalQuantity(0);
-                        newAgg.setDropCount(0);
-                        newAgg.setTotalValue(0);
-                        newAgg.setGePrice(drop.getGePrice());
-                        newAgg.setHighAlch(drop.getHighAlch());
-                        return newAgg;
-                    });
-
-            aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
-            aggDrop.setDropCount(aggDrop.getDropCount() + 1);
-            aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
-
-            // gePrice/highAlch are only seeded when the aggregate entry is
-            // created; refresh them here in case the first drop had a 0 value.
-            if (aggDrop.getGePrice() <= 0 && drop.getGePrice() > 0)  aggDrop.setGePrice(drop.getGePrice());
-            if (aggDrop.getHighAlch() <= 0 && drop.getHighAlch() > 0) aggDrop.setHighAlch(drop.getHighAlch());
-            if (drop.isPet()) aggDrop.setPet(true);
+            precomputedAggs.computeIfAbsent(drop.getItemId(), k -> {
+                LootStorageData.AggregatedDrop newAgg = new LootStorageData.AggregatedDrop();
+                newAgg.setItemId(drop.getItemId());
+                newAgg.setItemName(drop.getItemName());
+                newAgg.setTotalQuantity(0);
+                newAgg.setDropCount(0);
+                newAgg.setTotalValue(0);
+                newAgg.setGePrice(drop.getGePrice());
+                newAgg.setHighAlch(drop.getHighAlch());
+                return newAgg;
+            });
         }
 
-        bossData.setTotalLootValue(bossData.getTotalLootValue() + killValue);
+        synchronized (this)
+        {
+            if (currentData == null)
+            {
+                currentData = loadData();
+            }
 
-        // Increment revision to signal that new loot has been added
-        // Used by sync to detect if fresh drops arrived during synchronization
-        currentData.setRevision(currentData.getRevision() + 1);
+            // Get or create boss data
+            LootStorageData.BossKillData bossData = currentData.getBossKills()
+                    .computeIfAbsent(npcName, k -> {
+                        LootStorageData.BossKillData newBoss = new LootStorageData.BossKillData();
+                        newBoss.setNpcName(npcName);
+                        newBoss.setNpcId(npcId);
+                        newBoss.setKillCount(0);
+                        newBoss.setPrestige(prestige);
+                        newBoss.setTotalLootValue(0);
+                        return newBoss;
+                    });
 
-        scheduleSave();
+            // Create kill record with the snapshot (caller can't mutate stored kills)
+            LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
+            killRecord.setTimestamp(System.currentTimeMillis());
+            killRecord.setKillNumber(killNumber);
+            killRecord.setWorld(world);
+            killRecord.setCombatLevel(combatLevel);
+            killRecord.setDrops(snapshot);
+            killRecord.setSyncedToServer(false);
+            killRecord.setLocation(location);
+
+            // Add kill to list
+            bossData.getKills().add(killRecord);
+
+            // Update aggregated stats with pre-computed values
+            bossData.setKillCount(killNumber);
+            bossData.setPrestige(prestige);
+
+            for (LootStorageData.DropRecord drop : snapshot)
+            {
+                LootStorageData.AggregatedDrop aggDrop = bossData.getAggregatedDrops()
+                        .computeIfAbsent(drop.getItemId(), k -> precomputedAggs.get(drop.getItemId()));
+
+                aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
+                aggDrop.setDropCount(aggDrop.getDropCount() + 1);
+                aggDrop.setTotalValue(aggDrop.getTotalValue() + drop.getTotalValue());
+
+                if (aggDrop.getGePrice() <= 0 && drop.getGePrice() > 0)  aggDrop.setGePrice(drop.getGePrice());
+                if (aggDrop.getHighAlch() <= 0 && drop.getHighAlch() > 0) aggDrop.setHighAlch(drop.getHighAlch());
+                if (drop.isPet()) aggDrop.setPet(true);
+            }
+
+            bossData.setTotalLootValue(bossData.getTotalLootValue() + killValue);
+
+            currentData.setRevision(currentData.getRevision() + 1);
+
+            scheduleSave();
+        }
 
         log.debug("Added kill #{} for {} - {} drops, {} gp",
-                killNumber, npcName, drops.size(), killValue);
+                killNumber, npcName, snapshot.size(), killValue);
     }
 
     /**
@@ -327,7 +338,7 @@ public class LootStorageManager
         }
 
         scheduleSave();
-        log.debug("Appended {} RoW drop(s) to last '{}' kill", drops.size(), npcName);
+        log.debug("Appended {} drop(s) to last '{}' kill", drops.size(), npcName);
     }
 
     /**

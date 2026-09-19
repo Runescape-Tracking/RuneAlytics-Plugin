@@ -5,8 +5,9 @@ name: Make Submission Branch
 # is pushed. Via scripts/make-submission.sh the job removes the unit-test suite
 # (keeping the standard RuneAlyticsPluginTest launcher + shadowJar), strips
 # checkstyle.xml, .github and scripts, trims checkstyle + mockito/mockwebserver
-# from build.gradle, verifies the stripped tree still compiles, pushes the
-# result to `submission`, and surfaces the commit SHA to paste into the
+# from build.gradle, verifies the stripped tree still compiles, runs the
+# Plugin Hub guards (java/lang/Runtime bytecode + stray .class files), pushes
+# the result to `submission`, and surfaces the commit SHA to paste into the
 # plugin-hub PR.
 
 on:
@@ -45,7 +46,7 @@ jobs:
       - name: Generate submission branch
         id: gen
         run: |
-          chmod +x ./gradlew scripts/make-submission.sh
+          chmod +x ./gradlew scripts/make-submission.sh scripts/plugin-hub-guards.sh
           REF="${{ github.event.inputs.source_ref || github.ref_name }}"
           scripts/make-submission.sh "$REF" | tee make-submission.out
           echo "sha=$(tail -n1 make-submission.out)" >> "$GITHUB_OUTPUT"

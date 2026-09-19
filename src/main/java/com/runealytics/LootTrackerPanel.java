@@ -118,6 +118,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private final Map<String, List<String>> bossBySourceGroup = new ConcurrentHashMap<>();
     /** Current display order for fast lookup when reordering. */
     private List<String> currentBossOrder = new ArrayList<>();
+    /** Cached item count per boss to avoid O(n) stream filtering on every loot update. */
+    private final Map<String, Integer> itemCountPerBoss = new ConcurrentHashMap<>();
 
     // Re-entrancy guard: serialises refreshes so overlapping events coalesce
     // into a single rebuild instead of racing on the shared executor.
@@ -152,9 +154,10 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         this.itemManager      = itemManager;
         this.executorService  = executorService;
 
-        refreshDebounce = new javax.swing.Timer(150, e -> executeRefresh());
+        refreshDebounce = new javax.swing.Timer(250, e -> executeRefresh());
         refreshDebounce.setRepeats(false);
 
+        log.debug("Registering LootTrackerPanel as listener");
         lootManager.addListener(this);
         lootManager.setPanel(this);
         buildUi();
@@ -784,6 +787,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     @Override
     public void onLootUpdated(BossKillStats stats, LootStorageData.KillRecord kill)
     {
+        log.debug("onLootUpdated: '{}' KC={}  drops={}", stats.getNpcName(), stats.getKillCount(), kill.getDrops().size());
         scheduleLootUpdate(stats.getNpcName(), stats);
     }
 
@@ -809,7 +813,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             javax.swing.Timer existing = lootDebounceMap.get(npcName);
             if (existing != null) existing.stop();
 
-            javax.swing.Timer t = new javax.swing.Timer(80, e -> {
+            javax.swing.Timer t = new javax.swing.Timer(120, e -> {
                 lootDebounceMap.remove(npcName);
                 updateLoot(npcName);  // ← Fetch fresh stats from manager
             });
@@ -826,23 +830,39 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     public void updateLoot(String npcName)
     {
-        if (!passesFilter(npcName)) return;
-        if (!showIgnoredItems && lootManager.isBossHidden(npcName)) return;
+        log.debug("updateLoot called for '{}'", npcName);
+        if (!passesFilter(npcName))
+        {
+            log.debug("  → filtered out by current filter");
+            return;
+        }
+        if (!showIgnoredItems && lootManager.isBossHidden(npcName))
+        {
+            log.debug("  → boss is hidden (showIgnoredItems={})", showIgnoredItems);
+            return;
+        }
 
         // Fetch fresh stats from manager to avoid stale data from debounced callbacks
         BossKillStats stats = lootManager.getBossKillStats(npcName);
-        if (stats == null) return;
+        if (stats == null)
+        {
+            log.debug("  → stats is null");
+            return;
+        }
 
         List<BossKillStats.AggregatedDrop> drops = lootManager.getStorageDropsForBoss(npcName);
+        log.debug("  → fetched {} drops from storage", drops.size());
         long totalValue = drops.stream().mapToLong(BossKillStats.AggregatedDrop::getTotalValue).sum();
 
         JPanel card = bossCardMap.get(npcName);
         if (card == null)
         {
+            log.debug("  → card not yet created, triggering refresh");
             invalidateFingerprint();
             refreshDisplay();
             return;
         }
+        log.debug("  → updating existing card (KC={}, drops={}, value={})", stats.getKillCount(), drops.size(), totalValue);
 
         // Defer itemManager calls to avoid blocking the EDT
         executorService.execute(() ->
@@ -854,9 +874,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     visibleDrops.add(d);
 
             // Only rebuild if the number of visible items changed, not individual items
-            int existingItemCount = (int) itemSlotMap.keySet().stream()
-                    .filter(k -> k.startsWith(npcName + "_"))
-                    .count();
+            int existingItemCount = itemCountPerBoss.getOrDefault(npcName, 0);
             boolean needsRebuild = visibleDrops.size() != existingItemCount;
 
             if (!needsRebuild)
@@ -905,14 +923,17 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     {
                         gridWrapper.removeAll();
                         gridWrapper.add(newGridFinal, BorderLayout.NORTH);
-                        gridWrapper.revalidate();
+                        // Use validate() instead of revalidate() - only validates this component,
+                        // not the parent hierarchy. Revalidate() traverses up and is expensive.
+                        gridWrapper.validate();
                         gridWrapper.repaint();
 
                         // Only repaint the card, not the entire panel
                         JPanel card2 = bossCardMap.get(npcName);
                         if (card2 != null) card2.repaint();
                     }
-                    // Clear item slots for this boss to avoid stale references
+                    // Update item count cache and clear stale item slots for this boss
+                    itemCountPerBoss.put(npcName, visibleDrops.size());
                     itemSlotMap.keySet().removeIf(k -> k.startsWith(npcName + "_"));
                 }
                 else
@@ -1186,25 +1207,23 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             {
                 List<BossKillStats> allStats = lootManager.getAllBossStats();
 
-                String fp = buildDisplayFingerprint(allStats, highlightedBoss);
-                String oldFp = lastDisplayFingerprint;
-                lastDisplayFingerprint = fp;
-
-                // If fingerprint was invalidated (set to null by invalidateFingerprint()),
-                // force a slow-path rebuild even if structure looks the same
-                boolean fingerprintChanged = (oldFp == null) || !fp.equals(oldFp);
-
-                Map<String, BossKillStats> unique = new LinkedHashMap<>();
-                for (BossKillStats s : allStats) unique.putIfAbsent(s.getNpcName(), s);
-
+                // Filter and sort once, then build fingerprint from sorted result
                 List<BossKillStats> sorted = new ArrayList<>();
-                for (BossKillStats s : unique.values())
+                for (BossKillStats s : allStats)
                     if (passesFilter(s.getNpcName())
                             && (showIgnoredItems || !lootManager.isBossHidden(s.getNpcName()))
                             && !isEmptyBossEntry(s))
                         sorted.add(s);
 
                 sortStats(sorted);
+
+                String fp = buildDisplayFingerprint(sorted, highlightedBoss);
+                String oldFp = lastDisplayFingerprint;
+                lastDisplayFingerprint = fp;
+
+                // If fingerprint was invalidated (set to null by invalidateFingerprint()),
+                // force a slow-path rebuild even if structure looks the same
+                boolean fingerprintChanged = (oldFp == null) || !fp.equals(oldFp);
 
                 final long totalVal   = sorted.stream().mapToLong(BossKillStats::getTotalLootValue).sum();
                 final int  totalKills = sorted.stream().mapToInt(BossKillStats::getKillCount).sum();
@@ -1259,20 +1278,40 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
                             // Mid path: boss set unchanged, but order changed (e.g., sort by value).
                             // Don't call updateLoot() on all bosses - per-boss mechanism handles those.
-                            // Just reorder the existing cards and sync totals.
+                            // Skip expensive removeAll/re-add when order matches current layout.
 
-                            List<Component> reorderedComps = new ArrayList<>();
+                            boolean orderMatches = true;
+                            Component[] comps = bossListPanel.getComponents();
+                            int compIdx = 0;
                             for (String npcName : newOrder)
                             {
+                                // Skip vertical struts (every other component)
+                                if (compIdx >= comps.length) { orderMatches = false; break; }
                                 JPanel card = bossCardMap.get(npcName);
-                                if (card != null) reorderedComps.add(card);
+                                if (comps[compIdx] != card) { orderMatches = false; break; }
+                                // Move to next card (skip strut)
+                                compIdx += 2;
                             }
 
-                            bossListPanel.removeAll();  // Clear only for reordering
-                            for (int i = 0; i < reorderedComps.size(); i++)
+                            if (!orderMatches)
                             {
-                                if (i > 0) bossListPanel.add(Box.createVerticalStrut(5));
-                                bossListPanel.add(reorderedComps.get(i));
+                                // Order changed: rebuild component list (expensive but necessary)
+                                // This should be rare - only happens when sort order actually changes
+                                List<Component> reorderedComps = new ArrayList<>();
+                                for (String npcName : newOrder)
+                                {
+                                    JPanel card = bossCardMap.get(npcName);
+                                    if (card != null) reorderedComps.add(card);
+                                }
+
+                                bossListPanel.removeAll();
+                                for (int i = 0; i < reorderedComps.size(); i++)
+                                {
+                                    if (i > 0) bossListPanel.add(Box.createVerticalStrut(5));
+                                    bossListPanel.add(reorderedComps.get(i));
+                                }
+                                // Repaint after structure change
+                                bossListPanel.repaint();
                             }
 
                             currentBossOrder = newOrder;
@@ -1280,13 +1319,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                             displayedHighlight = highlightedBoss;
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                             totalValueLabel.setText("Value " + formatGp(totalVal));
-                            bossListPanel.revalidate();
-                            bossListPanel.repaint();
 
                             long totalMs = System.currentTimeMillis() - startMs;
                             long edtMs = System.currentTimeMillis() - edtStartMs;
                             log.debug(LogCategory.UI_UPDATE.format(
-                                "Mid path: reordered %d bosses (total %dms, EDT %dms)",
+                                "Mid path: %s %d bosses (total %dms, EDT %dms)",
+                                orderMatches ? "matched order for" : "reordered",
                                 sorted.size(), totalMs, edtMs));
                             return;
                         }
@@ -1330,9 +1368,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         displayedHighlight = highlightedBoss;
 
                         long edtStartMs = System.currentTimeMillis();
-                        bossListPanel.revalidate();
+                        // Don't call revalidate() - removeAll() already invalidated the panel.
+                        // Let the repaint trigger layout validation instead of blocking EDT with explicit traversal.
                         bossListPanel.repaint();
-                        scrollPane.revalidate();
                         scrollPane.getVerticalScrollBar().setValue(savedScroll);
 
                         long edtMs = System.currentTimeMillis() - edtStartMs;
@@ -1404,20 +1442,17 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         return !hasItems && !hasValue;
     }
 
-    private String buildDisplayFingerprint(List<BossKillStats> stats, String highlight)
+    private String buildDisplayFingerprint(List<BossKillStats> sortedStats, String highlight)
     {
-        StringBuilder sb = new StringBuilder(stats.size() * 40 + 32);
+        StringBuilder sb = new StringBuilder(sortedStats.size() * 40 + 32);
         sb.append(highlight == null ? "" : highlight)
                 .append('|').append(currentSort.name())
                 .append('|').append(currentFilter.name())
                 .append('|').append(currentSkillFilter == null ? "" : currentSkillFilter)
                 .append('|').append(showIgnoredItems).append('|');
 
-        List<BossKillStats> copy = new ArrayList<>(stats);
-        sortStats(copy);
-        for (BossKillStats s : copy)
+        for (BossKillStats s : sortedStats)
         {
-            if (!passesFilter(s.getNpcName()) || isEmptyBossEntry(s)) continue;
             // Only fingerprint structure: boss name + kill count + sort order
             // Exclude timestamp (changes on every kill) and values (change with items)
             // This allows fast path to trigger for incremental updates while detecting
