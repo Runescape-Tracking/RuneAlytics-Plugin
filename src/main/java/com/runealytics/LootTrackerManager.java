@@ -963,42 +963,59 @@ public class LootTrackerManager
             return;
         }
 
-        // Fetch item prices on client thread (fast, necessary), then defer heavy work
+        // Fetch item prices on client thread (fast, necessary), then defer to background
         List<LootStorageData.DropRecord> newDrops = convertToDropRecords(items);
         if (newDrops.isEmpty()) return;
 
-        // Defer stats aggregation, persistence, and listener notification to background
-        // thread to prevent client thread blocking. Debounce with 50ms delay to batch
-        // rapid updates together.
+        // Defer to background and debounce with 50ms delay to batch rapid updates.
+        // Keep the in-memory stats update quick by computing the value sum upfront
+        // so we don't hold locks during storage I/O.
+        long addedValue = 0;
+        for (LootStorageData.DropRecord dr : newDrops)
+        {
+            addedValue += dr.getTotalValue();
+        }
+
         executorService.execute(() ->
         {
             synchronized (bossKillStats)
             {
-                // Update in-memory kill record
+                BossKillStats currentStats = bossKillStats.get(npcName);
+                if (currentStats == null || currentStats.getKillHistory().isEmpty()) return;
+
                 LootStorageData.KillRecord lastKill =
-                        stats.getKillHistory().get(stats.getKillHistory().size() - 1);
+                        currentStats.getKillHistory().get(currentStats.getKillHistory().size() - 1);
+
+                // Quick in-memory update (no I/O, just data structure updates)
                 lastKill.getDrops().addAll(newDrops);
                 lastKill.setSyncedToServer(false);
 
-                // Update in-memory aggregated stats
-                long addedValue = 0;
+                // Update aggregated stats quickly
                 for (LootStorageData.DropRecord dr : newDrops)
                 {
-                    addedValue += dr.getTotalValue();
-                    if (dr.getTotalValue() > stats.getHighestDrop())
-                        stats.setHighestDrop(dr.getTotalValue());
+                    if (dr.getTotalValue() > currentStats.getHighestDrop())
+                        currentStats.setHighestDrop(dr.getTotalValue());
                 }
-                stats.setTotalLootValue(stats.getTotalLootValue() + addedValue);
-
-                // Persist to storage
-                storageManager.appendDropsToLastKill(npcName, newDrops);
-
-                // Schedule debounced listener notification (50ms delay batches rapid updates)
-                scheduleListenerUpdate(npcName, stats, lastKill);
-
-                log.debug("appendDropsToLastKill: {} drop(s) added to '{}' last kill (+{} gp)",
-                        newDrops.size(), npcName, addedValue);
+                currentStats.setTotalLootValue(currentStats.getTotalLootValue() + addedValue);
             }
+
+            // Persist to storage (off-thread, scheduled for later)
+            storageManager.appendDropsToLastKill(npcName, newDrops);
+
+            // Schedule debounced listener notification (after stats and storage updated)
+            synchronized (bossKillStats)
+            {
+                BossKillStats stats2 = bossKillStats.get(npcName);
+                if (stats2 != null && !stats2.getKillHistory().isEmpty())
+                {
+                    LootStorageData.KillRecord lastKill =
+                            stats2.getKillHistory().get(stats2.getKillHistory().size() - 1);
+                    scheduleListenerUpdate(npcName, stats2, lastKill);
+                }
+            }
+
+            log.debug("appendDropsToLastKill: {} drop(s) added to '{}' last kill (+{} gp)",
+                    newDrops.size(), npcName, addedValue);
         });
     }
 
