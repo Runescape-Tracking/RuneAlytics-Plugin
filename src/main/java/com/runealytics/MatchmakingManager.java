@@ -1002,9 +1002,14 @@ public class MatchmakingManager
         MatchmakingRally rally = session.getRally();
         if (rally == null) { clearHintArrow(); return; }
 
-        WorldPoint rallyPoint = new WorldPoint(rally.getX(), rally.getY(), rally.getPlane());
-        if (!rallyPoint.equals(lastRallyPoint) || lastHintPlayerName != null)
+        // Only create WorldPoint if rally coordinates changed or player name is set
+        if (lastRallyPoint == null
+                || lastRallyPoint.getX() != rally.getX()
+                || lastRallyPoint.getY() != rally.getY()
+                || lastRallyPoint.getPlane() != rally.getPlane()
+                || lastHintPlayerName != null)
         {
+            WorldPoint rallyPoint = new WorldPoint(rally.getX(), rally.getY(), rally.getPlane());
             client.setHintArrow(rallyPoint);
             lastRallyPoint     = rallyPoint;
             lastHintPlayerName = null;
