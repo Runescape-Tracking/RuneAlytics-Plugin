@@ -288,9 +288,14 @@ public class MatchmakingManager
             return;
         }
 
-        // Rebuild player state so the next off-thread poll has the latest
-        // inventory/gear/status.
-        refreshPlayerState();
+        // Only refresh state if we're in an active match to avoid expensive
+        // JSON serialization on every inventory change (lag spike after kills).
+        if (session != null)
+        {
+            // Rebuild player state so the next off-thread poll has the latest
+            // inventory/gear/status.
+            refreshPlayerState();
+        }
 
         // Mark gear as changed during a fight so /report-items fires again
         if (statusIs("Fighting"))
