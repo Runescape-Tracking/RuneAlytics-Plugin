@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.SwingUtilities;
 import net.runelite.api.Client;
 import net.runelite.api.Player;
@@ -317,6 +318,39 @@ public class MatchmakingManagerTest
         verify(client, never()).setHintArrow(any(WorldPoint.class));
         verify(client, never()).clearHintArrow();
         assertEquals(opponentLoc, mgr.getMinimapTarget());
+    }
+
+    @Test
+    public void onGameTick_inFlight_doesNotPinStaleOpponentHint() throws Exception
+    {
+        installActiveSession(session("M", "Fighting", null, true,
+                new MatchmakingRally(1500, 1600, 0)));
+
+        Player opponent = playerNamed("Foe");
+        when(opponent.getWorldLocation()).thenReturn(new WorldPoint(3200, 3200, 0));
+        when(client.getPlayers()).thenReturn(Collections.singletonList(opponent));
+
+        mgr.onGameTick();
+        verify(client).setHintArrow(opponent);
+
+        // Leave the next poll queued so requestInFlight stays true (tickCounter
+        // therefore freezes). Hint search must still advance and notice the
+        // opponent leaving render distance.
+        AtomicReference<Runnable> queued = new AtomicReference<>();
+        doAnswer(inv -> {
+            queued.set(inv.getArgument(0));
+            return null;
+        }).when(executor).submit(any(Runnable.class));
+
+        mgr.onGameTick(); // off-search tick; poll is queued, request stays in flight
+        assertTrue(queued.get() != null);
+
+        clearInvocations(client);
+        when(client.getPlayers()).thenReturn(Collections.emptyList());
+
+        mgr.onGameTick(); // next even hint-search tick — must fall back to rally
+        verify(client).setHintArrow(any(WorldPoint.class));
+        assertEquals(new WorldPoint(1500, 1600, 0), mgr.getMinimapTarget());
     }
 
     @Test
