@@ -1,9 +1,10 @@
 name: Plugin Hub Checks
 
 # Catches RuneLite Plugin Hub convention violations (e.g. Thread.sleep, thread
-# priority/interrupt, System.out, reflection) and compile errors on our own
-# repo, so we find them before a plugin-hub reviewer does. The forbidden-API
-# rules live in the top-level checkstyle.xml (see its "Forbidden APIs" section).
+# priority/interrupt, System.out, reflection, java.lang.Runtime, stray .class
+# files) and compile errors on our own repo, so we find them before a
+# plugin-hub reviewer does. Forbidden-API rules live in checkstyle.xml;
+# Runtime bytecode + stray-.class guards live in scripts/plugin-hub-guards.sh.
 
 on:
   push:
@@ -23,14 +24,17 @@ jobs:
           distribution: temurin
           java-version: '11'
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
+      - name: Make scripts executable
+        run: chmod +x ./gradlew scripts/make-submission.sh scripts/plugin-hub-guards.sh
 
       - name: Clear Gradle cache
         run: ./gradlew clean
 
       - name: Compile (fails on build breakage, like the plugin-hub build)
         run: ./gradlew --no-daemon compileJava
+
+      - name: Plugin Hub guards (java/lang/Runtime + stray .class files)
+        run: scripts/plugin-hub-guards.sh
 
       - name: Forbidden API / convention checks (main + test)
         run: ./gradlew --no-daemon checkstyleMain checkstyleTest

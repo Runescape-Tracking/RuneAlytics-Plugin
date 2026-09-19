@@ -95,10 +95,21 @@
         <property name="message" value="Only log.debug is permitted (Plugin Hub). Convert log.trace/info/warn/error to log.debug."/>
     </module>
 
-    <!-- Spawning OS processes is a hard Plugin Hub rejection. -->
+    <!-- java.lang.Runtime is a hard Plugin Hub kickback ("Please remove all
+         usages of java/lang/Runtime"). RuntimeException is a different class
+         and is allowed — these patterns require a trailing '.' or an exact
+         import of java.lang.Runtime. -->
     <module name="RegexpSingleline">
-        <property name="format" value="getRuntime\s*\(\s*\)\s*\.\s*exec\s*\("/>
-        <property name="message" value="Runtime.exec is forbidden (Plugin Hub). Plugins must not spawn external processes."/>
+        <property name="format" value="import\s+java\.lang\.Runtime\s*;"/>
+        <property name="message" value="java.lang.Runtime is forbidden (Plugin Hub). Please remove all usages of java/lang/Runtime."/>
+    </module>
+    <module name="RegexpSingleline">
+        <property name="format" value="(?&lt;![\w.])java\.lang\.Runtime(?![\w])"/>
+        <property name="message" value="java.lang.Runtime is forbidden (Plugin Hub). Please remove all usages of java/lang/Runtime."/>
+    </module>
+    <module name="RegexpSingleline">
+        <property name="format" value="(?&lt;![\w.])Runtime\s*\."/>
+        <property name="message" value="java.lang.Runtime is forbidden (Plugin Hub). Please remove all usages of java/lang/Runtime. RuntimeException is fine."/>
     </module>
 
     <!-- Reflection that breaks encapsulation is forbidden. -->

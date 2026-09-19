@@ -29,6 +29,10 @@
 # jshell testImplementation dependencies. The dev tree (master) keeps its full
 # build.gradle untouched — the edit happens only in the throwaway worktree.
 #
+# After the strip + compile it also runs scripts/plugin-hub-guards.sh against
+# the worktree so a Plugin Hub kickback for java/lang/Runtime or a stray
+# .class file cannot land on the submission commit.
+#
 # The result is committed onto the `submission` branch, compiled to prove the
 # stripped tree still builds on its own, and the resulting commit SHA is printed
 # for you to paste into the plugin-hub PR.
@@ -172,6 +176,22 @@ Do not commit onto this branch by hand — re-run the script instead."
         info "Verifying the stripped tree compiles..."
         ./gradlew --no-daemon --console=plain compileJava >/dev/null \
             || fail "Stripped submission tree failed to compile."
+    fi
+
+    # 5b. Plugin Hub kickbacks we have already been hit with: any
+    # java/lang/Runtime reference in source or compiled classes, and any
+    # stray / git-tracked .class file. scripts/ is already stripped from
+    # this worktree, so invoke the checker from the original repo.
+    info "Running Plugin Hub guards (java/lang/Runtime + stray .class files)..."
+    if [ "${SKIP_BUILD:-0}" = "1" ]; then
+        SKIP_BYTECODE=1 "${REPO_ROOT}/scripts/plugin-hub-guards.sh" \
+            --root "${WORKTREE_DIR}" \
+            || fail "Plugin Hub guards failed on the submission tree."
+    else
+        "${REPO_ROOT}/scripts/plugin-hub-guards.sh" \
+            --root "${WORKTREE_DIR}" \
+            --classes "${WORKTREE_DIR}/build/classes/java/main" \
+            || fail "Plugin Hub guards failed on the submission tree."
     fi
 
     # 6. Sanity checks: the launcher survived, no unit tests leaked, and
