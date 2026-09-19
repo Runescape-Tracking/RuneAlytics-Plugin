@@ -56,13 +56,13 @@ public final class BossNames
 
         String l = raw.toLowerCase();
 
+        // Most specific names first, then progressively broader matches
         if (l.contains("doom of mokhaiotl"))              return "Doom of Mokhaiotl";
-
         if (l.contains("corrupted gauntlet"))             return "Corrupted Gauntlet";
-        if (l.contains("gauntlet"))                       return "The Gauntlet";
         if (l.contains("chambers") || l.contains("cox"))  return "Chambers of Xeric";
         if (l.contains("theatre") || l.contains("tob"))   return "Theatre of Blood";
         if (l.contains("tombs") || l.contains("toa"))     return "Tombs of Amascut";
+        if (l.contains("gauntlet"))                       return "The Gauntlet";
 
         if (l.contains("zilyana"))                        return "Commander Zilyana";
         if (l.contains("graardor"))                       return "General Graardor";
@@ -89,6 +89,7 @@ public final class BossNames
         if (l.contains("royal titans") || l.contains("eldric") || l.contains("branda"))
             return "Royal Titans";
         if (l.contains("hueycoatl"))                      return "The Hueycoatl";
+        // Check full phrase first before multi-part checks
         if (l.contains("moons of peril") || l.contains("blue moon")
                 || l.contains("blood moon") || l.contains("eclipse moon")
                 || l.contains("lunar chest") || l.equals("lunar"))
@@ -125,18 +126,13 @@ public final class BossNames
         if (l.contains("wintertodt"))                     return "Wintertodt";
         if (l.contains("zalcano"))                        return "Zalcano";
 
-        if (l.contains("beginner clue") || (l.contains("beginner") && l.contains("clue")))
-            return "Beginner Clue";
-        if (l.contains("easy clue") || (l.contains("easy") && l.contains("clue")))
-            return "Easy Clue";
-        if (l.contains("medium clue") || (l.contains("medium") && l.contains("clue")))
-            return "Medium Clue";
-        if (l.contains("hard clue") || (l.contains("hard") && l.contains("clue")))
-            return "Hard Clue";
-        if (l.contains("elite clue") || (l.contains("elite") && l.contains("clue")))
-            return "Elite Clue";
-        if (l.contains("master clue") || (l.contains("master") && l.contains("clue")))
-            return "Master Clue";
+        // Clues: check exact phrase first (avoids second contains on short-circuit)
+        if (l.contains("beginner clue"))                  return "Beginner Clue";
+        if (l.contains("easy clue"))                      return "Easy Clue";
+        if (l.contains("medium clue"))                    return "Medium Clue";
+        if (l.contains("hard clue"))                      return "Hard Clue";
+        if (l.contains("elite clue"))                     return "Elite Clue";
+        if (l.contains("master clue"))                    return "Master Clue";
 
         return raw.trim();
     }

@@ -1402,7 +1402,7 @@ public class LootTrackerManager
         killRecord.setKillNumber(killNumber);
         killRecord.setWorld(world);
         killRecord.setCombatLevel(combatLevel);
-        killRecord.setDrops(new ArrayList<>(drops));
+        killRecord.setDrops(drops);
         killRecord.setSyncedToServer(false); // picked up by the next batch
         killRecord.setGameMode(state.getCurrentGameMode());
         killRecord.setAccountType(state.getCurrentAccountSubtype());

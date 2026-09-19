@@ -118,6 +118,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     private final Map<String, List<String>> bossBySourceGroup = new ConcurrentHashMap<>();
     /** Current display order for fast lookup when reordering. */
     private List<String> currentBossOrder = new ArrayList<>();
+    /** Cached item count per boss to avoid O(n) stream filtering on every loot update. */
+    private final Map<String, Integer> itemCountPerBoss = new ConcurrentHashMap<>();
 
     // Re-entrancy guard: serialises refreshes so overlapping events coalesce
     // into a single rebuild instead of racing on the shared executor.
@@ -854,9 +856,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     visibleDrops.add(d);
 
             // Only rebuild if the number of visible items changed, not individual items
-            int existingItemCount = (int) itemSlotMap.keySet().stream()
-                    .filter(k -> k.startsWith(npcName + "_"))
-                    .count();
+            int existingItemCount = itemCountPerBoss.getOrDefault(npcName, 0);
             boolean needsRebuild = visibleDrops.size() != existingItemCount;
 
             if (!needsRebuild)
@@ -912,7 +912,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         JPanel card2 = bossCardMap.get(npcName);
                         if (card2 != null) card2.repaint();
                     }
-                    // Clear item slots for this boss to avoid stale references
+                    // Update item count cache and clear stale item slots for this boss
+                    itemCountPerBoss.put(npcName, visibleDrops.size());
                     itemSlotMap.keySet().removeIf(k -> k.startsWith(npcName + "_"));
                 }
                 else
@@ -1186,25 +1187,23 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             {
                 List<BossKillStats> allStats = lootManager.getAllBossStats();
 
-                String fp = buildDisplayFingerprint(allStats, highlightedBoss);
-                String oldFp = lastDisplayFingerprint;
-                lastDisplayFingerprint = fp;
-
-                // If fingerprint was invalidated (set to null by invalidateFingerprint()),
-                // force a slow-path rebuild even if structure looks the same
-                boolean fingerprintChanged = (oldFp == null) || !fp.equals(oldFp);
-
-                Map<String, BossKillStats> unique = new LinkedHashMap<>();
-                for (BossKillStats s : allStats) unique.putIfAbsent(s.getNpcName(), s);
-
+                // Filter and sort once, then build fingerprint from sorted result
                 List<BossKillStats> sorted = new ArrayList<>();
-                for (BossKillStats s : unique.values())
+                for (BossKillStats s : allStats)
                     if (passesFilter(s.getNpcName())
                             && (showIgnoredItems || !lootManager.isBossHidden(s.getNpcName()))
                             && !isEmptyBossEntry(s))
                         sorted.add(s);
 
                 sortStats(sorted);
+
+                String fp = buildDisplayFingerprint(sorted, highlightedBoss);
+                String oldFp = lastDisplayFingerprint;
+                lastDisplayFingerprint = fp;
+
+                // If fingerprint was invalidated (set to null by invalidateFingerprint()),
+                // force a slow-path rebuild even if structure looks the same
+                boolean fingerprintChanged = (oldFp == null) || !fp.equals(oldFp);
 
                 final long totalVal   = sorted.stream().mapToLong(BossKillStats::getTotalLootValue).sum();
                 final int  totalKills = sorted.stream().mapToInt(BossKillStats::getKillCount).sum();
@@ -1404,20 +1403,17 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         return !hasItems && !hasValue;
     }
 
-    private String buildDisplayFingerprint(List<BossKillStats> stats, String highlight)
+    private String buildDisplayFingerprint(List<BossKillStats> sortedStats, String highlight)
     {
-        StringBuilder sb = new StringBuilder(stats.size() * 40 + 32);
+        StringBuilder sb = new StringBuilder(sortedStats.size() * 40 + 32);
         sb.append(highlight == null ? "" : highlight)
                 .append('|').append(currentSort.name())
                 .append('|').append(currentFilter.name())
                 .append('|').append(currentSkillFilter == null ? "" : currentSkillFilter)
                 .append('|').append(showIgnoredItems).append('|');
 
-        List<BossKillStats> copy = new ArrayList<>(stats);
-        sortStats(copy);
-        for (BossKillStats s : copy)
+        for (BossKillStats s : sortedStats)
         {
-            if (!passesFilter(s.getNpcName()) || isEmptyBossEntry(s)) continue;
             // Only fingerprint structure: boss name + kill count + sort order
             // Exclude timestamp (changes on every kill) and values (change with items)
             // This allows fast path to trigger for incremental updates while detecting
