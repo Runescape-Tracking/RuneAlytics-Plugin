@@ -242,13 +242,13 @@ public class LootStorageManager
                         return newBoss;
                     });
 
-            // Create kill record
+            // Create kill record with defensive copy of drops (so caller can't mutate stored kills)
             LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
             killRecord.setTimestamp(System.currentTimeMillis());
             killRecord.setKillNumber(killNumber);
             killRecord.setWorld(world);
             killRecord.setCombatLevel(combatLevel);
-            killRecord.setDrops(drops);
+            killRecord.setDrops(new ArrayList<>(drops));  // Defensive copy
             killRecord.setSyncedToServer(false);
             killRecord.setLocation(location);
 
