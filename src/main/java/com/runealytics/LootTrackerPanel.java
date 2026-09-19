@@ -1278,20 +1278,40 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
                             // Mid path: boss set unchanged, but order changed (e.g., sort by value).
                             // Don't call updateLoot() on all bosses - per-boss mechanism handles those.
-                            // Just reorder the existing cards and sync totals.
+                            // Skip expensive removeAll/re-add when order matches current layout.
 
-                            List<Component> reorderedComps = new ArrayList<>();
+                            boolean orderMatches = true;
+                            Component[] comps = bossListPanel.getComponents();
+                            int compIdx = 0;
                             for (String npcName : newOrder)
                             {
+                                // Skip vertical struts (every other component)
+                                if (compIdx >= comps.length) { orderMatches = false; break; }
                                 JPanel card = bossCardMap.get(npcName);
-                                if (card != null) reorderedComps.add(card);
+                                if (comps[compIdx] != card) { orderMatches = false; break; }
+                                // Move to next card (skip strut)
+                                compIdx += 2;
                             }
 
-                            bossListPanel.removeAll();  // Clear only for reordering
-                            for (int i = 0; i < reorderedComps.size(); i++)
+                            if (!orderMatches)
                             {
-                                if (i > 0) bossListPanel.add(Box.createVerticalStrut(5));
-                                bossListPanel.add(reorderedComps.get(i));
+                                // Order changed: rebuild component list (expensive but necessary)
+                                // This should be rare - only happens when sort order actually changes
+                                List<Component> reorderedComps = new ArrayList<>();
+                                for (String npcName : newOrder)
+                                {
+                                    JPanel card = bossCardMap.get(npcName);
+                                    if (card != null) reorderedComps.add(card);
+                                }
+
+                                bossListPanel.removeAll();
+                                for (int i = 0; i < reorderedComps.size(); i++)
+                                {
+                                    if (i > 0) bossListPanel.add(Box.createVerticalStrut(5));
+                                    bossListPanel.add(reorderedComps.get(i));
+                                }
+                                // Repaint after structure change
+                                bossListPanel.repaint();
                             }
 
                             currentBossOrder = newOrder;
@@ -1299,14 +1319,12 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                             displayedHighlight = highlightedBoss;
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                             totalValueLabel.setText("Value " + formatGp(totalVal));
-                            // Don't call revalidate() on mid-path - just repaint.
-                            // The layout is already valid, only component order changed.
-                            bossListPanel.repaint();
 
                             long totalMs = System.currentTimeMillis() - startMs;
                             long edtMs = System.currentTimeMillis() - edtStartMs;
                             log.debug(LogCategory.UI_UPDATE.format(
-                                "Mid path: reordered %d bosses (total %dms, EDT %dms)",
+                                "Mid path: %s %d bosses (total %dms, EDT %dms)",
+                                orderMatches ? "matched order for" : "reordered",
                                 sorted.size(), totalMs, edtMs));
                             return;
                         }
