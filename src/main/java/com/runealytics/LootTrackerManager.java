@@ -1454,6 +1454,8 @@ public class LootTrackerManager
             storageManager.recordLastGameKc(npcName, gameKC);
         }
 
+        log.debug("recordKill: notifying {} listener(s) for '{}' kill #{} with {} drops",
+                listeners.size(), npcName, killNumber, drops.size());
         notifyListeners(stats, killRecord);
 
         // Kick off a debounced live sync so the website updates within a few
@@ -3314,6 +3316,9 @@ public class LootTrackerManager
     private List<LootStorageData.DropRecord> convertToDropRecords(List<ItemStack> items)
     {
         List<LootStorageData.DropRecord> drops = new ArrayList<>();
+        boolean isClientThread = client.isClientThread();
+        log.debug("convertToDropRecords: processing {} items (thread={}, isClientThread={})",
+                items.size(), Thread.currentThread().getName(), isClientThread);
 
         for (ItemStack item : items)
         {
@@ -3330,20 +3335,26 @@ public class LootTrackerManager
             int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, itemId);
             long totalValue = (long) gePrice * item.getQuantity();
 
-            if (totalValue > 0 && totalValue < config.minimumLootValue()) continue;
+            if (totalValue > 0 && totalValue < config.minimumLootValue())
+            {
+                log.debug("  Item filtered by minimum value: id={} name={} value={}", itemId, comp != null ? comp.getName() : "?", totalValue);
+                continue;
+            }
 
             LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
             drop.setItemId   (itemId);
-            drop.setItemName (comp.getName());
+            drop.setItemName (comp != null ? comp.getName() : "Unknown Item");
             drop.setQuantity (item.getQuantity());
             drop.setGePrice  (gePrice);
-            drop.setHighAlch (Math.max(comp.getHaPrice(), canonicalComp.getHaPrice()));
+            drop.setHighAlch (comp != null ? Math.max(comp.getHaPrice(), canonicalComp != null ? canonicalComp.getHaPrice() : 0) : 0);
             drop.setTotalValue(totalValue);
             drop.setHidden   (false);
 
             drops.add(drop);
+            log.debug("  Drop recorded: id={} name={} qty={} gePrice={} totalValue={}", itemId, drop.getItemName(), item.getQuantity(), gePrice, totalValue);
         }
 
+        log.debug("convertToDropRecords: returning {} drops from {} items", drops.size(), items.size());
         return drops;
     }
 
