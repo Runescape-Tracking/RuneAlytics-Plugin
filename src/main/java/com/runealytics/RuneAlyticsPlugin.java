@@ -1257,7 +1257,7 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Normal ground item logic ──────────────────────────────────────────
         if (itemLoc == null || groundLootSessions.isEmpty()) return;
 
-        long now = Instant.now().toEpochMilli();
+        long now = System.currentTimeMillis();
         groundLootSessions.removeIf(s -> now - s.killTimeMs > GROUND_ITEM_WINDOW_MS);
         if (groundLootSessions.isEmpty()) return;
 
