@@ -905,7 +905,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     {
                         gridWrapper.removeAll();
                         gridWrapper.add(newGridFinal, BorderLayout.NORTH);
-                        gridWrapper.revalidate();
+                        // Use validate() instead of revalidate() - only validates this component,
+                        // not the parent hierarchy. Revalidate() traverses up and is expensive.
+                        gridWrapper.validate();
                         gridWrapper.repaint();
 
                         // Only repaint the card, not the entire panel
