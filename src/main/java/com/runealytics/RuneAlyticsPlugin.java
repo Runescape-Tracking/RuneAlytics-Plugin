@@ -657,7 +657,7 @@ public class RuneAlyticsPlugin extends Plugin
         WorldPoint killLoc = npc.getWorldLocation();
         if (killLoc != null)
         {
-            groundLootSessions.add(new GroundLootSession(npc, killLoc, Instant.now().toEpochMilli()));
+            groundLootSessions.add(new GroundLootSession(npc, killLoc, System.currentTimeMillis()));
         }
 
         // Snapshot inventory to diff against if Ring of Wealth auto-collects coins.
