@@ -970,10 +970,14 @@ public class LootTrackerManager
         // Defer to background and debounce with 50ms delay to batch rapid updates.
         // Keep the in-memory stats update quick by computing the value sum upfront
         // so we don't hold locks during storage I/O.
-        long addedValue = 0;
-        for (LootStorageData.DropRecord dr : newDrops)
+        final long addedValue;
         {
-            addedValue += dr.getTotalValue();
+            long sum = 0;
+            for (LootStorageData.DropRecord dr : newDrops)
+            {
+                sum += dr.getTotalValue();
+            }
+            addedValue = sum;
         }
 
         executorService.execute(() ->
