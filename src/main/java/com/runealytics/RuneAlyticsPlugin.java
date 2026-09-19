@@ -687,11 +687,18 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
-        // Defer loot processing to a background executor to avoid lag spikes
+        // Capture NPC data on client thread (NPC ref becomes invalid after despawn)
+        final String npcName = npc.getName();
+        final int npcId = npc.getId();
+        final int combatLevel = npc.getCombatLevel();
+        final WorldPoint npcLoc = npc.getWorldLocation();
+        final int world = client.getWorld();
+        final List<ItemStack> itemsFinal = new ArrayList<>(items);
+
+        // Defer loot processing to background executor to avoid lag spikes
         // from expensive itemManager lookups on the client thread.
-        final NPC npcFinal = npc;
-        final List<ItemStack> itemsFinal = items;
-        executorService.execute(() -> lootManager.processNpcLoot(npcFinal, itemsFinal));
+        executorService.execute(() ->
+                lootManager.processNpcLootDeferred(npcName, npcId, combatLevel, world, itemsFinal));
     }
 
     // ═════════════════════════════════════════════════════════════════════════

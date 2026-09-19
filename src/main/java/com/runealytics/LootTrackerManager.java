@@ -451,6 +451,35 @@ public class LootTrackerManager
     }
 
     /**
+     * Deferred version of processNpcLoot that accepts primitive NPC data instead
+     * of an NPC reference. Safe to call from background executors where NPC refs
+     * may be stale. Does the same loot processing as processNpcLoot.
+     */
+    public void processNpcLootDeferred(String npcName, int npcId, int combatLevel,
+                                       int world, List<ItemStack> items)
+    {
+        if (!config.enableLootTracking() || npcName == null || npcName.isEmpty())
+            return;
+
+        log.debug("NPC loot (deferred): '{}' id={} cb={} items={}",
+                npcName, npcId, combatLevel, items.size());
+
+        String name = normalizeBossName(npcName);
+        boolean isBoss = isBoss(npcId, name);
+
+        if (!isBoss && !config.trackAllNpcs())
+        {
+            log.debug("Filtered NPC (not a tracked boss): '{}' id={} "
+                            + "→ enable 'Track All NPCs' or add id to TRACKED_BOSS_IDS",
+                    name, npcId);
+            return;
+        }
+
+        List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
+        recordKill(name, npcId, combatLevel, world, drops);
+    }
+
+    /**
      * Attaches a late-arriving {@code NpcLootReceived} to a kill that was
      * already counted as zero-loot, instead of recording a new kill.
      *
