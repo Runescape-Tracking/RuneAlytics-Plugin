@@ -324,6 +324,11 @@ public class LootTrackerManager
      */
     private final Map<String, Long> lastPlayerLootTime = new ConcurrentHashMap<>();
 
+    // ── Debounced listener notifications (batch rapid loot updates) ─────────────
+    private static final long LISTENER_UPDATE_DEBOUNCE_MS = 50;
+    private final Map<String, BossKillStats> pendingListenerUpdates = new ConcurrentHashMap<>();
+    private final Map<String, LootStorageData.KillRecord> pendingKillRecords = new ConcurrentHashMap<>();
+
     /**
      * Authoritative game-KC correlation (chat "kill count / chest count /
      * completion count" messages → kill records). Session-scoped; cleared in
@@ -958,32 +963,43 @@ public class LootTrackerManager
             return;
         }
 
+        // Fetch item prices on client thread (fast, necessary), then defer heavy work
         List<LootStorageData.DropRecord> newDrops = convertToDropRecords(items);
         if (newDrops.isEmpty()) return;
 
-        // Update in-memory kill record
-        LootStorageData.KillRecord lastKill =
-                stats.getKillHistory().get(stats.getKillHistory().size() - 1);
-        lastKill.getDrops().addAll(newDrops);
-        lastKill.setSyncedToServer(false);
-
-        // Update in-memory aggregated stats
-        long addedValue = 0;
-        for (LootStorageData.DropRecord dr : newDrops)
+        // Defer stats aggregation, persistence, and listener notification to background
+        // thread to prevent client thread blocking. Debounce with 50ms delay to batch
+        // rapid updates together.
+        executorService.execute(() ->
         {
-            addedValue += dr.getTotalValue();
-            if (dr.getTotalValue() > stats.getHighestDrop())
-                stats.setHighestDrop(dr.getTotalValue());
-        }
-        stats.setTotalLootValue(stats.getTotalLootValue() + addedValue);
+            synchronized (bossKillStats)
+            {
+                // Update in-memory kill record
+                LootStorageData.KillRecord lastKill =
+                        stats.getKillHistory().get(stats.getKillHistory().size() - 1);
+                lastKill.getDrops().addAll(newDrops);
+                lastKill.setSyncedToServer(false);
 
-        // Persist and re-sync
-        storageManager.appendDropsToLastKill(npcName, newDrops);
+                // Update in-memory aggregated stats
+                long addedValue = 0;
+                for (LootStorageData.DropRecord dr : newDrops)
+                {
+                    addedValue += dr.getTotalValue();
+                    if (dr.getTotalValue() > stats.getHighestDrop())
+                        stats.setHighestDrop(dr.getTotalValue());
+                }
+                stats.setTotalLootValue(stats.getTotalLootValue() + addedValue);
 
-        notifyListeners(stats, lastKill);
+                // Persist to storage
+                storageManager.appendDropsToLastKill(npcName, newDrops);
 
-        log.debug("appendDropsToLastKill: {} drop(s) added to '{}' last kill (+{} gp)",
-                newDrops.size(), npcName, addedValue);
+                // Schedule debounced listener notification (50ms delay batches rapid updates)
+                scheduleListenerUpdate(npcName, stats, lastKill);
+
+                log.debug("appendDropsToLastKill: {} drop(s) added to '{}' last kill (+{} gp)",
+                        newDrops.size(), npcName, addedValue);
+            }
+        });
     }
 
     /**
@@ -3419,6 +3435,29 @@ public class LootTrackerManager
     public void addListener(LootTrackerUpdateListener listener)
     {
         listeners.add(listener);
+    }
+
+    /**
+     * Schedules a debounced listener notification for the given NPC. Rapid updates
+     * within {@value #LISTENER_UPDATE_DEBOUNCE_MS}ms are batched into a single
+     * notification to prevent excessive UI updates and client thread blocking.
+     */
+    private void scheduleListenerUpdate(String npcName, BossKillStats stats, LootStorageData.KillRecord kill)
+    {
+        pendingListenerUpdates.put(npcName, stats);
+        pendingKillRecords.put(npcName, kill);
+
+        // Schedule notification on background thread after debounce delay, then invoke on client thread
+        executorService.schedule(() ->
+        {
+            BossKillStats debouncedStats = pendingListenerUpdates.remove(npcName);
+            LootStorageData.KillRecord debouncedKill = pendingKillRecords.remove(npcName);
+
+            if (debouncedStats != null && debouncedKill != null)
+            {
+                clientThread.invokeLater(() -> notifyListeners(debouncedStats, debouncedKill));
+            }
+        }, LISTENER_UPDATE_DEBOUNCE_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     private void notifyListeners(BossKillStats stats, LootStorageData.KillRecord kill)
