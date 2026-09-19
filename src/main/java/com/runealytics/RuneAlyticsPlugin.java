@@ -1590,28 +1590,30 @@ public class RuneAlyticsPlugin extends Plugin
             impJarInventorySnapshot = null;
         }
 
-        // ── Expire skilling sessions ──────────────────────────────────────────
-        long nowMs = System.currentTimeMillis();
-        skillingExpiry.entrySet().removeIf(entry -> {
-            if (nowMs > entry.getValue())
-            {
-                skillingSnapshot.remove(entry.getKey());
-                log.debug("Skilling session ticked out: {}", entry.getKey());
-                return true;
-            }
-            return false;
-        });
-
-        // ── Pre-farming snapshot for next tick ──────────────────────────────────
-        // Capture inventory state at end of tick so we have a "before" state for
-        // farming XP events that fire in the next tick. By this point, all items
-        // from THIS tick's farming have already been added to inventory, so when
-        // the next XP event fires, we can use this snapshot to detect the delta.
-        // Only capture if farming tracking is enabled to avoid expensive container
-        // reads on every tick for players not using farming tracking.
-        if (config.enableLootTracking() && !skillingSnapshot.isEmpty())
+        // ── Expire skilling sessions and update farming snapshot ────────────────
+        // Only process if we have active skilling sessions to avoid unnecessary work
+        if (!skillingSnapshot.isEmpty())
         {
-            preFarmingSnapshot = getCurrentInventory();
+            long nowMs = System.currentTimeMillis();
+            skillingExpiry.entrySet().removeIf(entry -> {
+                if (nowMs > entry.getValue())
+                {
+                    skillingSnapshot.remove(entry.getKey());
+                    log.debug("Skilling session ticked out: {}", entry.getKey());
+                    return true;
+                }
+                return false;
+            });
+
+            // Pre-farming snapshot for next tick — capture inventory state at end
+            // of tick so we have a "before" state for farming XP events that fire
+            // in the next tick. By this point, all items from THIS tick's farming
+            // have already been added to inventory, so when the next XP event fires,
+            // we can use this snapshot to detect the delta.
+            if (config.enableLootTracking())
+            {
+                preFarmingSnapshot = getCurrentInventory();
+            }
         }
     }
 
