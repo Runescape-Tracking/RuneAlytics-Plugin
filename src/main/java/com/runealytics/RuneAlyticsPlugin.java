@@ -29,7 +29,6 @@ import okhttp3.OkHttpClient;
 import javax.inject.Inject;
 import javax.swing.*;
 import java.awt.image.BufferedImage;
-import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ScheduledExecutorService;
@@ -702,7 +701,6 @@ public class RuneAlyticsPlugin extends Plugin
         final String npcName = npc.getName();
         final int npcId = npc.getId();
         final int combatLevel = npc.getCombatLevel();
-        final WorldPoint npcLoc = npc.getWorldLocation();
         final int world = client.getWorld();
         final List<ItemStack> itemsFinal = new ArrayList<>(items);
         final PlayerLocationSnapshot location =
