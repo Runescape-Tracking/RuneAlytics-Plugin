@@ -456,8 +456,13 @@ public class LootTrackerManager
      * may be stale. Does the same loot processing as processNpcLoot.
      */
     public void processNpcLootDeferred(String npcName, int npcId, int combatLevel,
-                                       int world, List<ItemStack> items,
-                                       PlayerLocationSnapshot location)
+                                       int world, List<ItemStack> items)
+    {
+        processNpcLootDeferred(npcName, npcId, combatLevel, world, items, null);
+    }
+
+    public void processNpcLootDeferred(String npcName, int npcId, int combatLevel,
+                                       int world, List<ItemStack> items, PlayerLocationSnapshot location)
     {
         if (!config.enableLootTracking() || npcName == null || npcName.isEmpty())
             return;
@@ -477,7 +482,7 @@ public class LootTrackerManager
         }
 
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
-        recordKill(name, npcId, combatLevel, world, drops, -1, location);
+        recordKillWithLocation(name, npcId, combatLevel, world, drops, location);
     }
 
     /**
@@ -1343,14 +1348,14 @@ public class LootTrackerManager
             String npcName, int npcId, int combatLevel, int world,
             List<LootStorageData.DropRecord> drops)
     {
-        recordKill(npcName, npcId, combatLevel, world, drops, -1, null);
+        recordKill(npcName, npcId, combatLevel, world, drops, -1);
     }
 
-    private void recordKill(
+    private void recordKillWithLocation(
             String npcName, int npcId, int combatLevel, int world,
-            List<LootStorageData.DropRecord> drops, int gameKC, PlayerLocationSnapshot capturedLocation)
+            List<LootStorageData.DropRecord> drops, PlayerLocationSnapshot location)
     {
-        doRecordKill(npcName, npcId, combatLevel, world, drops, gameKC, capturedLocation);
+        recordKill(npcName, npcId, combatLevel, world, drops, -1, location);
     }
 
     /**
@@ -1358,11 +1363,15 @@ public class LootTrackerManager
      * positive, the local {@link BossKillStats} counter is synced to
      * {@code gameKC - 1} before the kill is added. Does not sync to the server;
      * unsynced kills are uploaded in batches by {@link #uploadUnsyncedKills()}.
-     *
-     * When {@code capturedLocation} is not null, uses the pre-captured location
-     * (captured on the client thread) instead of capturing it on the current thread.
      */
-    private void doRecordKill(
+    private void recordKill(
+            String npcName, int npcId, int combatLevel, int world,
+            List<LootStorageData.DropRecord> drops, int gameKC)
+    {
+        recordKill(npcName, npcId, combatLevel, world, drops, gameKC, null);
+    }
+
+    private void recordKill(
             String npcName, int npcId, int combatLevel, int world,
             List<LootStorageData.DropRecord> drops, int gameKC, PlayerLocationSnapshot capturedLocation)
     {
@@ -1398,8 +1407,7 @@ public class LootTrackerManager
                 ? gameKC
                 : stats.getKillCount() + 1;
 
-        // 3. Use pre-captured location (from client thread) if available; otherwise
-        //    capture location on current thread (for non-NPC loot paths that don't pre-capture).
+        // 3. Use pre-captured location if available; otherwise capture on current thread.
         PlayerLocationSnapshot location = capturedLocation != null
                 ? capturedLocation
                 : PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
@@ -3303,25 +3311,17 @@ public class LootTrackerManager
         {
             int itemId = item.getId();
 
-            // Cache canonicalize result upfront to avoid redundant calls
+            // Cache canonicalize upfront to avoid redundant calls
             int canonicalId = itemManager.canonicalize(itemId);
             ItemComposition comp = itemManager.getItemComposition(itemId);
             ItemComposition canonicalComp = (canonicalId != itemId)
                     ? itemManager.getItemComposition(canonicalId)
                     : comp;
 
-            // Resolve GE price using pre-fetched compositions to avoid redundant itemManager calls.
-            // ItemValueResolver will use canonicalize internally, but that's cached by itemManager.
+            // Resolve GE price (ItemValueResolver caches canonicalize internally)
             int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, itemId);
-            // long math: gePrice * quantity overflows int for large stacks of
-            // high-value items (e.g. big coin / rune drops) and would record a
-            // negative or garbage value.
             long totalValue = (long) gePrice * item.getQuantity();
 
-            // Only the "junk" filter applies here — a genuinely 0-value item
-            // (untradeable / unpriced, e.g. a new or quest-only unique) is real
-            // loot RuneLite just can't price, not clutter to hide, so it's
-            // always kept regardless of the configured threshold.
             if (totalValue > 0 && totalValue < config.minimumLootValue()) continue;
 
             LootStorageData.DropRecord drop = new LootStorageData.DropRecord();

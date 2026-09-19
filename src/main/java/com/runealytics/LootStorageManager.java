@@ -202,15 +202,15 @@ public class LootStorageManager
                         int prestige, List<LootStorageData.DropRecord> drops,
                         PlayerLocationSnapshot location)
     {
-        // Pre-compute aggregated stats OUTSIDE the lock to reduce contention
+        // Pre-compute aggregated stats outside lock to reduce contention
         long killValue = 0;
-        Map<Integer, LootStorageData.AggregatedDrop> precomputedAggregates = new HashMap<>();
+        Map<Integer, LootStorageData.AggregatedDrop> precomputedAggs = new HashMap<>();
 
         for (LootStorageData.DropRecord drop : drops)
         {
             killValue += drop.getTotalValue();
 
-            precomputedAggregates.computeIfAbsent(drop.getItemId(), k -> {
+            precomputedAggs.computeIfAbsent(drop.getItemId(), k -> {
                 LootStorageData.AggregatedDrop newAgg = new LootStorageData.AggregatedDrop();
                 newAgg.setItemId(drop.getItemId());
                 newAgg.setItemName(drop.getItemName());
@@ -223,7 +223,6 @@ public class LootStorageManager
             });
         }
 
-        // Minimal synchronized block: only update shared data structures
         synchronized (this)
         {
             if (currentData == null)
@@ -263,7 +262,7 @@ public class LootStorageManager
             for (LootStorageData.DropRecord drop : drops)
             {
                 LootStorageData.AggregatedDrop aggDrop = bossData.getAggregatedDrops()
-                        .computeIfAbsent(drop.getItemId(), k -> precomputedAggregates.get(drop.getItemId()));
+                        .computeIfAbsent(drop.getItemId(), k -> precomputedAggs.get(drop.getItemId()));
 
                 aggDrop.setTotalQuantity(aggDrop.getTotalQuantity() + drop.getQuantity());
                 aggDrop.setDropCount(aggDrop.getDropCount() + 1);
@@ -276,7 +275,6 @@ public class LootStorageManager
 
             bossData.setTotalLootValue(bossData.getTotalLootValue() + killValue);
 
-            // Increment revision to signal that new loot has been added
             currentData.setRevision(currentData.getRevision() + 1);
 
             scheduleSave();

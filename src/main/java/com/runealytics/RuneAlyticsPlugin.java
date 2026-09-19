@@ -694,20 +694,20 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
-        // Capture all client-thread data on client thread (NPC ref becomes invalid after despawn)
+        // Capture all client-thread data (NPC ref, player location become invalid after events)
         final String npcName = npc.getName();
         final int npcId = npc.getId();
         final int combatLevel = npc.getCombatLevel();
         final WorldPoint npcLoc = npc.getWorldLocation();
         final int world = client.getWorld();
         final List<ItemStack> itemsFinal = new ArrayList<>(items);
-        final PlayerLocationSnapshot locationSnapshot =
+        final PlayerLocationSnapshot location =
                 PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
 
         // Defer loot processing to background executor to avoid lag spikes
         // from expensive itemManager lookups on the client thread.
         executorService.execute(() ->
-                lootManager.processNpcLootDeferred(npcName, npcId, combatLevel, world, itemsFinal, locationSnapshot));
+                lootManager.processNpcLootDeferred(npcName, npcId, combatLevel, world, itemsFinal, location));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
