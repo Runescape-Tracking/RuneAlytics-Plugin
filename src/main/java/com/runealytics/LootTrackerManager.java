@@ -484,7 +484,10 @@ public class LootTrackerManager
         // ItemManager calls (canonicalize, getItemComposition, etc.) may not be
         // thread-safe and are optimized for client thread. Invoke on client thread
         // to ensure correct ItemManager behavior.
-        List<LootStorageData.DropRecord> drops = clientThread.invoke(() -> convertToDropRecords(items));
+        java.util.concurrent.atomic.AtomicReference<List<LootStorageData.DropRecord>> dropsRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        clientThread.invoke(() -> dropsRef.set(convertToDropRecords(items)));
+        List<LootStorageData.DropRecord> drops = dropsRef.get();
         recordKillWithLocation(name, npcId, combatLevel, world, drops, location);
     }
 
