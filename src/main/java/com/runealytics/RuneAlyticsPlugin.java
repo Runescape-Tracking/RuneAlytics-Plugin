@@ -317,6 +317,8 @@ public class RuneAlyticsPlugin extends Plugin
 
     /** All mutations happen on the client thread (event handlers / invokeLater), so a plain list is safe. */
     private final List<GroundLootSession> groundLootSessions = new ArrayList<>();
+    /** Throttle ground loot session cleanup to avoid O(n) removeIf on every ItemSpawned. */
+    private long lastGroundSessionCleanupMs = 0;
 
     private String lastChestSource = null;
 
@@ -1274,7 +1276,12 @@ public class RuneAlyticsPlugin extends Plugin
         if (itemLoc == null || groundLootSessions.isEmpty()) return;
 
         long now = System.currentTimeMillis();
-        groundLootSessions.removeIf(s -> now - s.killTimeMs > GROUND_ITEM_WINDOW_MS);
+        // Throttle cleanup: only run every 100ms to avoid O(n) removeIf on every item
+        if (now - lastGroundSessionCleanupMs > 100)
+        {
+            groundLootSessions.removeIf(s -> now - s.killTimeMs > GROUND_ITEM_WINDOW_MS);
+            lastGroundSessionCleanupMs = now;
+        }
         if (groundLootSessions.isEmpty()) return;
 
         // Multiple kills (same or different NPC types) can have open, overlapping
