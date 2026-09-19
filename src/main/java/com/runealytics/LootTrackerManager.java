@@ -3441,13 +3441,17 @@ public class LootTrackerManager
      * Schedules a debounced listener notification for the given NPC. Rapid updates
      * within {@value #LISTENER_UPDATE_DEBOUNCE_MS}ms are batched into a single
      * notification to prevent excessive UI updates and client thread blocking.
+     *
+     * <p>Notification runs on background thread. The panel (LootTrackerPanel) already
+     * defers its heavy UI work to background (buildItemGrid) and uses SwingUtilities
+     * for EDT marshalling, so we don't need to marshal back to client thread.</p>
      */
     private void scheduleListenerUpdate(String npcName, BossKillStats stats, LootStorageData.KillRecord kill)
     {
         pendingListenerUpdates.put(npcName, stats);
         pendingKillRecords.put(npcName, kill);
 
-        // Schedule notification on background thread after debounce delay, then invoke on client thread
+        // Schedule notification on background thread after debounce delay
         executorService.schedule(() ->
         {
             BossKillStats debouncedStats = pendingListenerUpdates.remove(npcName);
@@ -3455,7 +3459,7 @@ public class LootTrackerManager
 
             if (debouncedStats != null && debouncedKill != null)
             {
-                clientThread.invokeLater(() -> notifyListeners(debouncedStats, debouncedKill));
+                notifyListeners(debouncedStats, debouncedKill);
             }
         }, LISTENER_UPDATE_DEBOUNCE_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
