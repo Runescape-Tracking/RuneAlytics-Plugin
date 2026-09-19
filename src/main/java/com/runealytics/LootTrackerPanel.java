@@ -154,7 +154,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         this.itemManager      = itemManager;
         this.executorService  = executorService;
 
-        refreshDebounce = new javax.swing.Timer(150, e -> executeRefresh());
+        refreshDebounce = new javax.swing.Timer(250, e -> executeRefresh());
         refreshDebounce.setRepeats(false);
 
         lootManager.addListener(this);
@@ -811,7 +811,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
             javax.swing.Timer existing = lootDebounceMap.get(npcName);
             if (existing != null) existing.stop();
 
-            javax.swing.Timer t = new javax.swing.Timer(80, e -> {
+            javax.swing.Timer t = new javax.swing.Timer(120, e -> {
                 lootDebounceMap.remove(npcName);
                 updateLoot(npcName);  // ← Fetch fresh stats from manager
             });
@@ -905,7 +905,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                     {
                         gridWrapper.removeAll();
                         gridWrapper.add(newGridFinal, BorderLayout.NORTH);
-                        gridWrapper.revalidate();
+                        gridWrapper.invalidate();
                         gridWrapper.repaint();
 
                         // Only repaint the card, not the entire panel
@@ -1279,7 +1279,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                             displayedHighlight = highlightedBoss;
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                             totalValueLabel.setText("Value " + formatGp(totalVal));
-                            bossListPanel.revalidate();
+                            bossListPanel.invalidate();
                             bossListPanel.repaint();
 
                             long totalMs = System.currentTimeMillis() - startMs;
@@ -1329,9 +1329,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         displayedHighlight = highlightedBoss;
 
                         long edtStartMs = System.currentTimeMillis();
-                        bossListPanel.revalidate();
+                        bossListPanel.invalidate();
                         bossListPanel.repaint();
-                        scrollPane.revalidate();
+                        scrollPane.invalidate();
                         scrollPane.getVerticalScrollBar().setValue(savedScroll);
 
                         long edtMs = System.currentTimeMillis() - edtStartMs;
