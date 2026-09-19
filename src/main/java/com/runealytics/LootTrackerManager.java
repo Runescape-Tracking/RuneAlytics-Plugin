@@ -3102,29 +3102,26 @@ public class LootTrackerManager
     {
         if (name == null) return false;
         String l = name.toLowerCase();
-        return l.contains("mokhaiotl")   || l.contains("duke")        || l.contains("leviathan")
-                || l.contains("vardorvis")   || l.contains("whisperer")
-                || l.contains("zulrah")      || l.contains("vorkath")
-                || l.contains("cerberus")    || l.contains("nightmare")
-                || l.contains("gauntlet")    || l.contains("barrows")
-                || l.contains("yama")        || l.contains("tempoross")
-                || l.contains("wintertodt")  || l.contains("zalcano")
-                || l.contains("eldric")      || l.contains("branda")
-                || l.contains("hueycoatl")   || l.contains("araxxor")
-                || l.contains("scurrius")    || l.contains("amoxliatl")
-                || l.contains("colosseum")   || l.contains("skotizo")
-                || l.contains("hespori")     || l.contains("abyssal")
-                || l.contains("thermonuclear")
-                || l.contains("grotesque")   || l.contains("kalphite")
-                || l.contains("dagannoth")   || l.contains("corporeal")
-                || l.contains("tormented demon")
-                // Bosses previously only covered by the trackAllNpcs fallback —
-                // name-matched so they stay tracked as bosses even when
-                // trackAllNpcs is off (their NPC ids are not whitelisted).
-                || l.contains("muspah")      || l.contains("sarachnis")
-                || l.contains("obor")        || l.contains("bryophyta")
-                || l.contains("giant mole")  || l.contains("king black dragon")
-                || l.contains("chaos elemental");
+        // Check most common/recent kills first for early short-circuit
+        return l.contains("zulrah")      || l.contains("vorkath")
+                || l.contains("barrows")      || l.contains("nightmare")
+                || l.contains("gauntlet")     || l.contains("cerberus")
+                || l.contains("wintertodt")   || l.contains("tempoross")
+                || l.contains("zalcano")      || l.contains("mokhaiotl")
+                || l.contains("duke")         || l.contains("leviathan")
+                || l.contains("vardorvis")    || l.contains("whisperer")
+                || l.contains("yama")         || l.contains("eldric")
+                || l.contains("branda")       || l.contains("hueycoatl")
+                || l.contains("araxxor")      || l.contains("scurrius")
+                || l.contains("amoxliatl")    || l.contains("colosseum")
+                || l.contains("skotizo")      || l.contains("hespori")
+                || l.contains("abyssal")      || l.contains("thermonuclear")
+                || l.contains("grotesque")    || l.contains("kalphite")
+                || l.contains("dagannoth")    || l.contains("corporeal")
+                || l.contains("tormented demon") || l.contains("muspah")
+                || l.contains("sarachnis")    || l.contains("obor")
+                || l.contains("bryophyta")    || l.contains("giant mole")
+                || l.contains("king black dragon") || l.contains("chaos elemental");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
