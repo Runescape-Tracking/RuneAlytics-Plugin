@@ -228,15 +228,16 @@ public class MatchmakingManager
      */
     public void onGameTick()
     {
-        // Refresh player state (inventory, gear, overhead, skull) on the client
-        // thread so every outbound call carries current data. Safe with no
-        // active match.
-        refreshPlayerState();
-
-        // Update the hint arrow every tick so it never goes stale during a
-        // network call.
+        // Only refresh player state if we have an active match to avoid expensive
+        // JSON serialization on every tick for players not using match finder.
         if (session != null)
         {
+            // Refresh player state (inventory, gear, overhead, skull) on the client
+            // thread so every outbound call carries current data.
+            refreshPlayerState();
+
+            // Update the hint arrow every tick so it never goes stale during a
+            // network call.
             updateHintArrow();
         }
 

@@ -1537,8 +1537,8 @@ public class RuneAlyticsPlugin extends Plugin
 
         // ── Expire stale boss ground-item attribution ──────────────────────────
         if (lastKillTime != null
-                && ChronoUnit.SECONDS.between(lastKillTime, Instant.now())
-                > BOSS_CLEAR_TIMEOUT_SECONDS)
+                && System.currentTimeMillis() - lastKillTime.toEpochMilli()
+                > BOSS_CLEAR_TIMEOUT_SECONDS * 1000)
         {
             lastKilledBoss = null;
             lastKillTime   = null;
@@ -1547,7 +1547,7 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Expire the Whisperer ground-item window ───────────────────────────
         if (whispererGroundItemWindow && whispererKillTime != null)
         {
-            long elapsed = Instant.now().toEpochMilli() - whispererKillTime.toEpochMilli();
+            long elapsed = System.currentTimeMillis() - whispererKillTime.toEpochMilli();
             if (elapsed > WHISPERER_GROUND_ITEM_WINDOW_MS + 5_000)
             {
                 log.debug("Whisperer ground-item window force-expired with {} items unclaimed",
@@ -1604,7 +1604,12 @@ public class RuneAlyticsPlugin extends Plugin
         // farming XP events that fire in the next tick. By this point, all items
         // from THIS tick's farming have already been added to inventory, so when
         // the next XP event fires, we can use this snapshot to detect the delta.
-        preFarmingSnapshot = getCurrentInventory();
+        // Only capture if farming tracking is enabled to avoid expensive container
+        // reads on every tick for players not using farming tracking.
+        if (config.enableLootTracking() && !skillingSnapshot.isEmpty())
+        {
+            preFarmingSnapshot = getCurrentInventory();
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
