@@ -259,8 +259,8 @@ public class RuneAlyticsPlugin extends Plugin
      * ItemSpawned near the player is collected and attributed to the kill.
      */
     private boolean         whispererGroundItemWindow = false;
-    /** Timestamp when {@link #whispererGroundItemWindow} was opened. */
-    private Instant         whispererKillTime         = null;
+    /** Timestamp (ms) when {@link #whispererGroundItemWindow} was opened. */
+    private long            whispererKillTime         = 0L;
     /**
      * Accumulates {@link ItemStack}s collected via {@code ItemSpawned} while
      * {@link #whispererGroundItemWindow} is open.
@@ -272,7 +272,7 @@ public class RuneAlyticsPlugin extends Plugin
     private int whispererParsedKC = -1;
 
     private NPC             lastKilledBoss           = null;
-    private Instant         lastKillTime             = null;
+    private long            lastKillTime             = 0L;
 
     // ── Ring of Wealth coin auto-pickup detection ─────────────────────────────
     /** Item ID for coins — used to identify RoW auto-collected drops. */
@@ -577,14 +577,14 @@ public class RuneAlyticsPlugin extends Plugin
     private void clearTransientLootState()
     {
         lastKilledBoss            = null;
-        lastKillTime              = null;
+        lastKillTime              = 0L;
         lastChestSource           = null;
         inventorySnapshot         = null;
         waitingForTemporossLoot   = false;
         waitingForWintertodtLoot  = false;
         crateLootWaitExpiry       = 0L;
         whispererGroundItemWindow = false;
-        whispererKillTime         = null;
+        whispererKillTime         = 0L;
         whispererGroundItems.clear();
         // Cancel the pending Whisperer flush.
         if (whispererFlushTask != null)
@@ -649,7 +649,7 @@ public class RuneAlyticsPlugin extends Plugin
         damagedNpcs.remove(npc.getIndex());
 
         lastKilledBoss = npc;
-        lastKillTime   = Instant.now();
+        lastKillTime   = System.currentTimeMillis();
 
         // Open a dedicated ground-loot attribution window for THIS kill, so an
         // AOE kill of several NPCs at once doesn't pool everyone's drops onto
@@ -1398,7 +1398,7 @@ public class RuneAlyticsPlugin extends Plugin
 
             lastChestSource           = "The Whisperer";
             whispererGroundItemWindow = true;
-            whispererKillTime         = Instant.now();
+            whispererKillTime         = System.currentTimeMillis();
             whispererGroundItems.clear();
 
             log.debug("The Whisperer: KC detected (game KC={}) – ground-item collection window opened",
@@ -1412,9 +1412,9 @@ public class RuneAlyticsPlugin extends Plugin
         if (lower.contains("funny feeling like you're being followed")
                 || lower.contains("sneaking into your backpack"))
         {
-            if (lastKilledBoss != null && lastKillTime != null)
+            if (lastKilledBoss != null && lastKillTime > 0L)
             {
-                long elapsedSec = ChronoUnit.SECONDS.between(lastKillTime, Instant.now());
+                long elapsedSec = (System.currentTimeMillis() - lastKillTime) / 1000;
                 if (elapsedSec < BOSS_CLEAR_TIMEOUT_SECONDS)
                 {
                     final NPC           boss = lastKilledBoss;
@@ -1536,25 +1536,25 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         // ── Expire stale boss ground-item attribution ──────────────────────────
-        if (lastKillTime != null
-                && System.currentTimeMillis() - lastKillTime.toEpochMilli()
+        if (lastKillTime > 0L
+                && System.currentTimeMillis() - lastKillTime
                 > BOSS_CLEAR_TIMEOUT_SECONDS * 1000)
         {
             lastKilledBoss = null;
-            lastKillTime   = null;
+            lastKillTime   = 0L;
         }
 
         // ── Expire the Whisperer ground-item window ───────────────────────────
-        if (whispererGroundItemWindow && whispererKillTime != null)
+        if (whispererGroundItemWindow && whispererKillTime > 0L)
         {
-            long elapsed = System.currentTimeMillis() - whispererKillTime.toEpochMilli();
+            long elapsed = System.currentTimeMillis() - whispererKillTime;
             if (elapsed > WHISPERER_GROUND_ITEM_WINDOW_MS + 5_000)
             {
                 log.debug("Whisperer ground-item window force-expired with {} items unclaimed",
                         whispererGroundItems.size());
                 whispererGroundItemWindow = false;
                 whispererGroundItems.clear();
-                whispererKillTime = null;
+                whispererKillTime = 0L;
             }
         }
 
