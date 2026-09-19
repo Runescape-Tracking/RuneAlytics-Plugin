@@ -239,11 +239,12 @@ public class MatchmakingManager
             // Update the hint arrow every tick so it never goes stale during a
             // network call.
             updateHintArrow();
-        }
 
-        // Recompute and cache the minimap target once per tick; the overlay
-        // reads the cached value each frame.
-        cachedMinimapTarget = computeMinimapTarget();
+            // Recompute and cache the minimap target once per tick; the overlay
+            // reads the cached value each frame.
+            // Only compute when in an active match to avoid searching players unnecessarily.
+            cachedMinimapTarget = computeMinimapTarget();
+        }
 
         if (session == null || requestInFlight)
         {
@@ -969,7 +970,13 @@ public class MatchmakingManager
         if (isMatchCompletedOrCanceled()) { clearHintArrow(); return; }
 
         // ── 1. Always prefer the opponent in Pending, Ready, and Fighting ────
-        Player opponent = findPlayerByName(session.getOpponentRsn());
+        // Only search for opponent every 2 ticks to avoid O(n) player search on every tick
+        Player opponent = null;
+        if (tickCounter % 2 == 0)
+        {
+            opponent = findPlayerByName(session.getOpponentRsn());
+        }
+
         if (opponent != null)
         {
             String name = normalizeRsn(opponent.getName());
