@@ -689,10 +689,11 @@ public class RuneAlyticsPlugin extends Plugin
         Long flushedAt = recentZeroLootFlushes.remove(npc.getIndex());
         if (flushedAt != null && System.currentTimeMillis() - flushedAt < ZERO_LOOT_UPGRADE_WINDOW_MS)
         {
-            // Defer appendDropsToLastKill to background executor to avoid blocking
-            // client thread with itemManager lookups during convertToDropRecords
+            // upgradeRecentZeroLootKillDeferred calls appendDropsToLastKill which calls
+            // convertToDropRecords, which makes ItemManager calls that require the client thread.
+            // Use invokeLater to ensure it runs on client thread, not background executor.
             final String npcNameFinal = npc.getName();
-            executorService.execute(() ->
+            clientThread.invokeLater(() ->
                     lootManager.upgradeRecentZeroLootKillDeferred(npcNameFinal, items));
             return;
         }

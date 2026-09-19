@@ -958,20 +958,7 @@ public class LootTrackerManager
             return;
         }
 
-        // ItemManager calls need to happen on client thread for thread safety.
-        // If we're already on client thread, invoke directly; otherwise use clientThread.invoke()
-        List<LootStorageData.DropRecord> newDrops;
-        if (client.isClientThread())
-        {
-            newDrops = convertToDropRecords(items);
-        }
-        else
-        {
-            java.util.concurrent.atomic.AtomicReference<List<LootStorageData.DropRecord>> dropsRef =
-                    new java.util.concurrent.atomic.AtomicReference<>();
-            clientThread.invoke(() -> dropsRef.set(convertToDropRecords(items)));
-            newDrops = dropsRef.get();
-        }
+        List<LootStorageData.DropRecord> newDrops = convertToDropRecords(items);
         if (newDrops.isEmpty()) return;
 
         // Update in-memory kill record
