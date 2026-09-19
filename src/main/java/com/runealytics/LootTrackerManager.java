@@ -458,6 +458,12 @@ public class LootTrackerManager
     public void processNpcLootDeferred(String npcName, int npcId, int combatLevel,
                                        int world, List<ItemStack> items)
     {
+        processNpcLootDeferred(npcName, npcId, combatLevel, world, items, null);
+    }
+
+    public void processNpcLootDeferred(String npcName, int npcId, int combatLevel,
+                                       int world, List<ItemStack> items, PlayerLocationSnapshot location)
+    {
         if (!config.enableLootTracking() || npcName == null || npcName.isEmpty())
             return;
 
@@ -476,7 +482,7 @@ public class LootTrackerManager
         }
 
         List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
-        recordKill(name, npcId, combatLevel, world, drops);
+        recordKillWithLocation(name, npcId, combatLevel, world, drops, location);
     }
 
     /**
@@ -1345,6 +1351,12 @@ public class LootTrackerManager
         recordKill(npcName, npcId, combatLevel, world, drops, -1);
     }
 
+    private void recordKillWithLocation(
+            String npcName, int npcId, int combatLevel, int world,
+            List<LootStorageData.DropRecord> drops, PlayerLocationSnapshot location)
+    {
+        recordKill(npcName, npcId, combatLevel, world, drops, -1, location);
+    }
 
     /**
      * The single write path for all loot sources. When {@code gameKC} is
@@ -1355,6 +1367,13 @@ public class LootTrackerManager
     private void recordKill(
             String npcName, int npcId, int combatLevel, int world,
             List<LootStorageData.DropRecord> drops, int gameKC)
+    {
+        recordKill(npcName, npcId, combatLevel, world, drops, gameKC, null);
+    }
+
+    private void recordKill(
+            String npcName, int npcId, int combatLevel, int world,
+            List<LootStorageData.DropRecord> drops, int gameKC, PlayerLocationSnapshot capturedLocation)
     {
         // 0. Correlate with the authoritative game KC parsed from chat. The
         //    KC message and the loot event fire within ticks of each other in
@@ -1388,13 +1407,10 @@ public class LootTrackerManager
                 ? gameKC
                 : stats.getKillCount() + 1;
 
-        // 3. Snapshot the player's location at kill time. Loot events fire on
-        //    the client thread, so reading the live client state here is safe.
-        //    captureRespectingPrivacy substitutes the Grand Exchange decoy when
-        //    visibility is private — a private player's real coordinates must
-        //    never be written into a kill record that later gets synced.
-        PlayerLocationSnapshot location =
-                PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
+        // 3. Use pre-captured location if available; otherwise capture on current thread.
+        PlayerLocationSnapshot location = capturedLocation != null
+                ? capturedLocation
+                : PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
 
         // 4. Create the storage-compatible record
         LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
@@ -3294,30 +3310,19 @@ public class LootTrackerManager
         for (ItemStack item : items)
         {
             int itemId = item.getId();
-            ItemComposition comp = itemManager.getItemComposition(itemId);
 
-            // Plain itemManager.getItemPrice() returns 0 for noted/charged/
-            // untradeable variants (e.g. Scythe of Vitur, noted items) — go
-            // through ItemValueResolver so those still report a real value by
-            // canonicalising or decomposing into their tradeable components.
-            int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, itemId);
-            // long math: gePrice * quantity overflows int for large stacks of
-            // high-value items (e.g. big coin / rune drops) and would record a
-            // negative or garbage value.
-            long totalValue = (long) gePrice * item.getQuantity();
-
-            // Only the "junk" filter applies here — a genuinely 0-value item
-            // (untradeable / unpriced, e.g. a new or quest-only unique) is real
-            // loot RuneLite just can't price, not clutter to hide, so it's
-            // always kept regardless of the configured threshold.
-            if (totalValue > 0 && totalValue < config.minimumLootValue()) continue;
-
-            // Only lookup canonical composition if it differs from the original
-            // (e.g. noted items). Avoid double-lookup of the canonical ID.
+            // Cache canonicalize upfront to avoid redundant calls
             int canonicalId = itemManager.canonicalize(itemId);
+            ItemComposition comp = itemManager.getItemComposition(itemId);
             ItemComposition canonicalComp = (canonicalId != itemId)
                     ? itemManager.getItemComposition(canonicalId)
                     : comp;
+
+            // Resolve GE price (ItemValueResolver caches canonicalize internally)
+            int  gePrice    = ItemValueResolver.perItemGeValue(itemManager, itemId);
+            long totalValue = (long) gePrice * item.getQuantity();
+
+            if (totalValue > 0 && totalValue < config.minimumLootValue()) continue;
 
             LootStorageData.DropRecord drop = new LootStorageData.DropRecord();
             drop.setItemId   (itemId);
