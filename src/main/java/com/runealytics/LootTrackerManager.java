@@ -481,7 +481,10 @@ public class LootTrackerManager
             return;
         }
 
-        List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
+        // ItemManager calls (canonicalize, getItemComposition, etc.) may not be
+        // thread-safe and are optimized for client thread. Invoke on client thread
+        // to ensure correct ItemManager behavior.
+        List<LootStorageData.DropRecord> drops = clientThread.invoke(() -> convertToDropRecords(items));
         recordKillWithLocation(name, npcId, combatLevel, world, drops, location);
     }
 
