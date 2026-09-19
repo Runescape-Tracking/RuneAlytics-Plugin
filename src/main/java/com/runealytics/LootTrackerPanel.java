@@ -157,6 +157,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
         refreshDebounce = new javax.swing.Timer(250, e -> executeRefresh());
         refreshDebounce.setRepeats(false);
 
+        log.debug("Registering LootTrackerPanel as listener");
         lootManager.addListener(this);
         lootManager.setPanel(this);
         buildUi();
@@ -786,6 +787,7 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
     @Override
     public void onLootUpdated(BossKillStats stats, LootStorageData.KillRecord kill)
     {
+        log.debug("onLootUpdated: '{}' KC={}  drops={}", stats.getNpcName(), stats.getKillCount(), kill.getDrops().size());
         scheduleLootUpdate(stats.getNpcName(), stats);
     }
 
@@ -828,23 +830,39 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
 
     public void updateLoot(String npcName)
     {
-        if (!passesFilter(npcName)) return;
-        if (!showIgnoredItems && lootManager.isBossHidden(npcName)) return;
+        log.debug("updateLoot called for '{}'", npcName);
+        if (!passesFilter(npcName))
+        {
+            log.debug("  → filtered out by current filter");
+            return;
+        }
+        if (!showIgnoredItems && lootManager.isBossHidden(npcName))
+        {
+            log.debug("  → boss is hidden (showIgnoredItems={})", showIgnoredItems);
+            return;
+        }
 
         // Fetch fresh stats from manager to avoid stale data from debounced callbacks
         BossKillStats stats = lootManager.getBossKillStats(npcName);
-        if (stats == null) return;
+        if (stats == null)
+        {
+            log.debug("  → stats is null");
+            return;
+        }
 
         List<BossKillStats.AggregatedDrop> drops = lootManager.getStorageDropsForBoss(npcName);
+        log.debug("  → fetched {} drops from storage", drops.size());
         long totalValue = drops.stream().mapToLong(BossKillStats.AggregatedDrop::getTotalValue).sum();
 
         JPanel card = bossCardMap.get(npcName);
         if (card == null)
         {
+            log.debug("  → card not yet created, triggering refresh");
             invalidateFingerprint();
             refreshDisplay();
             return;
         }
+        log.debug("  → updating existing card (KC={}, drops={}, value={})", stats.getKillCount(), drops.size(), totalValue);
 
         // Defer itemManager calls to avoid blocking the EDT
         executorService.execute(() ->
