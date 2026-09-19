@@ -295,6 +295,7 @@ public class LootStorageManager
      */
     public synchronized void appendDropsToLastKill(String npcName, List<LootStorageData.DropRecord> drops)
     {
+        long startMs = System.currentTimeMillis();
         if (currentData == null || drops == null || drops.isEmpty()) return;
 
         LootStorageData.BossKillData bossData = currentData.getBossKills().get(npcName);
@@ -333,7 +334,8 @@ public class LootStorageManager
         }
 
         scheduleSave();
-        log.debug("Appended {} RoW drop(s) to last '{}' kill", drops.size(), npcName);
+        long elapsedMs = System.currentTimeMillis() - startMs;
+        log.info("appendDropsToLastKill (storage): took {}ms to update {} drops for '{}'", elapsedMs, drops.size(), npcName);
     }
 
     /**

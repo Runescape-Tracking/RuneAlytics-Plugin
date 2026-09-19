@@ -964,7 +964,10 @@ public class LootTrackerManager
         }
 
         // Fetch item prices on client thread (fast, necessary), then defer to background
+        long convertStart = System.currentTimeMillis();
         List<LootStorageData.DropRecord> newDrops = convertToDropRecords(items);
+        long convertMs = System.currentTimeMillis() - convertStart;
+        log.info("appendDropsToLastKill: convertToDropRecords took {}ms for {} items", convertMs, items.size());
         if (newDrops.isEmpty()) return;
 
         // Defer to background and debounce with 50ms delay to batch rapid updates.
@@ -980,8 +983,10 @@ public class LootTrackerManager
             addedValue = sum;
         }
 
+        long bgStart = System.currentTimeMillis();
         executorService.execute(() ->
         {
+            long bgThreadStart = System.currentTimeMillis();
             synchronized (bossKillStats)
             {
                 BossKillStats currentStats = bossKillStats.get(npcName);
@@ -1003,8 +1008,11 @@ public class LootTrackerManager
                 currentStats.setTotalLootValue(currentStats.getTotalLootValue() + addedValue);
             }
 
+            long storageStart = System.currentTimeMillis();
             // Persist to storage (off-thread, scheduled for later)
             storageManager.appendDropsToLastKill(npcName, newDrops);
+            long storageMs = System.currentTimeMillis() - storageStart;
+            log.info("appendDropsToLastKill (bg): storageManager call took {}ms", storageMs);
 
             // Schedule debounced listener notification (after stats and storage updated)
             synchronized (bossKillStats)
@@ -1018,8 +1026,9 @@ public class LootTrackerManager
                 }
             }
 
-            log.debug("appendDropsToLastKill: {} drop(s) added to '{}' last kill (+{} gp)",
-                    newDrops.size(), npcName, addedValue);
+            long bgTotalMs = System.currentTimeMillis() - bgThreadStart;
+            log.info("appendDropsToLastKill: background thread completed in {}ms (queued {}ms ago)",
+                    bgTotalMs, System.currentTimeMillis() - bgStart);
         });
     }
 
