@@ -1281,7 +1281,8 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                             displayedHighlight = highlightedBoss;
                             totalKillsLabel.setText("Kills " + formatNumber(totalKills));
                             totalValueLabel.setText("Value " + formatGp(totalVal));
-                            bossListPanel.revalidate();
+                            // Don't call revalidate() on mid-path - just repaint.
+                            // The layout is already valid, only component order changed.
                             bossListPanel.repaint();
 
                             long totalMs = System.currentTimeMillis() - startMs;
@@ -1331,9 +1332,9 @@ public class LootTrackerPanel extends PluginPanel implements LootTrackerUpdateLi
                         displayedHighlight = highlightedBoss;
 
                         long edtStartMs = System.currentTimeMillis();
-                        bossListPanel.revalidate();
+                        // Don't call revalidate() - removeAll() already invalidated the panel.
+                        // Let the repaint trigger layout validation instead of blocking EDT with explicit traversal.
                         bossListPanel.repaint();
-                        scrollPane.revalidate();
                         scrollPane.getVerticalScrollBar().setValue(savedScroll);
 
                         long edtMs = System.currentTimeMillis() - edtStartMs;
