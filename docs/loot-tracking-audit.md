@@ -29,7 +29,7 @@ Supporting services:
 | Class | Role |
 |---|---|
 | `RewardSources` | Static widget-group → container-ID registry for chest/reward interfaces |
-| `LootStorageManager` / `LootStorageData` | Per-account JSON persistence (`runealytics-loot-<user>.json`), debounced atomic saves |
+| `LootStorageManager` / `LootStorageData` | Per-account JSON persistence (`.runelite/plugin-data/runealytics/loot-<user>.json`), debounced atomic saves |
 | `LootTrackerApiClient` | Bulk-sync upload / server history download |
 | `LootSyncMergeService` + `DefaultRuneLiteLootTrackerReader` | Absolute-merge reconcile of website + RuneLite's native loot-tracker rsprofile data, scoped by account |
 | `DeathRecoveryGuard` | Suppresses inventory-diff loot during player death / gravestone / Death's Office recovery |

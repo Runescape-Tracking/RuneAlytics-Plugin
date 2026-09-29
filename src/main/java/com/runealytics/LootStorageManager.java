@@ -3,22 +3,34 @@ package com.runealytics;
 import com.google.gson.Gson;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.RuneLite;
+import net.runelite.client.util.Filepath;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.io.*;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 
 @Slf4j
 @Singleton
 public class LootStorageManager
 {
-    private static final String STORAGE_FILE_PREFIX = "runealytics-loot-";
+    private static final String STORAGE_FILE_PREFIX = "loot-";
     private static final String STORAGE_FILE_SUFFIX = ".json";
+    /** Prefix used by releases that wrote loot files straight into {@code ~/.runelite}. */
+    static final String LEGACY_FILE_PREFIX = "runealytics-loot-";
     private final Gson gson;
     private final RuneAlyticsState state;
     private LootStorageData currentData;
+
+    /**
+     * Plugin data directory ({@code ~/.runelite/plugin-data/runealytics}),
+     * supplied by the plugin on startup. While null, loads return empty data
+     * and saves are skipped.
+     */
+    private volatile Filepath dataDirectory;
 
     private java.util.concurrent.ScheduledExecutorService saveExecutor = newSaveExecutor();
     private java.util.concurrent.ScheduledFuture<?> pendingSave = null;
@@ -42,6 +54,71 @@ public class LootStorageManager
     }
 
     /**
+     * Sets the plugin data directory used for all loot files, migrating any
+     * files left in {@code ~/.runelite} by older releases.
+     */
+    public void setDataDirectory(Filepath directory)
+    {
+        this.dataDirectory = directory;
+        if (directory != null)
+        {
+            migrateLegacyFiles(RuneLite.RUNELITE_DIR, directory);
+        }
+    }
+
+    /**
+     * Moves {@code runealytics-loot-*.json} files from the legacy location
+     * (the root of {@code .runelite}) into the plugin data directory. A file is
+     * only migrated when the destination does not already exist, so it never
+     * overwrites newer data. Leftover {@code .tmp} files from interrupted
+     * legacy saves are removed.
+     */
+    static void migrateLegacyFiles(File legacyDir, Filepath directory)
+    {
+        File[] legacy = legacyDir == null ? null : legacyDir.listFiles(f ->
+                f.isFile() && f.getName().startsWith(LEGACY_FILE_PREFIX)
+                        && (f.getName().endsWith(STORAGE_FILE_SUFFIX)
+                            || f.getName().endsWith(STORAGE_FILE_SUFFIX + ".tmp")));
+        if (legacy == null || legacy.length == 0) return;
+
+        for (File old : legacy)
+        {
+            try
+            {
+                String name = old.getName();
+                if (name.endsWith(".tmp"))
+                {
+                    Files.deleteIfExists(old.toPath());
+                    continue;
+                }
+
+                String sanitized = name.substring(LEGACY_FILE_PREFIX.length(),
+                        name.length() - STORAGE_FILE_SUFFIX.length());
+                Filepath target = directory.joinSegment(
+                        STORAGE_FILE_PREFIX + sanitized + STORAGE_FILE_SUFFIX);
+                if (target.exists())
+                {
+                    log.debug("Skipping legacy loot file {}: {} already exists", name, target.getFileName());
+                    continue;
+                }
+
+                // Copy via a temp file so a crash mid-migration can't leave a
+                // truncated target that would block a retry on next start.
+                directory.createDirectories();
+                Filepath tmp = directory.joinSegment(target.getFileName() + ".tmp");
+                tmp.write(Files.readAllBytes(old.toPath()));
+                tmp.moveTo(target, StandardCopyOption.REPLACE_EXISTING);
+                Files.delete(old.toPath());
+                log.debug("Migrated legacy loot file {} to plugin data directory", name);
+            }
+            catch (Exception e)
+            {
+                log.debug("Failed to migrate legacy loot file {}", old.getName(), e);
+            }
+        }
+    }
+
+    /**
      * Load loot data for current username
      */
     public synchronized LootStorageData loadData()
@@ -54,8 +131,8 @@ public class LootStorageManager
             return currentData;
         }
 
-        File file = getStorageFile(username);
-        if (!file.exists())
+        Filepath file = getStorageFile(username);
+        if (file == null || !file.exists())
         {
             log.debug("No existing loot data file for {}", username);
             currentData = new LootStorageData();
@@ -63,7 +140,7 @@ public class LootStorageManager
             return currentData;
         }
 
-        try (Reader reader = Files.newBufferedReader(file.toPath()))
+        try (Reader reader = file.openBufferedReader())
         {
             currentData = gson.fromJson(reader, LootStorageData.class);
             if (currentData == null)
@@ -127,37 +204,36 @@ public class LootStorageManager
             bossCount = currentData.getBossKills().size();
         }
 
-        File file = getStorageFile(username);
+        Filepath file = getStorageFile(username);
+        if (file == null)
+        {
+            log.debug("No plugin data directory, cannot save loot data");
+            return;
+        }
 
         try
         {
-            // Ensure parent directory exists
-            File parentDir = file.getParentFile();
-            if (parentDir != null && !parentDir.exists())
-            {
-                parentDir.mkdirs();
-            }
+            file.getParent().createDirectories();
 
             // Write to a temp file, then atomically swap it into place so a
             // crash mid-write leaves the previous good file intact.
-            File tmp = new File(file.getParentFile(), file.getName() + ".tmp");
-            try (Writer writer = Files.newBufferedWriter(tmp.toPath()))
+            Filepath tmp = file.getParent().joinSegment(file.getFileName() + ".tmp");
+            try (Writer writer = tmp.openBufferedWriter())
             {
                 writer.write(json);
             }
 
             try
             {
-                Files.move(tmp.toPath(), file.toPath(),
-                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                tmp.moveTo(file,
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
             }
-            catch (java.nio.file.AtomicMoveNotSupportedException atomicEx)
+            catch (AtomicMoveNotSupportedException atomicEx)
             {
                 // Some filesystems don't support atomic moves — fall back to a
                 // plain replace.
-                Files.move(tmp.toPath(), file.toPath(),
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                tmp.moveTo(file, StandardCopyOption.REPLACE_EXISTING);
             }
 
             log.debug("Saved loot data for {} - {} bosses", username, bossCount);
@@ -783,12 +859,14 @@ public class LootStorageManager
     }
 
     /**
-     * Get storage file for username
+     * Get storage file for username, or null if no data directory is set
      */
-    private File getStorageFile(String username)
+    Filepath getStorageFile(String username)
     {
+        Filepath directory = dataDirectory;
+        if (directory == null) return null;
+
         String sanitized = username.toLowerCase().replaceAll("[^a-z0-9_-]", "_");
-        String filename = STORAGE_FILE_PREFIX + sanitized + STORAGE_FILE_SUFFIX;
-        return new File(RuneLite.RUNELITE_DIR, filename);
+        return directory.joinSegment(STORAGE_FILE_PREFIX + sanitized + STORAGE_FILE_SUFFIX);
     }
 }
