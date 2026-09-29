@@ -88,6 +88,16 @@ public final class ItemValueResolver
      *       returns 0.</li>
      * </ol>
      */
+    /**
+     * Narrows a RuneLite price ({@code long} since client 1.13.0) to the
+     * {@code int} used by the plugin's storage and API payloads, clamping
+     * instead of overflowing.
+     */
+    public static int clampPrice(long price)
+    {
+        return (int) Math.max(Integer.MIN_VALUE, Math.min(price, Integer.MAX_VALUE));
+    }
+
     public static int perItemGeValue(ItemManager itemManager, int itemId)
     {
         if (itemManager == null || itemId <= 0) return 0;
@@ -97,12 +107,12 @@ public final class ItemValueResolver
         {
             long total = 0;
             for (Map.Entry<Integer, Integer> e : components.entrySet())
-                total += (long) itemManager.getItemPrice(e.getKey()) * e.getValue();
+                total += itemManager.getItemPrice(e.getKey()) * e.getValue();
             if (total > 0) return (int) Math.min(total, Integer.MAX_VALUE);
         }
 
         int canonical = itemManager.canonicalize(itemId);
-        int price = itemManager.getItemPrice(canonical);
+        int price = clampPrice(itemManager.getItemPrice(canonical));
         if (price > 0) return price;
 
         // Last-ditch fallback: high-alch value (so the bank total includes at

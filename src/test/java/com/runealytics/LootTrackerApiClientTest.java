@@ -156,7 +156,7 @@ public class LootTrackerApiClientTest
         }).when(clientThread).invoke(any(Runnable.class));
 
         when(itemManager.canonicalize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
-        when(itemManager.getItemPrice(100)).thenReturn(500);
+        when(itemManager.getItemPrice(100)).thenReturn(500L);
         ItemComposition comp = mock(ItemComposition.class);
         when(comp.getHaPrice()).thenReturn(40);
         when(itemManager.getItemComposition(100)).thenReturn(comp);
