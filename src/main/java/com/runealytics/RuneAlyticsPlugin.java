@@ -12,6 +12,7 @@ import net.runelite.api.events.*;
 import net.runelite.api.vars.AccountType;
 import net.runelite.api.widgets.Widget;
 import java.util.EnumSet;
+import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -448,9 +449,12 @@ public class RuneAlyticsPlugin extends Plugin
 
         // Loot files live in ~/.runelite/plugin-data/runealytics. If the directory
         // can't be resolved, loot tracking still works in memory for the session.
+        // Older builds wrote runealytics-loot-*.json in ~/.runelite itself; move
+        // those across before anything can save.
         try
         {
             lootStorageManager.setDataDirectory(getPluginDirectory());
+            lootStorageManager.migrateLegacyLootFiles(RuneLite.RUNELITE_DIR);
         }
         catch (Exception e)
         {

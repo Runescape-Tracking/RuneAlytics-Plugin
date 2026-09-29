@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Collections;
 import net.runelite.client.util.Filepath;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -143,5 +144,79 @@ public class LootStorageManagerFileTest
         LootStorageManager.migrateLegacyFiles(new File(tmp.getRoot(), "missing"), pluginPath);
         LootStorageManager.migrateLegacyFiles(null, pluginPath);
         assertFalse(new File(pluginDir, "runealytics").exists());
+    }
+
+    @Test
+    public void setDataDirectory_doesNotMigrateLegacyFiles() throws Exception
+    {
+        File legacy = new File(legacyDir, "runealytics-loot-player.json");
+        write(legacy, "{\"username\":\"player\",\"revision\":7}");
+
+        LootStorageManager manager = managerFor("player");
+        manager.setDataDirectory(pluginPath);
+
+        assertTrue(legacy.isFile());
+        assertFalse(new File(pluginDir, "runealytics/loot-player.json").exists());
+    }
+
+    @Test
+    public void migrateLegacyLootFiles_movesIntoPluginDirectory() throws Exception
+    {
+        File legacy = new File(legacyDir, "runealytics-loot-player.json");
+        write(legacy, "{\"username\":\"player\",\"revision\":3}");
+
+        LootStorageManager manager = managerFor("player");
+        manager.setDataDirectory(pluginPath);
+        manager.migrateLegacyLootFiles(legacyDir);
+
+        assertFalse(legacy.exists());
+        assertEquals(3L, manager.loadData().getRevision());
+    }
+
+    @Test
+    public void save_afterLoadingLegacy_movesFileAndKeepsRevision() throws Exception
+    {
+        LootStorageManager manager = managerFor("player");
+        manager.setDataDirectory(pluginPath);
+        manager.migrateLegacyLootFiles(legacyDir);
+
+        File legacy = new File(legacyDir, "runealytics-loot-player.json");
+        write(legacy, "{\"username\":\"player\",\"revision\":9}");
+
+        assertEquals(9L, manager.loadData().getRevision());
+        manager.saveData();
+
+        assertFalse(legacy.exists());
+        File saved = new File(pluginDir, "runealytics/loot-player.json");
+        assertTrue(saved.isFile());
+
+        LootStorageManager reloaded = managerFor("player");
+        reloaded.setDataDirectory(pluginPath);
+        assertEquals(9L, reloaded.loadData().getRevision());
+    }
+
+    @Test
+    public void save_doesNotCreateNewFileWhileLegacyMoveFails() throws Exception
+    {
+        File legacy = new File(legacyDir, "runealytics-loot-player.json");
+        write(legacy, "{\"username\":\"player\",\"revision\":42}");
+        Assume.assumeTrue("legacy file must be unreadable to force the move to fail",
+                legacy.setReadable(false));
+
+        try
+        {
+            LootStorageManager manager = managerFor("player");
+            manager.setDataDirectory(pluginPath);
+            manager.migrateLegacyLootFiles(legacyDir);
+            manager.loadData();
+            manager.saveData();
+
+            assertFalse(new File(pluginDir, "runealytics/loot-player.json").exists());
+            assertTrue(legacy.isFile());
+        }
+        finally
+        {
+            legacy.setReadable(true);
+        }
     }
 }
