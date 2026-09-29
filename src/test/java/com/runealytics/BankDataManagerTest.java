@@ -97,8 +97,8 @@ public class BankDataManagerTest
     @Test
     public void buildBankSnapshot_populatesTotalsAndAllowsNullContainers()
     {
-        when(itemManager.getItemPrice(100)).thenReturn(1000);
-        when(itemManager.getItemPrice(200)).thenReturn(500);
+        when(itemManager.getItemPrice(100)).thenReturn(1000L);
+        when(itemManager.getItemPrice(200)).thenReturn(500L);
 
         ItemContainer bank = container(item(100, 2)); // 2000
         ItemContainer inventory = container(item(200, 3)); // 1500

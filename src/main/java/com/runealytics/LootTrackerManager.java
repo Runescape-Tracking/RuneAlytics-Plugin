@@ -1052,7 +1052,7 @@ public class LootTrackerManager
             drop.setItemId   (petItem.getId());
             drop.setItemName (comp.getName());
             drop.setQuantity (1);
-            drop.setGePrice  (itemManager.getItemPrice(petItem.getId()));
+            drop.setGePrice  (ItemValueResolver.clampPrice(itemManager.getItemPrice(petItem.getId())));
             drop.setHighAlch (comp.getHaPrice());
             drop.setTotalValue(drop.getGePrice());
         }

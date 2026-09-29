@@ -12,6 +12,7 @@ import net.runelite.api.events.*;
 import net.runelite.api.vars.AccountType;
 import net.runelite.api.widgets.Widget;
 import java.util.EnumSet;
+import net.runelite.client.RuneLite;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -43,6 +44,7 @@ import static com.runealytics.RuneAlyticsPanel.*;
 @Slf4j
 @PluginDescriptor(
         name = "RuneAlytics",
+        internalName = "runealytics",
         description = "Advanced loot tracking and analytics",
         tags = {"loot", "tracking", "analytics"}
 )
@@ -165,6 +167,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private ConfigManager            configManager;
     @Inject private ItemManager              itemManager;
     @Inject private LootTrackerManager       lootManager;
+    @Inject private LootStorageManager       lootStorageManager;
     @Inject private RuneAlyticsState         state;
     @Inject private ScheduledExecutorService executorService;
     @Inject private XpTrackerManager         xpTrackerManager;
@@ -443,6 +446,20 @@ public class RuneAlyticsPlugin extends Plugin
     protected void startUp() throws Exception
     {
         log.debug("RuneAlytics starting");
+
+        // Loot files live in ~/.runelite/plugin-data/runealytics. If the directory
+        // can't be resolved, loot tracking still works in memory for the session.
+        // Older builds wrote runealytics-loot-*.json in ~/.runelite itself; move
+        // those across before anything can save.
+        try
+        {
+            lootStorageManager.setDataDirectory(getPluginDirectory());
+            lootStorageManager.migrateLegacyLootFiles(RuneLite.RUNELITE_DIR);
+        }
+        catch (Exception e)
+        {
+            log.debug("Unable to resolve RuneAlytics data directory; loot history will not be saved", e);
+        }
 
         // Create dedicated executor for loot sync operations (separate from RuneLite's pool)
         syncExecutor = SyncExecutorFactory.createSyncExecutor();

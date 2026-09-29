@@ -34,8 +34,8 @@ public class ItemValueResolverTest
     @Test
     public void decomposition_sumsMultipleComponents()
     {
-        when(itemManager.getItemPrice(ItemID.AMULET_OF_FURY)).thenReturn(1_000_000);
-        when(itemManager.getItemPrice(ItemID.BLOOD_SHARD)).thenReturn(2_000_000);
+        when(itemManager.getItemPrice(ItemID.AMULET_OF_FURY)).thenReturn(1_000_000L);
+        when(itemManager.getItemPrice(ItemID.BLOOD_SHARD)).thenReturn(2_000_000L);
 
         assertEquals(3_000_000,
                 ItemValueResolver.perItemGeValue(itemManager, ItemID.AMULET_OF_BLOOD_FURY));
@@ -44,8 +44,8 @@ public class ItemValueResolverTest
     @Test
     public void decomposition_overflow_isClampedToIntMax()
     {
-        when(itemManager.getItemPrice(ItemID.AMULET_OF_FURY)).thenReturn(Integer.MAX_VALUE);
-        when(itemManager.getItemPrice(ItemID.BLOOD_SHARD)).thenReturn(Integer.MAX_VALUE);
+        when(itemManager.getItemPrice(ItemID.AMULET_OF_FURY)).thenReturn((long) Integer.MAX_VALUE);
+        when(itemManager.getItemPrice(ItemID.BLOOD_SHARD)).thenReturn((long) Integer.MAX_VALUE);
 
         assertEquals(Integer.MAX_VALUE,
                 ItemValueResolver.perItemGeValue(itemManager, ItemID.AMULET_OF_BLOOD_FURY));
@@ -54,9 +54,9 @@ public class ItemValueResolverTest
     @Test
     public void decomposition_zeroTotal_fallsThroughToCanonical()
     {
-        when(itemManager.getItemPrice(ItemID.SCYTHE_OF_VITUR_UNCHARGED)).thenReturn(0);
+        when(itemManager.getItemPrice(ItemID.SCYTHE_OF_VITUR_UNCHARGED)).thenReturn(0L);
         when(itemManager.canonicalize(ItemID.SCYTHE_OF_VITUR)).thenReturn(999);
-        when(itemManager.getItemPrice(999)).thenReturn(500);
+        when(itemManager.getItemPrice(999)).thenReturn(500L);
 
         assertEquals(500, ItemValueResolver.perItemGeValue(itemManager, ItemID.SCYTHE_OF_VITUR));
     }
@@ -65,7 +65,7 @@ public class ItemValueResolverTest
     public void plainItem_usesCanonicalPrice()
     {
         when(itemManager.canonicalize(4151)).thenReturn(4151);
-        when(itemManager.getItemPrice(4151)).thenReturn(2_500_000);
+        when(itemManager.getItemPrice(4151)).thenReturn(2_500_000L);
 
         assertEquals(2_500_000, ItemValueResolver.perItemGeValue(itemManager, 4151));
     }
@@ -76,7 +76,7 @@ public class ItemValueResolverTest
         ItemComposition comp = mock(ItemComposition.class);
         when(comp.getHaPrice()).thenReturn(150);
         when(itemManager.canonicalize(995)).thenReturn(995);
-        when(itemManager.getItemPrice(995)).thenReturn(0);
+        when(itemManager.getItemPrice(995)).thenReturn(0L);
         when(itemManager.getItemComposition(995)).thenReturn(comp);
 
         assertEquals(150, ItemValueResolver.perItemGeValue(itemManager, 995));
@@ -86,7 +86,7 @@ public class ItemValueResolverTest
     public void trulyUntradeable_returnsZero()
     {
         when(itemManager.canonicalize(995)).thenReturn(995);
-        when(itemManager.getItemPrice(995)).thenReturn(0);
+        when(itemManager.getItemPrice(995)).thenReturn(0L);
         when(itemManager.getItemComposition(995)).thenReturn(null);
 
         assertEquals(0, ItemValueResolver.perItemGeValue(itemManager, 995));

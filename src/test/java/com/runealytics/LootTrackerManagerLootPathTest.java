@@ -60,7 +60,7 @@ public class LootTrackerManagerLootPathTest
         when(config.minimumLootValue()).thenReturn(0);
 
         when(itemManager.canonicalize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
-        when(itemManager.getItemPrice(anyInt())).thenReturn(50);
+        when(itemManager.getItemPrice(anyInt())).thenReturn(50L);
         ItemComposition comp = mock(ItemComposition.class);
         when(comp.getName()).thenReturn("Abyssal whip");
         when(comp.getHaPrice()).thenReturn(10);

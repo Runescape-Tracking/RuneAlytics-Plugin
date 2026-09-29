@@ -78,7 +78,7 @@ public class RuneAlyticsItemJsonTest
     @Test
     public void fromContainerWithValues_computesGePerAndTotal()
     {
-        when(itemManager.getItemPrice(100)).thenReturn(50);
+        when(itemManager.getItemPrice(100)).thenReturn(50L);
         ItemContainer c = container(item(100, 3));
 
         JsonObject entry = RuneAlyticsItemJson.fromContainerWithValues(c, itemManager)
@@ -90,7 +90,7 @@ public class RuneAlyticsItemJsonTest
     @Test
     public void fromContainerWithValues_totalDoesNotOverflowInt()
     {
-        when(itemManager.getItemPrice(200)).thenReturn(2_000_000_000);
+        when(itemManager.getItemPrice(200)).thenReturn(2_000_000_000L);
         ItemContainer c = container(item(200, 3));
 
         JsonObject entry = RuneAlyticsItemJson.fromContainerWithValues(c, itemManager)
@@ -101,8 +101,8 @@ public class RuneAlyticsItemJsonTest
     @Test
     public void containerTotalValue_sumsAllItemsAndHandlesNull()
     {
-        when(itemManager.getItemPrice(100)).thenReturn(50);
-        when(itemManager.getItemPrice(200)).thenReturn(10);
+        when(itemManager.getItemPrice(100)).thenReturn(50L);
+        when(itemManager.getItemPrice(200)).thenReturn(10L);
         ItemContainer c = container(item(100, 2), item(200, 5));
 
         assertEquals(150L, RuneAlyticsItemJson.containerTotalValue(c, itemManager));
