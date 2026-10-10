@@ -105,6 +105,20 @@ public interface RunealyticsConfig extends Config
         return true;
     }
 
+    @ConfigItem(
+            keyName = "enableTrainingTelemetry",
+            name = "Training telemetry (Account Analysis)",
+            description = "Off by default. Sends 60-second XP windows (skill, XP before/after, logged-in time,"
+                    + " estimated active time) for your verified account so the website can measure training"
+                    + " time and rates. No chat, keystrokes or location are sent.",
+            section = syncSection,
+            position = 3
+    )
+    default boolean enableTrainingTelemetry()
+    {
+        return false;
+    }
+
     // ==================== LOOT TRACKING ====================
 
     @ConfigSection(

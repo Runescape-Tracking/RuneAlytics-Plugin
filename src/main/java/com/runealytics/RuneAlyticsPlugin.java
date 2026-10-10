@@ -92,6 +92,15 @@ public class RuneAlyticsPlugin extends Plugin
     /** Plugin tick at which the lamp-XP suppression window expires (0 = none). */
     private long lampXpSuppressUntilTick = 0L;
 
+    // ── Account Analysis training telemetry (opt-in) ─────────────────────────
+    // Client thread only enqueues immutable observations; aggregation, disk
+    // spooling and HTTP run on the executor (see telemetryPump()).
+    private static final long TELEMETRY_WINDOW_MS = 60_000L;
+    private TrainingTelemetryCollector telemetryCollector;
+    private TelemetryUploader telemetryUploader;
+    /** accountKey|worldMode of the telemetry session (client thread only). */
+    private String telemetrySessionKey;
+
     // AGILITY is excluded: its XP never produces an item drop, so tracking it
     // would misattribute incidental inventory changes during the session window.
     private static final Set<Skill> SKILLING_TRACKED = java.util.EnumSet.of(
@@ -445,6 +454,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Override
     protected void startUp() throws Exception
     {
+        initTrainingTelemetry();
         log.debug("RuneAlytics starting");
 
         // Loot files live in ~/.runelite/plugin-data/runealytics. If the directory
@@ -553,6 +563,10 @@ public class RuneAlyticsPlugin extends Plugin
     protected void shutDown()
     {
         log.debug("RuneAlytics shutting down");
+
+        // Close the telemetry window and spool it to disk (no network on shutdown;
+        // it is uploaded on the next start).
+        try { telemetryLogoutFlush(false); } catch (Exception e) { log.debug("Telemetry shutdown flush failed: {}", e.getMessage()); }
 
         // Stop the live-map heartbeat so no pings fire after the plugin is gone.
         stopHeartbeat();
@@ -1669,6 +1683,9 @@ public class RuneAlyticsPlugin extends Plugin
             // Pause the XP session clock so runtime and XP/hr freeze while logged out.
             xpSessionManager.setLoggedIn(false);
 
+            // Close the telemetry window; spool + upload happen on the executor.
+            telemetryLogoutFlush(true);
+
             // Clear the in-memory + on-screen loot so the panel resets to empty
             // and a different account logging in next can't inherit this
             // account's loot (which would then sync under the wrong account).
@@ -1699,7 +1716,14 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
-        if (gs == GameState.HOPPING) return;
+        if (gs == GameState.HOPPING)
+        {
+            if (telemetryCollector != null && telemetrySessionKey != null)
+            {
+                telemetryCollector.worldHop(System.currentTimeMillis());
+            }
+            return;
+        }
 
         if (gs == GameState.LOGGED_IN)
         {
@@ -2013,6 +2037,15 @@ public class RuneAlyticsPlugin extends Plugin
         if (config.enableXpTracker() && state.isLoggedIn())
         {
             xpSessionManager.recordXp(skill, current);
+        }
+
+        // ── Account Analysis telemetry (opt-in; verified, matching account only) ──
+        if (config.enableTrainingTelemetry() && state.isLoggedIn() && state.isVerified()
+                && telemetryCollector != null && currentPlayerIdentity.canSync())
+        {
+            ensureTelemetrySession();
+            telemetryCollector.offer(skill.getName().toLowerCase(), current, System.currentTimeMillis(),
+                    gameTickCount < lampXpSuppressUntilTick);
         }
 
         // ── Website XP batch sync (unchanged; requires a verified account) ────
@@ -3420,5 +3453,104 @@ public class RuneAlyticsPlugin extends Plugin
         g.drawRect(0, 0, 31, 31);
         g.dispose();
         return img;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  ACCOUNT ANALYSIS TRAINING TELEMETRY
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private void initTrainingTelemetry()
+    {
+        String installationId = configManager.getConfiguration("runealytics", "telemetryInstallationId");
+        if (installationId == null || installationId.isEmpty())
+        {
+            // Pseudonymous, random per installation; never derived from the account.
+            installationId = "rl-" + java.util.UUID.randomUUID();
+            configManager.setConfiguration("runealytics", "telemetryInstallationId", installationId);
+        }
+        long afkMs = Math.max(1, config.xpAfkTimeout()) * 60_000L;
+        telemetryCollector = new TrainingTelemetryCollector(TELEMETRY_WINDOW_MS, afkMs);
+        telemetryUploader = new TelemetryUploader(okHttpClient, config::apiUrl, state::getVerificationCode,
+                this::telemetrySpoolForVerifiedAccount, installationId, System::currentTimeMillis);
+    }
+
+    /** Spool directory for the VERIFIED account; data never moves across accounts. */
+    private TelemetrySpool telemetrySpoolForVerifiedAccount()
+    {
+        String user = state.getVerifiedUsername();
+        if (user == null || user.isEmpty())
+        {
+            return null;
+        }
+        String safe = user.toLowerCase().replaceAll("[^a-z0-9_-]", "_");
+        return new TelemetrySpool(RuneLite.RUNELITE_DIR.toPath().resolve("runealytics").resolve("telemetry").resolve(safe));
+    }
+
+    /** Client thread: (re)start the telemetry session on login, account or world-mode change. */
+    private void ensureTelemetrySession()
+    {
+        String account = currentPlayerIdentity.getAccountKey();
+        if (account == null)
+        {
+            return;
+        }
+        String mode = determineGameMode();
+        String key = account + "|" + mode;
+        if (!key.equals(telemetrySessionKey))
+        {
+            telemetrySessionKey = key;
+            telemetryCollector.sessionStart(account, mode, System.currentTimeMillis());
+        }
+    }
+
+    private void telemetryLogoutFlush(boolean upload)
+    {
+        if (telemetryCollector == null)
+        {
+            return;
+        }
+        if (telemetrySessionKey != null)
+        {
+            telemetryCollector.logout(System.currentTimeMillis());
+            telemetrySessionKey = null;
+        }
+        // Never block logout/shutdown: hand off to the executor.
+        executorService.submit(() -> telemetryPump(upload));
+    }
+
+    /** Executor: aggregate due windows, spool them, and (optionally) upload. */
+    @net.runelite.client.task.Schedule(
+            period = 15000,
+            unit   = ChronoUnit.MILLIS,
+            asynchronous = true
+    )
+    public void telemetryScheduledPump()
+    {
+        if (!config.enableTrainingTelemetry())
+        {
+            return;
+        }
+        telemetryPump(true);
+    }
+
+    private void telemetryPump(boolean upload)
+    {
+        if (telemetryCollector == null || telemetryUploader == null)
+        {
+            return;
+        }
+        try
+        {
+            List<TelemetryBucket> buckets = telemetryCollector.process(System.currentTimeMillis());
+            telemetryUploader.enqueue(buckets);
+            if (upload)
+            {
+                telemetryUploader.pump();
+            }
+        }
+        catch (Exception e)
+        {
+            log.debug("[Telemetry] pump failed: {}", e.getMessage());
+        }
     }
 }
