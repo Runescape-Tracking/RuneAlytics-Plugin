@@ -418,4 +418,29 @@ public class LootStorageManagerTest
         assertTrue(merged.getAggregatedDrops().isEmpty());
         assertEquals(0L, merged.getTotalLootValue());
     }
+    @Test
+    public void addKill_mintsAStableEventIdAndKeepsTheEventsMode()
+    {
+        manager.addKill("Zulrah", 2042, 100, 1, 330, 0, Collections.emptyList(), null,
+                "leagues", "ironman", null, false);
+        LootStorageData.KillRecord stored = manager.getCurrentData().getBossKills().get("Zulrah").getKills().get(0);
+
+        assertTrue(stored.getEventId() != null && !stored.getEventId().isEmpty());
+        assertEquals("seasonal kills must not be stored as regular", "leagues", stored.getGameMode());
+        assertEquals("ironman", stored.getAccountType());
+        assertEquals(330, stored.getWorld());
+        assertFalse(stored.isBackfill());
+    }
+
+    @Test
+    public void addKill_keepsTheCallersEventIdAndBackfillFlag()
+    {
+        manager.addKill("Zulrah", 2042, 0, 1, 0, 0, Collections.emptyList(), null,
+                null, null, "fixed-event-id", true);
+        LootStorageData.KillRecord stored = manager.getCurrentData().getBossKills().get("Zulrah").getKills().get(0);
+
+        assertEquals("fixed-event-id", stored.getEventId());
+        assertTrue(stored.isBackfill());
+        assertEquals("regular", stored.getGameMode());
+    }
 }

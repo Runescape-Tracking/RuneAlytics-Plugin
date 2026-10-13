@@ -217,6 +217,20 @@ public class LootStorageManager
         int killCount = 0;
         if (currentData.getBossKills() != null)
         {
+            // Older files have no event ids. Give each not-yet-uploaded kill
+            // one now; it is saved with the file, so retries reuse it.
+            for (LootStorageData.BossKillData boss : currentData.getBossKills().values())
+            {
+                if (boss == null || boss.getKills() == null) continue;
+                for (LootStorageData.KillRecord kill : boss.getKills())
+                {
+                    if (kill != null && !kill.isSyncedToServer() && kill.getEventId() == null)
+                    {
+                        kill.setEventId(UUID.randomUUID().toString());
+                    }
+                }
+            }
+
             bossCount = currentData.getBossKills().size();
             killCount = currentData.getBossKills().values().stream()
                     .mapToInt(LootStorageData.BossKillData::getKillCount)
@@ -351,6 +365,22 @@ public class LootStorageManager
                         int prestige, List<LootStorageData.DropRecord> drops,
                         PlayerLocationSnapshot location)
     {
+        addKill(npcName, npcId, combatLevel, killNumber, world, prestige, drops, location,
+                null, null, null, false);
+    }
+
+    /**
+     * Add a kill to storage with its full event identity: the game mode and
+     * account type in effect when it happened, a stable {@code eventId}
+     * (minted here when {@code null}) and whether it is a synthetic backfill.
+     * These travel with the stored record, so a later upload — after a world
+     * hop, a mode change or a restart — still describes the original event.
+     */
+    public void addKill(String npcName, int npcId, int combatLevel, int killNumber, int world,
+                        int prestige, List<LootStorageData.DropRecord> drops,
+                        PlayerLocationSnapshot location, String gameMode, String accountType,
+                        String eventId, boolean backfill)
+    {
         // Snapshot first so a caller mutating the list cannot desync the
         // pre-computed totals from the stored kill, or throw CME mid-add.
         List<LootStorageData.DropRecord> snapshot =
@@ -405,6 +435,10 @@ public class LootStorageManager
             killRecord.setDrops(snapshot);
             killRecord.setSyncedToServer(false);
             killRecord.setLocation(location);
+            killRecord.setEventId(eventId != null ? eventId : UUID.randomUUID().toString());
+            killRecord.setBackfill(backfill);
+            if (gameMode != null) killRecord.setGameMode(gameMode);
+            if (accountType != null) killRecord.setAccountType(accountType);
 
             // Add kill to list
             bossData.getKills().add(killRecord);

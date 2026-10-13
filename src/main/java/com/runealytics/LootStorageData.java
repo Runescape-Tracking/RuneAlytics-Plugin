@@ -127,6 +127,25 @@ public class LootStorageData
          */
         @SerializedName("location")
         private PlayerLocationSnapshot location;
+
+        /**
+         * Stable identity of this loot event, minted once when the kill is
+         * recorded. Sent with every upload attempt so a replay (retry, restart,
+         * re-sync after hopping) is recognised by the server as the same event
+         * instead of a new drop. {@code null} only for records loaded from
+         * older files until {@link LootStorageManager} assigns one.
+         */
+        @SerializedName("event_id")
+        private String eventId;
+
+        /**
+         * {@code true} for synthetic kills created by importing RuneLite's own
+         * loot tracker: their timestamp is the import time and their world is
+         * unknown, so the server must not treat them as dated, world-attributed
+         * events.
+         */
+        @SerializedName("backfill")
+        private boolean backfill;
     }
 
     @Data

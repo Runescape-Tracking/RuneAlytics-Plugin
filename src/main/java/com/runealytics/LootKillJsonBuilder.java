@@ -57,7 +57,14 @@ public final class LootKillJsonBuilder
         payload.addProperty("npc_id",       npcId);
         payload.addProperty("combat_level", kill.getCombatLevel());
         payload.addProperty("kill_count",   kill.getKillNumber());
-        payload.addProperty("world",        kill.getWorld());
+        // World as captured when the event happened; never the current world.
+        // 0 means "not known" (synthetic import, or a multi-stage reward that
+        // spanned a hop); the server stores it as an unknown world. 0 rather
+        // than null keeps uploads valid against servers that still require an
+        // integer here.
+        payload.addProperty("world",        Math.max(0, kill.getWorld()));
+        if (kill.getEventId() != null) payload.addProperty("event_id", kill.getEventId());
+        if (kill.isBackfill()) payload.addProperty("backfill", true);
         payload.addProperty("timestamp",    kill.getTimestamp());
         payload.addProperty("prestige",     prestige);
         payload.addProperty("game_mode",    kill.getGameMode()    != null ? kill.getGameMode()    : "regular");

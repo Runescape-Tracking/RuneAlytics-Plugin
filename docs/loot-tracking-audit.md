@@ -216,3 +216,28 @@ Centralize toward an encounter-correlation model, incrementally:
 - KC regressions rejected (per-boss monotonic within an account session).
 - Account isolation: resolver + dedup state cleared on logout/account switch.
 - Fail-safe: every new component is exception-isolated from event handlers.
+
+## World attribution and event identity (Loot by World)
+
+Each loot event records the world it happened on, at the event:
+
+| Path | World source |
+|---|---|
+| NPC loot (`onNpcLootReceived`) | `client.getWorld()` captured on the client thread before the deferred hand-off |
+| Zero-loot kills, later upgraded by a late drop | world of the original kill (the record is upgraded, not re-created) |
+| Chests / raids / reward widgets / pickpocket / implings / skilling | world when the reward is read; the reward cannot be earned on another world |
+| Doom of Mokhaiotl (multi-stage, committed on claim) | world the reward screen was shown on; `0` (unknown) if the claim happens on a different world |
+| RuneLite loot-tracker import (synthetic backfill) | `0` (unknown) and `backfill: true` — timestamp is the import time |
+
+The world travels with the stored `KillRecord`, so a kill uploaded later — after
+a hop, a retry or a restart — still carries the original world; the upload path
+never reads the current world. `0` is sent for "not known" and stored by the
+server as an unknown world.
+
+Every kill also gets an `event_id` (UUID) minted when it is recorded and saved
+with it. Retries resend the same id, so the server can tell a replayed upload
+from a genuine repeated drop (two identical kills in the same second keep
+different ids). Unsynced kills from older files are given an id on load.
+
+The stored record now also keeps the kill's `game_mode` / `account_type`
+(previously only the UI copy had them, so seasonal kills uploaded as `regular`).

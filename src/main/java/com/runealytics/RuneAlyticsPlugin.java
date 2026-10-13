@@ -269,6 +269,8 @@ public class RuneAlyticsPlugin extends Plugin
 
     /** Captured reward items waiting for claim confirmation. */
     private final List<ItemStack> pendingDoomReward  = new ArrayList<>();
+    /** World the pending Doom reward was shown on; the reward is attributed to it, not to the claim-time world. */
+    private int pendingDoomWorld = 0;
 
     /**
      * True after the Whisperer KC chat message fires. While open, every
@@ -2919,6 +2921,7 @@ public class RuneAlyticsPlugin extends Plugin
         if (container == null) return;
 
         pendingDoomReward.clear();
+        pendingDoomWorld = client.getWorld();
         for (Item item : container.getItems())
         {
             if (item == null || item.getId() <= 0 || item.getQuantity() <= 0) continue;
@@ -2943,7 +2946,11 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
-        lootManager.processPlayerLoot("Doom of Mokhaiotl", new ArrayList<>(pendingDoomReward));
+        // Multi-stage reward: attribute it to the world it was earned on. If the
+        // claim happens on a different world we can't be sure, so record it as
+        // unknown (0) rather than guessing.
+        int rewardWorld = pendingDoomWorld > 0 && pendingDoomWorld == client.getWorld() ? pendingDoomWorld : 0;
+        lootManager.processPlayerLoot("Doom of Mokhaiotl", new ArrayList<>(pendingDoomReward), rewardWorld);
 
         String account = state.getVerifiedUsername();
         if (account != null)
@@ -2960,6 +2967,7 @@ public class RuneAlyticsPlugin extends Plugin
     private void resetDoomRewardState()
     {
         pendingDoomReward.clear();
+        pendingDoomWorld = 0;
         doomRewardOpen = false;
         doomConfirmationOpen = false;
         doomClaimPending = false;

@@ -706,7 +706,19 @@ public class LootTrackerManager
      */
     public void processPlayerLoot(String source, List<ItemStack> items)
     {
-        processPlayerLootInternal(source, items, true);
+        processPlayerLootInternal(source, items, true, null);
+    }
+
+    /**
+     * Same as {@link #processPlayerLoot(String, List)} for a reward that was
+     * earned over several stages: {@code world} is the world the reward was
+     * earned on, or {@code 0} when it cannot be known reliably (e.g. the player
+     * hopped between stages). It is recorded as-is, never replaced by the
+     * world the player happens to be on when the reward is committed.
+     */
+    public void processPlayerLoot(String source, List<ItemStack> items, int world)
+    {
+        processPlayerLootInternal(source, items, true, world);
     }
 
     /**
@@ -718,7 +730,8 @@ public class LootTrackerManager
      *                    because identical consecutive batches are legitimate
      *                    for them.
      */
-    private void processPlayerLootInternal(String source, List<ItemStack> items, boolean batchDedupe)
+    private void processPlayerLootInternal(String source, List<ItemStack> items, boolean batchDedupe,
+                                           Integer worldOverride)
     {
         if (items == null || items.isEmpty())
         {
@@ -771,7 +784,7 @@ public class LootTrackerManager
         {
             log.debug("[Doom] Calling recordKill for '{}'", name);
         }
-        recordKill(name, npcId, 0, client.getWorld(), drops);
+        recordKill(name, npcId, 0, worldOverride != null ? worldOverride : client.getWorld(), drops);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1280,7 +1293,7 @@ public class LootTrackerManager
         log.debug("Inventory diff '{}': {} new items", sourceName, newItems.size());
         // batchDedupe=false: two consecutive crate openings can legitimately
         // yield identical batches, so only the 2s name window applies here.
-        processPlayerLootInternal(sourceName, newItems, false);
+        processPlayerLootInternal(sourceName, newItems, false, null);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1477,6 +1490,8 @@ public class LootTrackerManager
         killRecord.setGameMode(state.getCurrentGameMode());
         killRecord.setAccountType(state.getCurrentAccountSubtype());
         killRecord.setLocation(location);
+        // Identity minted at the event, reused by every later upload attempt.
+        killRecord.setEventId(java.util.UUID.randomUUID().toString());
 
         // 5. Update the in-memory UI stats and persistent storage. When a kill
         //    carries an authoritative game kill count (e.g. the Whisperer KC
@@ -1490,7 +1505,9 @@ public class LootTrackerManager
         stats.addKill(killRecord);
         storageManager.addKill(
                 npcName, npcId, combatLevel, killNumber,
-                world, state.getPrestige(), drops, location);
+                world, state.getPrestige(), drops, location,
+                killRecord.getGameMode(), killRecord.getAccountType(),
+                killRecord.getEventId(), false);
 
         // Persist the authoritative game KC (raise-only) so the last known
         // real KC per boss survives restarts and can be audited against the
@@ -2871,16 +2888,20 @@ public class LootTrackerManager
                 LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();
                 killRecord.setKillNumber(killNumber);
                 killRecord.setTimestamp(System.currentTimeMillis());
-                killRecord.setWorld(0);
+                killRecord.setWorld(0);          // unknown: imported totals carry no world
                 killRecord.setCombatLevel(0);
                 killRecord.setDrops(drops);
                 killRecord.setSyncedToServer(false); // picked up by the next batch
                 killRecord.setGameMode(state.getCurrentGameMode());
                 killRecord.setAccountType(state.getCurrentAccountSubtype());
+                killRecord.setEventId(java.util.UUID.randomUUID().toString());
+                killRecord.setBackfill(true);    // timestamp is the import time, not the drop time
 
                 stats.addKill(killRecord);
 
-                storageManager.addKill(bossName, npcId, 0, killNumber, 0, 0, drops);
+                storageManager.addKill(bossName, npcId, 0, killNumber, 0, 0, drops, null,
+                        killRecord.getGameMode(), killRecord.getAccountType(),
+                        killRecord.getEventId(), true);
                 existingKCsByBoss.computeIfAbsent(bossName, k -> new HashSet<>()).add(killNumber);
 
                 importedKills++;

@@ -184,4 +184,47 @@ public class LootKillJsonBuilderTest
         assertEquals("ironman", env.get("game_mode").getAsString());
         assertEquals("hardcore_ironman", env.get("account_type").getAsString());
     }
+    private static LootStorageData.KillRecord kill(int world)
+    {
+        LootStorageData.KillRecord k = new LootStorageData.KillRecord();
+        k.setWorld(world);
+        k.setTimestamp(1_700_000_000_000L);
+        k.setDrops(new ArrayList<>(Arrays.asList(drop(4151, "Abyssal whip", 1))));
+        return k;
+    }
+
+    @Test
+    public void buildKill_sendsTheWorldCapturedAtTheEvent()
+    {
+        JsonObject json = LootKillJsonBuilder.buildKill(kill(330), "Abyssal demon", 415, 0);
+        assertEquals(330, json.get("world").getAsInt());
+    }
+
+    @Test
+    public void buildKill_unknownWorldIsSentAsZeroNeverACurrentWorld()
+    {
+        // 0 = not known; the server stores it as an unknown world.
+        JsonObject json = LootKillJsonBuilder.buildKill(kill(0), "Abyssal demon", 415, 0);
+        assertEquals(0, json.get("world").getAsInt());
+        assertEquals(0, LootKillJsonBuilder.buildKill(kill(-1), "Abyssal demon", 415, 0).get("world").getAsInt());
+    }
+
+    @Test
+    public void buildKill_carriesStableEventIdAcrossRebuilds()
+    {
+        LootStorageData.KillRecord k = kill(330);
+        k.setEventId("7d4f6a1e-0000-4000-8000-000000000001");
+        String first = LootKillJsonBuilder.buildKill(k, "Abyssal demon", 415, 0).get("event_id").getAsString();
+        String replay = LootKillJsonBuilder.buildKill(k, "Abyssal demon", 415, 0).get("event_id").getAsString();
+        assertEquals(first, replay);
+    }
+
+    @Test
+    public void buildKill_flagsBackfillOnlyForImportedKills()
+    {
+        assertFalse(LootKillJsonBuilder.buildKill(kill(330), "Zulrah", 2042, 0).has("backfill"));
+        LootStorageData.KillRecord imported = kill(0);
+        imported.setBackfill(true);
+        assertTrue(LootKillJsonBuilder.buildKill(imported, "Zulrah", 2042, 0).get("backfill").getAsBoolean());
+    }
 }
