@@ -3,6 +3,7 @@ package com.runealytics;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import com.runealytics.progress.ProgressTracker;
 import net.runelite.client.util.LinkBrowser;
 
 import javax.inject.Inject;
@@ -52,6 +53,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private final RunealyticsApiClient         apiClient;
     private final ScheduledExecutorService     executorService;
     private final Client                       client;
+    private final ProgressTracker              progressTracker;
 
     private JScrollPane scroll;
 
@@ -68,7 +70,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
             RuneAlyticsState             state,
             RunealyticsApiClient         apiClient,
             ScheduledExecutorService     executorService,
-            Client                       client
+            Client                       client,
+            ProgressTracker              progressTracker
     )
     {
         this.verificationPanel = verificationPanel;
@@ -77,6 +80,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         this.apiClient         = apiClient;
         this.executorService   = executorService;
         this.client            = client;
+        this.progressTracker   = progressTracker;
 
         setLayout(new BorderLayout());
         setBackground(PANEL_BG);
@@ -137,6 +141,10 @@ public class RuneAlyticsSettingsPanel extends JPanel
         panel.add(sectionHeader("PRIVACY SETTINGS"));
         panel.add(vSpace(6));
         panel.add(buildPrivacySection());
+        panel.add(vSpace(14));
+        panel.add(sectionHeader("ACHIEVEMENTS"));
+        panel.add(vSpace(6));
+        panel.add(buildAchievementsSection());
         panel.add(vSpace(16));
         panel.add(buildNeedHelpSection());
         panel.add(vSpace(20));
@@ -470,6 +478,41 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
         card.add(compactLabel(desc, BODY_TEXT, cf(Font.PLAIN, 11f)));
         parent.add(card);
+    }
+
+    /**
+     * Quest / diary / combat-achievement sync. Progress is captured automatically;
+     * the button only queues a full re-read and snapshot upload (handled on the
+     * client thread and a background executor by {@link ProgressTracker}).
+     */
+    private JPanel buildAchievementsSection()
+    {
+        JPanel p = verticalPanel();
+
+        p.add(compactLabel(
+                "Quests, achievement diaries and combat achievements sync automatically while you play.",
+                BODY_TEXT,
+                cf(Font.PLAIN, 13f),
+                TEXT_WRAP_PX
+        ));
+        p.add(vSpace(10));
+
+        JButton resyncBtn = buildTealButton("Resync Achievements");
+        resyncBtn.addActionListener(e ->
+        {
+            progressTracker.requestResync();
+            resyncBtn.setEnabled(false);
+            resyncBtn.setText("Resync queued");
+            javax.swing.Timer reset = new javax.swing.Timer(10_000, ev ->
+            {
+                resyncBtn.setText("Resync Achievements");
+                resyncBtn.setEnabled(true);
+            });
+            reset.setRepeats(false);
+            reset.start();
+        });
+        p.add(resyncBtn);
+        return p;
     }
 
     private JPanel buildNeedHelpSection()

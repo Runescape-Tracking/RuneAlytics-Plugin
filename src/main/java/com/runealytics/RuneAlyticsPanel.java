@@ -53,6 +53,12 @@ public class RuneAlyticsPanel extends PluginPanel
      */
     public static final String FEATURE_XP_SESSION   = "xp_session";
     /**
+     * Server-controlled: gates whether quest / diary / combat-achievement progress
+     * is uploaded to {@code /api/plugin/v1/accounts/me/progress}. Progress is still
+     * captured locally while the flag is off, so nothing is lost before launch.
+     */
+    public static final String FEATURE_ACHIEVEMENTS = "achievements";
+    /**
      * Locally-controlled pseudo-flag: shows the Settings / Verification tab.
      * Set {@code true} when the account is not verified; {@code false} once verified.
      */

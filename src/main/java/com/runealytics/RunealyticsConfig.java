@@ -105,6 +105,18 @@ public interface RunealyticsConfig extends Config
         return true;
     }
 
+    @ConfigItem(
+            keyName = "enableAchievementSync",
+            name = "Enable Achievement Sync",
+            description = "Track quest, achievement diary and combat achievement progress and sync it to RuneAlytics",
+            section = syncSection,
+            position = 3
+    )
+    default boolean enableAchievementSync()
+    {
+        return true;
+    }
+
     // ==================== LOOT TRACKING ====================
 
     @ConfigSection(

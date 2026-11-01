@@ -4,6 +4,9 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.inject.Provides;
+import com.runealytics.progress.FilepathProgressStore;
+import com.runealytics.progress.ProgressStore;
+import com.runealytics.progress.ProgressTracker;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
@@ -184,6 +187,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private ClanManager              clanManager;
     @Inject private DoomEncounterTracker     doomEncounterTracker;
     @Inject private GroundItemAttributor     groundItemAttributor;
+    @Inject private ProgressTracker          progressTracker;
 
     // ── Sync coordination ─────────────────────────────────────────────────────
     /** Coordinates one-at-a-time sync operations with proper coalescing. */
@@ -451,10 +455,13 @@ public class RuneAlyticsPlugin extends Plugin
         // can't be resolved, loot tracking still works in memory for the session.
         // Older builds wrote runealytics-loot-*.json in ~/.runelite itself; move
         // those across before anything can save.
+        ProgressStore progressStore = null;
         try
         {
-            lootStorageManager.setDataDirectory(getPluginDirectory());
+            net.runelite.client.util.Filepath dataDir = getPluginDirectory();
+            lootStorageManager.setDataDirectory(dataDir);
             lootStorageManager.migrateLegacyLootFiles(RuneLite.RUNELITE_DIR);
+            progressStore = new FilepathProgressStore(dataDir);
         }
         catch (Exception e)
         {
@@ -479,6 +486,16 @@ public class RuneAlyticsPlugin extends Plugin
                 (java.util.concurrent.ThreadPoolExecutor) executorService, "shared");
             log.debug("[monitoring] Shared executor queue depth tracking enabled");
         }
+
+        // Quest / diary / combat-achievement progress. Capture follows the config
+        // toggle; uploads additionally need the server "achievements" flag.
+        progressTracker.start(
+                progressStore,
+                config::apiUrl,
+                progressInstallationId(),
+                this::determineGameMode,
+                config::enableAchievementSync,
+                () -> config.enableAchievementSync() && state.isAchievementSyncEnabled());
 
         // Build the root panel on the EDT, then register the nav button.
         buildOnEdt(() -> mainPanel = injector.getInstance(RuneAlyticsPanel.class));
@@ -533,6 +550,22 @@ public class RuneAlyticsPlugin extends Plugin
     }
 
     /**
+     * Random per-install id sent with progress batches (the website's
+     * {@code installation_id}); lets the server order batches from one install.
+     * Contains no account or machine information.
+     */
+    private String progressInstallationId()
+    {
+        String id = configManager.getConfiguration("runealytics", "progressInstallationId");
+        if (id == null || !id.matches("^[A-Za-z0-9_-]{8,64}$"))
+        {
+            id = "rl_" + UUID.randomUUID().toString().replace("-", "");
+            configManager.setConfiguration("runealytics", "progressInstallationId", id);
+        }
+        return id;
+    }
+
+    /**
      * Runs {@code r} on the Swing EDT and waits for it to finish. Runs inline if
      * already on the EDT, otherwise blocks via {@link SwingUtilities#invokeAndWait}.
      * Used so panel (Swing) construction never happens off the EDT.
@@ -556,6 +589,9 @@ public class RuneAlyticsPlugin extends Plugin
 
         // Stop the live-map heartbeat so no pings fire after the plugin is gone.
         stopHeartbeat();
+
+        // Stop progress capture: cancels its scheduled flush and persists pending changes.
+        try { progressTracker.stop(); } catch (Exception e) { log.debug("Progress tracker stop failed: {}", e.getMessage()); }
 
         // Cancel the pending whisperer loot flush.
         if (whispererFlushTask != null)
@@ -1537,6 +1573,9 @@ public class RuneAlyticsPlugin extends Plugin
     {
         gameTickCount++;
 
+        // ── Achievement progress: readiness + deferred, coalesced rescans ─────
+        progressTracker.onGameTick();
+
         // ── Death recovery guard: update region tracking ──────────────────────
         deathRecoveryGuard.onGameTick();
 
@@ -1658,6 +1697,11 @@ public class RuneAlyticsPlugin extends Plugin
 
         if (gs == GameState.LOGIN_SCREEN)
         {
+            // Forget the account for progress capture and flush what it captured.
+            progressTracker.onLogout();
+            // Async work captured before this logout is now stale.
+            state.nextSessionGeneration();
+
             // Flush this account's loot to the server BEFORE marking logged-out,
             // so the sync slot can still be claimed and the live-sync path can't
             // double-upload. Upload-only; runs async so logout isn't delayed.
@@ -1699,11 +1743,17 @@ public class RuneAlyticsPlugin extends Plugin
             return;
         }
 
-        if (gs == GameState.HOPPING) return;
+        if (gs == GameState.HOPPING || gs == GameState.CONNECTION_LOST)
+        {
+            // Same account, but the server re-sends variables after the hop/reconnect.
+            progressTracker.onHopping();
+            return;
+        }
 
         if (gs == GameState.LOGGED_IN)
         {
             state.setLoggedIn(true);
+            progressTracker.onLoggedIn();
             // Resume the XP session clock (runtime + XP/hr) now that we're in-game.
             xpSessionManager.setLoggedIn(true);
 
@@ -1745,6 +1795,7 @@ public class RuneAlyticsPlugin extends Plugin
                 boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
                 boolean xpTracker = flags.getOrDefault(FEATURE_XP_TRACKER, false);
                 state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
+                applyAchievementFlag(flags);
                 if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
                 SwingUtilities.invokeLater(() ->
                         mainPanel.showMainFeatures(true, xpTracker, matchEnabled));
@@ -1763,6 +1814,29 @@ public class RuneAlyticsPlugin extends Plugin
         }
     }
 
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  ACHIEVEMENT PROGRESS EVENTS
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** Invalidation only: the tracker marks progress dirty and rescans later on a GameTick. */
+    @Subscribe
+    public void onVarbitChanged(VarbitChanged event)
+    {
+        progressTracker.onVarChanged();
+    }
+
+    @Subscribe
+    public void onAccountHashChanged(AccountHashChanged event)
+    {
+        progressTracker.onIdentityMaybeChanged();
+    }
+
+    @Subscribe
+    public void onWorldChanged(WorldChanged event)
+    {
+        progressTracker.onIdentityMaybeChanged();
+    }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  PLAYER SPAWNED
@@ -1798,6 +1872,10 @@ public class RuneAlyticsPlugin extends Plugin
     {
         if (!"runealytics".equals(event.getGroup())) return;
         String key = event.getKey();
+        if ("enableAchievementSync".equals(key))
+        {
+            progressTracker.onUploadSettingsChanged();
+        }
         if ("bankPrivacy".equals(key) || "playerVisibility".equals(key))
         {
             SwingUtilities.invokeLater(() ->
@@ -2757,6 +2835,7 @@ public class RuneAlyticsPlugin extends Plugin
         boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
         boolean xpTracker   = flags.getOrDefault(FEATURE_XP_TRACKER, false);
         state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
+        applyAchievementFlag(flags);
 
         // Only touch the UI when a flag actually changed.
         if (lastLootSyncFlag == null || lastLootSyncFlag != lootSync)
@@ -3265,6 +3344,15 @@ public class RuneAlyticsPlugin extends Plugin
         });
     }
 
+    /** Applies the server "achievements" flag and lets the progress tracker react. */
+    private void applyAchievementFlag(Map<String, Boolean> flags)
+    {
+        boolean enabled = flags.getOrDefault(FEATURE_ACHIEVEMENTS, false);
+        boolean changed = state.isAchievementSyncEnabled() != enabled;
+        state.setAchievementSyncEnabled(enabled);
+        if (changed) progressTracker.onUploadSettingsChanged();
+    }
+
     private void applyVerificationState(boolean verified, String rsn, String token,
                                         RuneAlyticsVerificationPanel vp)
     {
@@ -3285,6 +3373,10 @@ public class RuneAlyticsPlugin extends Plugin
             config.authToken("");
             log.debug("Account '{}' is not linked", rsn);
         }
+
+        // Re-bind (or unbind) progress uploads for the logged-in account. Runs on
+        // the client thread because it reads the local player's name.
+        clientThread.invokeLater(progressTracker::onVerificationChanged);
 
         SwingUtilities.invokeLater(() -> {
             RuneAlyticsSettingsPanel sp = injector.getInstance(RuneAlyticsSettingsPanel.class);
@@ -3311,6 +3403,7 @@ public class RuneAlyticsPlugin extends Plugin
                 boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
                 boolean xpTracker = flags.getOrDefault(FEATURE_XP_TRACKER, false);
                 state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
+                applyAchievementFlag(flags);
 
                 // LOGGED_IN fired before verification completed, so its
                 // setSyncEnabled() call was skipped. Apply the loot flag here so
