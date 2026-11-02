@@ -244,6 +244,8 @@ public class RuneAlyticsPlugin extends Plugin
     private Boolean lastLootSyncFlag     = null;
     private Boolean lastMatchEnabledFlag = null;
     private Boolean lastXpTrackerFlag    = null;
+    /** True once the server's "achievements" flag state has been logged this session. */
+    private volatile boolean achievementFlagLogged = false;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  LOOT TRACKING STATE
@@ -1728,6 +1730,7 @@ public class RuneAlyticsPlugin extends Plugin
             lastLootSyncFlag     = null;
             lastMatchEnabledFlag = null;
             lastXpTrackerFlag    = null;
+            achievementFlagLogged = false;
 
             matchmakingManager.reset(); // clear any active match on logout
             clanManager.reset();         // clear clan membership on logout
@@ -3350,7 +3353,13 @@ public class RuneAlyticsPlugin extends Plugin
         boolean enabled = flags.getOrDefault(FEATURE_ACHIEVEMENTS, false);
         boolean changed = state.isAchievementSyncEnabled() != enabled;
         state.setAchievementSyncEnabled(enabled);
-        if (changed) progressTracker.onUploadSettingsChanged();
+        if (changed || !achievementFlagLogged)
+        {
+            achievementFlagLogged = true;
+            log.debug("[Progress] server 'achievements' flag is {}{}", enabled ? "ON" : "OFF",
+                    flags.containsKey(FEATURE_ACHIEVEMENTS) ? "" : " (not sent by this server version)");
+            progressTracker.onUploadSettingsChanged();
+        }
     }
 
     private void applyVerificationState(boolean verified, String rsn, String token,

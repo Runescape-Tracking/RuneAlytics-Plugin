@@ -122,6 +122,7 @@ public class ProgressTracker
 
     // ── Flush scheduling (executor) ──────────────────────────────────────────
     private final AtomicBoolean flushing = new AtomicBoolean(false);
+    private volatile boolean uploadsOffLogged;
     private ScheduledFuture<?> flushFuture;
     private long flushAtMs;
 
@@ -271,6 +272,7 @@ public class ProgressTracker
     /** Upload gate (config or server feature flag) may have changed. */
     public void onUploadSettingsChanged()
     {
+        uploadsOffLogged = false;
         if (running) scheduleFlush(SNAPSHOT_DEBOUNCE_MS);
     }
 
@@ -452,7 +454,11 @@ public class ProgressTracker
 
         ProgressDiffer.Result diff = ProgressDiffer.diff(baseline, obs, catchUpPending, () -> UUID.randomUUID().toString());
         baseline = diff.getBaseline();
-        if (initial) gate.markReady();
+        if (initial)
+        {
+            gate.markReady();
+            logReadySummary(obs, timedOut, diff);
+        }
         if (obs.fullyUsable()) catchUpPending = false;
 
         lastScanTick = tick;
@@ -478,6 +484,37 @@ public class ProgressTracker
             if (snapshot) box.requestSnapshot();
             scheduleFlush(snapshot ? SNAPSHOT_DEBOUNCE_MS : DELTA_DEBOUNCE_MS);
         });
+    }
+
+    /** One line after the first usable scan, so capture is visible in the log even while uploads are off. */
+    private void logReadySummary(ProgressObservation obs, boolean timedOut, ProgressDiffer.Result diff)
+    {
+        int done = 0;
+        int started = 0;
+        int notStarted = 0;
+        for (QuestRecord q : obs.getQuests().values())
+        {
+            if (q.getStatus() == QuestStatus.COMPLETED) done++;
+            else if (q.getStatus() == QuestStatus.IN_PROGRESS) started++;
+            else if (q.getStatus() == QuestStatus.NOT_STARTED) notStarted++;
+        }
+        int diaryComplete = 0;
+        int diaryRewards = 0;
+        for (DiaryRecord d : obs.getDiaries().values())
+        {
+            if (d.getCompleteVar() != 0) diaryComplete++;
+            if (d.getRewardVar() != 0) diaryRewards++;
+        }
+        CombatRecord ca = obs.getCombat();
+        log.debug("[Progress] ready{} — quests ({}): {} completed, {} in progress, {} not started (QP {}); "
+                        + "diaries ({}): {}/{} tiers complete, {} rewards claimed; combat achievements ({}): {} task bits, "
+                        + "{} counted by game, {} points; {} change(s) vs last session; uploads {}",
+                timedOut ? " (after timeout)" : "",
+                obs.getQuestCoverage(), done, started, notStarted, obs.getQuestPoints(),
+                obs.getDiaryCoverage(), diaryComplete, obs.getDiaries().size(), diaryRewards,
+                obs.getCombatCoverage(), ca == null ? 0 : ca.completedBitCount(),
+                ca == null ? 0 : ca.tierCompletedSum(), ca == null ? 0 : ca.getPoints(),
+                diff.getTransitions().size(), uploadEnabled.getAsBoolean() ? "ON" : "OFF");
     }
 
     private static boolean allComplete(ProgressObservation obs)
@@ -592,6 +629,17 @@ public class ProgressTracker
             final boolean upload = running && uploadEnabled.getAsBoolean();
             for (ProgressOutbox box : outboxes.values())
             {
+                if (!upload && box.hasWork() && !uploadsOffLogged)
+                {
+                    uploadsOffLogged = true;
+                    log.debug("[Progress] changes saved locally; uploads are OFF (needs the server 'achievements' "
+                            + "feature flag and 'Enable Achievement Sync'). They will be sent once both are on.");
+                }
+                else if (upload && box.hasWork() && !box.isBound())
+                {
+                    log.debug("[Progress] changes queued for {}; not uploading because that account is not the "
+                            + "verified RuneAlytics account (or verification is pending)", box.getProfileType());
+                }
                 if (upload)
                 {
                     sendDue(box);
