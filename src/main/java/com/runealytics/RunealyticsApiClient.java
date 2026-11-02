@@ -446,6 +446,9 @@ public class RunealyticsApiClient
                         List<MapPlayer> players = parseVisiblePlayers(responseBody);
                         state.setVisibleMapPlayers(players);
                         log.debug("[Heartbeat] {} visible map player(s) received", players.size());
+                        // Server-controlled debug logging; anything other than an
+                        // explicit `"debug_logging": true` means off.
+                        RuneAlyticsLogGate.setVerbose(RuneAlyticsLogGate.parseDebugLogging(gson, responseBody));
                     }
                     else
                     {

@@ -106,7 +106,6 @@ public class ProgressTracker
     private boolean needsGate = true;
     private boolean catchUpPending = true;
     private boolean snapshotRequested;
-    private boolean manualResyncPending;
     private boolean dirty;
     private long firstDirtyTick;
     private long lastVarTick;
@@ -284,7 +283,6 @@ public class ProgressTracker
         clientThread.invokeLater(() ->
         {
             snapshotRequested = true;
-            manualResyncPending = true;
             dirty = true;
         });
     }
@@ -461,11 +459,6 @@ public class ProgressTracker
             gate.markReady();
             logReadySummary(obs, timedOut, diff);
         }
-        if (initial || manualResyncPending)
-        {
-            manualResyncPending = false;
-            logEveryItem(obs);
-        }
         if (obs.fullyUsable()) catchUpPending = false;
 
         lastScanTick = tick;
@@ -584,64 +577,6 @@ public class ProgressTracker
         }
     }
 
-    /**
-     * Lists every quest, diary tier and combat-achievement value that was read,
-     * grouped by status. Runs after the first usable scan of each login and after
-     * a manual "Resync Achievements", never on every scan.
-     */
-    private void logEveryItem(ProgressObservation obs)
-    {
-        log.debug("[Progress] ===== Quests ({}) — {} =====", obs.getQuests().size(), obs.getQuestCoverage());
-        for (QuestStatus status : new QuestStatus[]{QuestStatus.COMPLETED, QuestStatus.IN_PROGRESS,
-                QuestStatus.NOT_STARTED, QuestStatus.UNKNOWN})
-        {
-            for (QuestRecord q : obs.getQuests().values())
-            {
-                if (q.getStatus() == status)
-                {
-                    log.debug("[Progress] Quest  {}  {}  (id {})", padRight(status.name(), 11), q.getName(), q.getId());
-                }
-            }
-        }
-
-        log.debug("[Progress] ===== Achievement diaries ({} tiers) — {} =====", obs.getDiaries().size(), obs.getDiaryCoverage());
-        for (DiaryRecord d : obs.getDiaries().values())
-        {
-            log.debug("[Progress] Diary  {} {}  tasks complete: {}  reward claimed: {}  tasks done: {}",
-                    padRight(d.getRegion(), 10), padRight(d.getTier(), 6),
-                    d.getCompleteVar() != 0 ? "YES" : "no ", d.getRewardVar() != 0 ? "YES" : "no ", d.getTaskCount());
-        }
-
-        CombatRecord ca = obs.getCombat();
-        log.debug("[Progress] ===== Combat achievements — {} =====", obs.getCombatCoverage());
-        if (ca == null) return;
-        log.debug("[Progress] Combat achievements: {} points, {} tasks completed (game counters: {})",
-                ca.getPoints(), ca.completedBitCount(), ca.tierCompletedSum());
-        for (String tier : CombatRecord.TIERS)
-        {
-            log.debug("[Progress] CA tier {}  tasks done: {}  tier status: {}  lamp claimed: {}",
-                    padRight(tier, 11), ca.getTierCompleted().get(tier), ca.getTierStatus().get(tier),
-                    ca.getLampClaimed().get(tier));
-        }
-        for (java.util.Map.Entry<Integer, Long> e : ca.getTaskWords().entrySet())
-        {
-            long word = e.getValue() == null ? 0L : e.getValue();
-            for (int bit = 0; bit < 32; bit++)
-            {
-                if (CombatRecord.isBitSet(word, bit))
-                {
-                    log.debug("[Progress] CA task COMPLETED  (varp {} bit {})", e.getKey(), bit);
-                }
-            }
-        }
-    }
-
-    private static String padRight(String s, int width)
-    {
-        StringBuilder sb = new StringBuilder(s == null ? "" : s);
-        while (sb.length() < width) sb.append(' ');
-        return sb.toString();
-    }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  STORAGE + UPLOAD (executor)

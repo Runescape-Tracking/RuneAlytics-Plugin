@@ -49,17 +49,25 @@ public class ProgressApiClient
         try (Response response = httpClient.newCall(request).execute())
         {
             ProgressOutbox.Outcome outcome = classify(response.code());
-            log.debug("[Progress] POST {} kind={} seq={} bytes={} transitions={} -> HTTP {} ({})",
-                    PROGRESS_PATH, batch.getKind(), batch.getSequence(), batch.getBody().length(),
-                    batch.getTransitionCount(), response.code(), outcome);
             // The website's reply says what it did with the batch (e.g. how many
             // records were applied vs. ignored as stale). It contains no credentials.
-            log.debug("[Progress] server reply (seq={}): {}", batch.getSequence(), replyPreview(response));
+            String reply = replyPreview(response);
+            if (outcome == ProgressOutbox.Outcome.ACK)
+            {
+                log.debug("[Progress] POST {} kind={} seq={} bytes={} transitions={} -> HTTP {}; reply: {}",
+                        PROGRESS_PATH, batch.getKind(), batch.getSequence(), batch.getBody().length(),
+                        batch.getTransitionCount(), response.code(), reply);
+            }
+            else
+            {
+                log.debug("[Progress] upload failed: kind={} seq={} -> HTTP {} ({}); reply: {}",
+                        batch.getKind(), batch.getSequence(), response.code(), outcome, reply);
+            }
             return outcome;
         }
         catch (IOException e)
         {
-            log.debug("[Progress] network failure (seq={}): {}", batch.getSequence(), e.getMessage());
+            log.debug("[Progress] upload failed (network, seq={}): {}", batch.getSequence(), e.getMessage());
             return ProgressOutbox.Outcome.RETRY;
         }
     }

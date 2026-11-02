@@ -451,6 +451,9 @@ public class RuneAlyticsPlugin extends Plugin
     @Override
     protected void startUp() throws Exception
     {
+        // Until the website says otherwise (heartbeat "debug_logging": true), only
+        // critical RuneAlytics log lines (failures/errors) are written.
+        RuneAlyticsLogGate.install();
         log.debug("RuneAlytics starting");
 
         // Loot files live in ~/.runelite/plugin-data/runealytics. If the directory
@@ -633,6 +636,7 @@ public class RuneAlyticsPlugin extends Plugin
         }
 
         state.reset();
+        RuneAlyticsLogGate.uninstall();
     }
 
     private void clearTransientLootState()

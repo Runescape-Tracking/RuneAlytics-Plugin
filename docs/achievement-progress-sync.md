@@ -50,3 +50,12 @@ Envelope: `schema_version, batch_id (uuid), kind (snapshot|delta), session_id (u
 2. **CA counters:** confirm `CA_TOTAL_TASKS_COMPLETED_*` and `CA_POINTS` are populated without opening the interface. Check a task stored at bit 31.
 3. **Login timing:** log the tick of the last `VarbitChanged` after login, and the scan duration (debug log `[Progress] scan #… took … µs`).
 4. **Quest list:** compare the quest list against the cache quest table (`DBTableID.Quest`) to find quests missing from the RuneLite enum.
+
+## Logging (server-controlled)
+
+RuneAlytics log output is gated by `RuneAlyticsLogGate` (a logback TurboFilter scoped to `com.runealytics`, like RuneLite's own `DeduplicationFilter`).
+
+- **Default / field missing:** only critical lines are written: messages with an exception, or text containing fail/error/exception/rejected/unable/could not/timed out/denied/invalid/mismatch.
+- **Heartbeat reply `"debug_logging": true`:** every RuneAlytics debug line is written.
+- Any other value (false, missing, string, number, null, unparseable body) means off and never throws.
+- The value is re-read on every heartbeat (~20 s). Failed or non-2xx heartbeats leave the current setting unchanged.
