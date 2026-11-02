@@ -106,6 +106,7 @@ public class ProgressTracker
     private boolean needsGate = true;
     private boolean catchUpPending = true;
     private boolean snapshotRequested;
+    private boolean manualResyncPending;
     private boolean dirty;
     private long firstDirtyTick;
     private long lastVarTick;
@@ -283,6 +284,7 @@ public class ProgressTracker
         clientThread.invokeLater(() ->
         {
             snapshotRequested = true;
+            manualResyncPending = true;
             dirty = true;
         });
     }
@@ -459,6 +461,11 @@ public class ProgressTracker
             gate.markReady();
             logReadySummary(obs, timedOut, diff);
         }
+        if (initial || manualResyncPending)
+        {
+            manualResyncPending = false;
+            logEveryItem(obs);
+        }
         if (obs.fullyUsable()) catchUpPending = false;
 
         lastScanTick = tick;
@@ -471,10 +478,9 @@ public class ProgressTracker
         if (!diff.hasChanges() && !snapshot && !touch) return;
         lastBaselinePushMs = nowMs;
 
-        if (!diff.getTransitions().isEmpty())
+        for (ProgressTransition t : diff.getTransitions())
         {
-            log.debug("[Progress] {} change(s) detected ({}): {}", diff.getTransitions().size(),
-                    diff.getTransitions().get(0).getDetection(), summarize(diff));
+            log.debug("[Progress] CHANGE ({}): {}", t.getDetection(), describe(t));
         }
 
         final String worldMode = safeWorldMode();
@@ -549,21 +555,91 @@ public class ProgressTracker
         }
     }
 
-    private static String summarize(ProgressDiffer.Result diff)
+    /** Human-readable one-liner for a detected change. */
+    static String describe(ProgressTransition t)
     {
-        StringBuilder sb = new StringBuilder();
-        int n = 0;
-        for (ProgressTransition t : diff.getTransitions())
+        switch (t.getCategory())
         {
-            if (n++ == 5)
-            {
-                sb.append(" …");
-                break;
-            }
-            sb.append(n > 1 ? ", " : "").append(t.getCategory()).append(' ')
-                    .append(t.getName() != null ? t.getName() : t.getKey()).append(' ')
-                    .append(t.getField()).append(' ').append(t.getFrom()).append("→").append(t.getTo());
+            case ProgressTransition.CATEGORY_QUEST:
+                return "quest '" + t.getName() + "' (id " + t.getKey() + "): " + t.getFrom() + " -> " + t.getTo();
+            case ProgressTransition.CATEGORY_DIARY:
+                return "diary " + t.getName() + " " + diaryField(t.getField()) + ": " + t.getFrom() + " -> " + t.getTo();
+            case ProgressTransition.CATEGORY_CA_TASK:
+                return "combat achievement task completed (varp:bit " + t.getKey() + ")";
+            case ProgressTransition.CATEGORY_CA_TIER:
+                return "combat achievement tier " + t.getKey() + " " + t.getField() + ": " + t.getFrom() + " -> " + t.getTo();
+            default:
+                return t.getCategory() + " " + t.getKey() + " " + t.getField() + ": " + t.getFrom() + " -> " + t.getTo();
         }
+    }
+
+    private static String diaryField(String field)
+    {
+        switch (field)
+        {
+            case "complete":   return "tasks complete flag";
+            case "reward":     return "reward claimed flag";
+            case "task_count": return "tasks done";
+            default:           return field;
+        }
+    }
+
+    /**
+     * Lists every quest, diary tier and combat-achievement value that was read,
+     * grouped by status. Runs after the first usable scan of each login and after
+     * a manual "Resync Achievements", never on every scan.
+     */
+    private void logEveryItem(ProgressObservation obs)
+    {
+        log.debug("[Progress] ===== Quests ({}) — {} =====", obs.getQuests().size(), obs.getQuestCoverage());
+        for (QuestStatus status : new QuestStatus[]{QuestStatus.COMPLETED, QuestStatus.IN_PROGRESS,
+                QuestStatus.NOT_STARTED, QuestStatus.UNKNOWN})
+        {
+            for (QuestRecord q : obs.getQuests().values())
+            {
+                if (q.getStatus() == status)
+                {
+                    log.debug("[Progress] Quest  {}  {}  (id {})", padRight(status.name(), 11), q.getName(), q.getId());
+                }
+            }
+        }
+
+        log.debug("[Progress] ===== Achievement diaries ({} tiers) — {} =====", obs.getDiaries().size(), obs.getDiaryCoverage());
+        for (DiaryRecord d : obs.getDiaries().values())
+        {
+            log.debug("[Progress] Diary  {} {}  tasks complete: {}  reward claimed: {}  tasks done: {}",
+                    padRight(d.getRegion(), 10), padRight(d.getTier(), 6),
+                    d.getCompleteVar() != 0 ? "YES" : "no ", d.getRewardVar() != 0 ? "YES" : "no ", d.getTaskCount());
+        }
+
+        CombatRecord ca = obs.getCombat();
+        log.debug("[Progress] ===== Combat achievements — {} =====", obs.getCombatCoverage());
+        if (ca == null) return;
+        log.debug("[Progress] Combat achievements: {} points, {} tasks completed (game counters: {})",
+                ca.getPoints(), ca.completedBitCount(), ca.tierCompletedSum());
+        for (String tier : CombatRecord.TIERS)
+        {
+            log.debug("[Progress] CA tier {}  tasks done: {}  tier status: {}  lamp claimed: {}",
+                    padRight(tier, 11), ca.getTierCompleted().get(tier), ca.getTierStatus().get(tier),
+                    ca.getLampClaimed().get(tier));
+        }
+        for (java.util.Map.Entry<Integer, Long> e : ca.getTaskWords().entrySet())
+        {
+            long word = e.getValue() == null ? 0L : e.getValue();
+            for (int bit = 0; bit < 32; bit++)
+            {
+                if (CombatRecord.isBitSet(word, bit))
+                {
+                    log.debug("[Progress] CA task COMPLETED  (varp {} bit {})", e.getKey(), bit);
+                }
+            }
+        }
+    }
+
+    private static String padRight(String s, int width)
+    {
+        StringBuilder sb = new StringBuilder(s == null ? "" : s);
+        while (sb.length() < width) sb.append(' ');
         return sb.toString();
     }
 

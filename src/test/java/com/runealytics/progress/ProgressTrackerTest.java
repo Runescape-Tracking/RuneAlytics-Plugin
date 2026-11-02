@@ -333,4 +333,18 @@ public class ProgressTrackerTest
         assertEquals("sequence continues from the persisted file", 2, snap.get("sequence").getAsLong());
         assertEquals(0, snap.getAsJsonArray("transitions").size());
     }
+
+    @Test
+    public void describesChangesReadably()
+    {
+        assertEquals("quest 'Dragon Slayer I' (id 33): IN_PROGRESS -> COMPLETED",
+                ProgressTracker.describe(new ProgressTransition("t", ProgressTransition.CATEGORY_QUEST, "33",
+                        "Dragon Slayer I", "state", "IN_PROGRESS", "COMPLETED", 1L, "live", null)));
+        assertEquals("diary VARROCK EASY reward claimed flag: 0 -> 1",
+                ProgressTracker.describe(new ProgressTransition("t", ProgressTransition.CATEGORY_DIARY, "VARROCK:EASY",
+                        "VARROCK EASY", "reward", "0", "1", 1L, "live", null)));
+        assertEquals("combat achievement task completed (varp:bit 3116:31)",
+                ProgressTracker.describe(new ProgressTransition("t", ProgressTransition.CATEGORY_CA_TASK, "3116:31",
+                        null, "completed", "0", "1", 1L, "live", null)));
+    }
 }

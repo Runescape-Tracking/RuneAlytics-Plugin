@@ -52,12 +52,30 @@ public class ProgressApiClient
             log.debug("[Progress] POST {} kind={} seq={} bytes={} transitions={} -> HTTP {} ({})",
                     PROGRESS_PATH, batch.getKind(), batch.getSequence(), batch.getBody().length(),
                     batch.getTransitionCount(), response.code(), outcome);
+            // The website's reply says what it did with the batch (e.g. how many
+            // records were applied vs. ignored as stale). It contains no credentials.
+            log.debug("[Progress] server reply (seq={}): {}", batch.getSequence(), replyPreview(response));
             return outcome;
         }
         catch (IOException e)
         {
             log.debug("[Progress] network failure (seq={}): {}", batch.getSequence(), e.getMessage());
             return ProgressOutbox.Outcome.RETRY;
+        }
+    }
+
+    /** First 2,000 characters of the response body, on one line. */
+    static String replyPreview(Response response)
+    {
+        try
+        {
+            String body = response.body() != null ? response.body().string() : "";
+            body = body.replace('\n', ' ').replace('\r', ' ');
+            return body.length() > 2_000 ? body.substring(0, 2_000) + "…" : body;
+        }
+        catch (IOException | RuntimeException e)
+        {
+            return "<unreadable: " + e.getMessage() + ">";
         }
     }
 
