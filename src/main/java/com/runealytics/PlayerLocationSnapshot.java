@@ -43,6 +43,14 @@ public final class PlayerLocationSnapshot
     @SerializedName("instanced")  private boolean instanced;
     @SerializedName("world")      private int     world;
     @SerializedName("timestamp")  private long    timestamp;
+    /** Instances only: what the player is doing there ("Cerberus", "Theatre of Blood: Xarpus"); may be null. */
+    @SerializedName("instance_name")     private String  instanceName;
+    /**
+     * Instances only: {@code true} when the coordinates are where the player entered
+     * the instance (e.g. the Cerberus winch), {@code false} when they are the
+     * instance's template position on the world map.
+     */
+    @SerializedName("instance_entrance") private boolean instanceEntrance;
 
     /** Required by Gson when deserializing persisted kill records. */
     public PlayerLocationSnapshot() {}
@@ -67,6 +75,26 @@ public final class PlayerLocationSnapshot
         this.instanced = instanced;
         this.world     = world;
         this.timestamp = timestamp;
+    }
+
+    /**
+     * A location for a player inside an instance: {@code at} is the entrance (or the
+     * template position), never the meaningless instance coordinates.
+     * {@code area_name} carries the instance name too, so older website code that
+     * only reads {@code area_name} still shows it.
+     */
+    public static PlayerLocationSnapshot forInstance(WorldPoint at, String instanceName, boolean entrance,
+                                                     int world, long timestamp)
+    {
+        PlayerLocationSnapshot s = new PlayerLocationSnapshot(
+                at.getPlane(), at.getX(), at.getY(),
+                at.getRegionID(), at.getRegionX(), at.getRegionY(),
+                at.getX() >> 3, at.getY() >> 3,
+                null, instanceName,
+                true, world, timestamp);
+        s.instanceName = instanceName;
+        s.instanceEntrance = entrance;
+        return s;
     }
 
     /**
@@ -177,6 +205,11 @@ public final class PlayerLocationSnapshot
         o.addProperty("instanced",  instanced);
         o.addProperty("world",      world);
         o.addProperty("timestamp",  timestamp);
+        if (instanced)
+        {
+            o.addProperty("instance_name", instanceName);            // null -> JSON null
+            o.addProperty("location_source", instanceEntrance ? "instance_entrance" : "instance_template");
+        }
         return o;
     }
 
@@ -189,6 +222,7 @@ public final class PlayerLocationSnapshot
                 + ", region=" + regionId
                 + ", chunk=(" + chunkX + "," + chunkY + ")"
                 + ", instanced=" + instanced
+                + (instanced ? ", instance=" + instanceName + (instanceEntrance ? " (entrance)" : " (template)") : "")
                 + ", ts=" + timestamp + "}";
     }
 }

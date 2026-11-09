@@ -369,20 +369,24 @@ public class LootTrackerManager
     //  CONSTRUCTOR
     // ═════════════════════════════════════════════════════════════════════════
 
-    /** Online Status to apply to captured locations (the plugin points this at the Wilderness-trip-aware value). */
-    private volatile java.util.function.Supplier<PrivacySetting> visibilitySource;
+    /**
+     * How the plugin captures a location (privacy decoy, Wilderness-trip override and
+     * instance entrance applied). Falls back to a plain privacy-aware capture.
+     */
+    private volatile java.util.function.Supplier<PlayerLocationSnapshot> locationSource;
 
-    /** Uses {@code source} instead of the saved Online Status when capturing kill locations. */
-    public void setVisibilitySource(java.util.function.Supplier<PrivacySetting> source)
+    /** Uses {@code source} to capture kill locations (client thread). */
+    public void setLocationSource(java.util.function.Supplier<PlayerLocationSnapshot> source)
     {
-        this.visibilitySource = source;
+        this.locationSource = source;
     }
 
-    private PrivacySetting currentVisibility()
+    private PlayerLocationSnapshot captureLocation()
     {
-        java.util.function.Supplier<PrivacySetting> src = visibilitySource;
-        PrivacySetting v = src != null ? src.get() : null;
-        return v != null ? v : config.playerVisibility();
+        java.util.function.Supplier<PlayerLocationSnapshot> src = locationSource;
+        return src != null
+                ? src.get()
+                : PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
     }
 
     @Inject
@@ -1480,7 +1484,7 @@ public class LootTrackerManager
         // 3. Use pre-captured location if available; otherwise capture on current thread.
         PlayerLocationSnapshot location = capturedLocation != null
                 ? capturedLocation
-                : PlayerLocationSnapshot.captureRespectingPrivacy(client, currentVisibility());
+                : captureLocation();
 
         // 4. Create the storage-compatible record
         LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();

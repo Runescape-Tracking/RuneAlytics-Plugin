@@ -189,6 +189,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private GroundItemAttributor     groundItemAttributor;
     @Inject private ProgressTracker          progressTracker;
     @Inject private PrivacyWarningManager    privacyWarnings;
+    @Inject private InstanceLocationTracker  instanceLocations;
     @Inject private PrivacyEyeOverlay        privacyEyeOverlay;
     @Inject private PrivacyStatusOverlay     privacyStatusOverlay;
     @Inject private PrivacyOverlayMouseListener privacyOverlayMouse;
@@ -529,7 +530,7 @@ public class RuneAlyticsPlugin extends Plugin
             if (navButton != null) clientToolbar.openPanel(navButton);
             if (mainPanel != null) mainPanel.selectTab("Settings");
         }, this::syncPrivacySettings);
-        lootManager.setVisibilitySource(privacyWarnings::effectiveVisibility);
+        lootManager.setLocationSource(this::captureLocation);
         overlayManager.add(privacyEyeOverlay);
         overlayManager.add(privacyStatusOverlay);
         mouseManager.registerMouseListener(privacyOverlayMouse);
@@ -793,7 +794,7 @@ public class RuneAlyticsPlugin extends Plugin
         final int world = client.getWorld();
         final List<ItemStack> itemsFinal = new ArrayList<>(items);
         final PlayerLocationSnapshot location =
-                PlayerLocationSnapshot.captureRespectingPrivacy(client, privacyWarnings.effectiveVisibility());
+                captureLocation();
 
         // Persist off the client thread. ItemManager lookups are marshalled
         // back onto the client thread inside processNpcLootDeferred.
@@ -1615,6 +1616,9 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Public Online Status warnings (one varbit read) ──────────────────
         privacyWarnings.onGameTick();
 
+        // ── Remember the spot outside instances (shown while inside one) ──────
+        instanceLocations.onGameTick();
+
         // ── Death recovery guard: update region tracking ──────────────────────
         deathRecoveryGuard.onGameTick();
 
@@ -1739,6 +1743,7 @@ public class RuneAlyticsPlugin extends Plugin
             // Forget the account for progress capture and flush what it captured.
             progressTracker.onLogout();
             privacyWarnings.onLoggedOut();
+            instanceLocations.reset();
             // Async work captured before this logout is now stale.
             state.nextSessionGeneration();
 
@@ -1942,6 +1947,20 @@ public class RuneAlyticsPlugin extends Plugin
         }
     }
 
+    /**
+     * The location attached to uploads (heartbeat, XP batch, kill records). Client thread.
+     * <ul>
+     *   <li>Private (saved, or a "Hide for this trip" override) → the privacy decoy.</li>
+     *   <li>Inside an instance → where the player entered it (e.g. the Cerberus
+     *       entrance) plus the instance name, not the meaningless instance coordinates.</li>
+     * </ul>
+     */
+    private PlayerLocationSnapshot captureLocation()
+    {
+        return instanceLocations.resolve(
+                PlayerLocationSnapshot.captureRespectingPrivacy(client, privacyWarnings.effectiveVisibility()));
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     //  PRIVACY SYNC
     // ═════════════════════════════════════════════════════════════════════════
@@ -2068,8 +2087,7 @@ public class RuneAlyticsPlugin extends Plugin
 
             // Private players' real coordinates are replaced with a decoy here,
             // before the payload leaves the client thread.
-            final PlayerLocationSnapshot location =
-                    PlayerLocationSnapshot.captureRespectingPrivacy(client, visibility);
+            final PlayerLocationSnapshot location = captureLocation();
 
             final List<String> friends = readNames(client.getFriendContainer());
             final List<String> ignores = readNames(client.getIgnoreContainer());
@@ -2183,7 +2201,7 @@ public class RuneAlyticsPlugin extends Plugin
         // captureRespectingPrivacy keeps a private player's real coordinates out
         // of state.currentLocation.
         state.setCurrentLocation(
-                PlayerLocationSnapshot.captureRespectingPrivacy(client, privacyWarnings.effectiveVisibility()));
+                captureLocation());
 
         // ── Delegate XP batching to XpTrackerManager ──────────────────────────
         // The manager opens a 30-second window on the first call and accumulates
