@@ -369,6 +369,22 @@ public class LootTrackerManager
     //  CONSTRUCTOR
     // ═════════════════════════════════════════════════════════════════════════
 
+    /** Online Status to apply to captured locations (the plugin points this at the Wilderness-trip-aware value). */
+    private volatile java.util.function.Supplier<PrivacySetting> visibilitySource;
+
+    /** Uses {@code source} instead of the saved Online Status when capturing kill locations. */
+    public void setVisibilitySource(java.util.function.Supplier<PrivacySetting> source)
+    {
+        this.visibilitySource = source;
+    }
+
+    private PrivacySetting currentVisibility()
+    {
+        java.util.function.Supplier<PrivacySetting> src = visibilitySource;
+        PrivacySetting v = src != null ? src.get() : null;
+        return v != null ? v : config.playerVisibility();
+    }
+
     @Inject
     public LootTrackerManager(
             Client                   client,
@@ -1464,7 +1480,7 @@ public class LootTrackerManager
         // 3. Use pre-captured location if available; otherwise capture on current thread.
         PlayerLocationSnapshot location = capturedLocation != null
                 ? capturedLocation
-                : PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
+                : PlayerLocationSnapshot.captureRespectingPrivacy(client, currentVisibility());
 
         // 4. Create the storage-compatible record
         LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();

@@ -245,4 +245,26 @@ public class RunealyticsApiClientTest
         assertEquals(1, state.getVisibleMapPlayers().size());
         assertEquals("Ally", state.getVisibleMapPlayers().get(0).getUsername());
     }
+
+    // ── privacy sync result (drives the Applying… / Hidden / failed states) ──
+
+    @Test
+    public void syncPrivacySettings_reportsSuccessOnlyFor2xx() throws Exception
+    {
+        server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"status\":\"ok\"}"));
+        server.enqueue(new MockResponse().setResponseCode(500).setBody("{}"));
+
+        java.util.concurrent.LinkedBlockingQueue<Boolean> results = new java.util.concurrent.LinkedBlockingQueue<>();
+        client.syncPrivacySettings(PrivacySetting.PRIVATE, PrivacySetting.PRIVATE, results::add);
+        assertEquals(Boolean.TRUE, results.poll(3, TimeUnit.SECONDS));
+        JsonObject sent = new Gson().fromJson(awaitRequest().getBody().readUtf8(), JsonObject.class);
+        assertEquals("private", sent.get("player_visibility").getAsString());
+
+        client.syncPrivacySettings(PrivacySetting.PRIVATE, PrivacySetting.PRIVATE, results::add);
+        assertEquals(Boolean.FALSE, results.poll(3, TimeUnit.SECONDS));
+
+        state.setVerificationCode(null);
+        client.syncPrivacySettings(PrivacySetting.PRIVATE, PrivacySetting.PRIVATE, results::add);
+        assertEquals("not linked: reported as not confirmed", Boolean.FALSE, results.poll(1, TimeUnit.SECONDS));
+    }
 }

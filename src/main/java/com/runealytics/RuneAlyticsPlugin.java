@@ -188,6 +188,11 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private DoomEncounterTracker     doomEncounterTracker;
     @Inject private GroundItemAttributor     groundItemAttributor;
     @Inject private ProgressTracker          progressTracker;
+    @Inject private PrivacyWarningManager    privacyWarnings;
+    @Inject private PrivacyEyeOverlay        privacyEyeOverlay;
+    @Inject private PrivacyStatusOverlay     privacyStatusOverlay;
+    @Inject private PrivacyOverlayMouseListener privacyOverlayMouse;
+    @Inject private net.runelite.client.input.MouseManager mouseManager;
 
     // ── Sync coordination ─────────────────────────────────────────────────────
     /** Coordinates one-at-a-time sync operations with proper coalescing. */
@@ -515,6 +520,19 @@ public class RuneAlyticsPlugin extends Plugin
         clientToolbar.addNavigation(navButton);
         overlayManager.add(matchmakingOverlay);
         overlayManager.add(liveMapOverlay);
+
+        // Public Online Status warnings: eye above the player, chat line, sidebar
+        // box, and the top-right wilderness warning / eye.
+        // Wilderness-trip-aware visibility (heartbeat, kill/XP locations, privacy sync).
+        privacyWarnings.start(() ->
+        {
+            if (navButton != null) clientToolbar.openPanel(navButton);
+            if (mainPanel != null) mainPanel.selectTab("Settings");
+        }, this::syncPrivacySettings);
+        lootManager.setVisibilitySource(privacyWarnings::effectiveVisibility);
+        overlayManager.add(privacyEyeOverlay);
+        overlayManager.add(privacyStatusOverlay);
+        mouseManager.registerMouseListener(privacyOverlayMouse);
         log.debug("RuneAlytics nav button registered");
 
         // Construct the heavy sub-panels on the EDT.
@@ -550,6 +568,7 @@ public class RuneAlyticsPlugin extends Plugin
                 mainPanel.addTab("Advisor",      FEATURE_ADVISOR,      advisorPanel);
                 advisorPanel.setOpenSettings(() -> mainPanel.selectTab("Settings"));
                 mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
+                mainPanel.setTopBanner(injector.getInstance(PrivacyWarningBanner.class));
                 log.debug("RuneAlytics tabs populated");
             }
             catch (Exception ex)
@@ -630,6 +649,10 @@ public class RuneAlyticsPlugin extends Plugin
         try { matchmakingManager.reset();         } catch (Exception e) { log.debug("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
         try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.debug("Matchmaking overlay removal failed: {}", e.getMessage()); }
         try { overlayManager.remove(liveMapOverlay);     } catch (Exception e) { log.debug("Live-map overlay removal failed: {}", e.getMessage()); }
+        try { overlayManager.remove(privacyEyeOverlay);    } catch (Exception e) { log.debug("Privacy eye overlay removal failed: {}", e.getMessage()); }
+        try { mouseManager.unregisterMouseListener(privacyOverlayMouse); } catch (Exception e) { log.debug("Privacy mouse listener removal failed: {}", e.getMessage()); }
+        try { overlayManager.remove(privacyStatusOverlay); } catch (Exception e) { log.debug("Privacy status overlay removal failed: {}", e.getMessage()); }
+        try { privacyWarnings.stop(); } catch (Exception e) { log.debug("Privacy warnings stop failed: {}", e.getMessage()); }
 
         // Shutdown the dedicated sync executor.
         try { SyncExecutorFactory.shutdown(syncExecutor); } catch (Exception e) { log.debug("Sync executor shutdown failed: {}", e.getMessage()); }
@@ -770,7 +793,7 @@ public class RuneAlyticsPlugin extends Plugin
         final int world = client.getWorld();
         final List<ItemStack> itemsFinal = new ArrayList<>(items);
         final PlayerLocationSnapshot location =
-                PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
+                PlayerLocationSnapshot.captureRespectingPrivacy(client, privacyWarnings.effectiveVisibility());
 
         // Persist off the client thread. ItemManager lookups are marshalled
         // back onto the client thread inside processNpcLootDeferred.
@@ -1589,6 +1612,9 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Achievement progress: readiness + deferred, coalesced rescans ─────
         progressTracker.onGameTick();
 
+        // ── Public Online Status warnings (one varbit read) ──────────────────
+        privacyWarnings.onGameTick();
+
         // ── Death recovery guard: update region tracking ──────────────────────
         deathRecoveryGuard.onGameTick();
 
@@ -1712,6 +1738,7 @@ public class RuneAlyticsPlugin extends Plugin
         {
             // Forget the account for progress capture and flush what it captured.
             progressTracker.onLogout();
+            privacyWarnings.onLoggedOut();
             // Async work captured before this logout is now stale.
             state.nextSessionGeneration();
 
@@ -1769,6 +1796,7 @@ public class RuneAlyticsPlugin extends Plugin
         {
             state.setLoggedIn(true);
             progressTracker.onLoggedIn();
+            privacyWarnings.onLoggedIn();
             // Resume the XP session clock (runtime + XP/hr) now that we're in-game.
             xpSessionManager.setLoggedIn(true);
 
@@ -1889,9 +1917,20 @@ public class RuneAlyticsPlugin extends Plugin
     {
         if (!"runealytics".equals(event.getGroup())) return;
         String key = event.getKey();
+        if ("playerVisibility".equals(key) || "showPublicStatusWarnings".equals(key)
+                || "privacyWarningDismissedAccounts".equals(key))
+        {
+            privacyWarnings.reloadConfig();
+        }
         if ("enableAchievementSync".equals(key))
         {
             progressTracker.onUploadSettingsChanged();
+        }
+        if ("showPublicStatusWarnings".equals(key) || "privacyWarningDismissedAccounts".equals(key))
+        {
+            // Settings → Privacy shows the toggle and the Reset button's enabled state.
+            SwingUtilities.invokeLater(() ->
+                    injector.getInstance(RuneAlyticsSettingsPanel.class).refreshPrivacySettings());
         }
         if ("bankPrivacy".equals(key) || "playerVisibility".equals(key))
         {
@@ -1914,10 +1953,18 @@ public class RuneAlyticsPlugin extends Plugin
      */
     private void syncPrivacySettings()
     {
-        if (!state.isVerified()) return;
+        // Saved Online Status, or Private during a "Hide for this trip" override.
+        final PrivacySetting player = privacyWarnings.effectiveVisibility();
+        final PrivacyWarningManager.SyncTicket ticket = privacyWarnings.syncStarted(player);
+        if (!state.isVerified())
+        {
+            // Not linked: nothing of this account is on the website to hide.
+            privacyWarnings.syncFinished(ticket, true);
+            return;
+        }
         final PrivacySetting bank   = config.bankPrivacy();
-        final PrivacySetting player = config.playerVisibility();
-        executorService.execute(() -> apiClient.syncPrivacySettings(bank, player));
+        executorService.execute(() -> apiClient.syncPrivacySettings(bank, player,
+                ok -> privacyWarnings.syncFinished(ticket, ok)));
     }
 
     /**
@@ -2015,7 +2062,8 @@ public class RuneAlyticsPlugin extends Plugin
         {
             if (client.getGameState() != GameState.LOGGED_IN) return;
 
-            final PrivacySetting visibility    = config.playerVisibility();
+            // Saved Online Status, or Private during a "Hide for this trip" Wilderness override.
+            final PrivacySetting visibility    = privacyWarnings.effectiveVisibility();
             final PrivacySetting gearVisibility = config.bankPrivacy();
 
             // Private players' real coordinates are replaced with a decoy here,
@@ -2135,7 +2183,7 @@ public class RuneAlyticsPlugin extends Plugin
         // captureRespectingPrivacy keeps a private player's real coordinates out
         // of state.currentLocation.
         state.setCurrentLocation(
-                PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility()));
+                PlayerLocationSnapshot.captureRespectingPrivacy(client, privacyWarnings.effectiveVisibility()));
 
         // ── Delegate XP batching to XpTrackerManager ──────────────────────────
         // The manager opens a 30-second window on the first call and accumulates

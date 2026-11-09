@@ -478,6 +478,14 @@ public class RuneAlyticsPanel extends PluginPanel
         return tabbedPane.getTitleAt(idx);
     }
 
+    /** Puts {@code banner} above the tabs (e.g. the public Online Status warning). EDT. */
+    public void setTopBanner(JComponent banner)
+    {
+        add(banner, BorderLayout.NORTH);
+        revalidate();
+        repaint();
+    }
+
     /** Labels of the tabs currently shown, in order (tests). */
     List<String> visibleTabLabels()
     {

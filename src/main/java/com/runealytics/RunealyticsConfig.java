@@ -401,11 +401,55 @@ public interface RunealyticsConfig extends Config
     void playerVisibility(PrivacySetting value);
 
     @ConfigItem(
+            keyName = "showPublicStatusWarnings",
+            name = "Show public status warnings",
+            description = "While your Online Status is Public: an eye above your character, a chat reminder, "
+                    + "a sidebar warning and a Wilderness warning. Turning this off does not change your Online Status.",
+            section = privacySection,
+            position = 2
+    )
+    default boolean showPublicStatusWarnings()
+    {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "showPublicStatusWarnings",
+            name = "Show public status warnings",
+            description = "While your Online Status is Public: an eye above your character, a chat reminder, "
+                    + "a sidebar warning and a Wilderness warning. Turning this off does not change your Online Status.",
+            section = privacySection,
+            position = 2
+    )
+    void showPublicStatusWarnings(boolean value);
+
+    @ConfigItem(
+            keyName = "privacyWarningDismissedAccounts",
+            name = "Remembered public-status dismissals",
+            description = "Accounts that ticked \"Remember dismissal\" on the public Online Status warning.",
+            section = privacySection,
+            hidden = true
+    )
+    default String privacyWarningDismissedAccounts()
+    {
+        return "";
+    }
+
+    @ConfigItem(
+            keyName = "privacyWarningDismissedAccounts",
+            name = "Remembered public-status dismissals",
+            description = "Accounts that ticked \"Remember dismissal\" on the public Online Status warning.",
+            section = privacySection,
+            hidden = true
+    )
+    void privacyWarningDismissedAccounts(String value);
+
+    @ConfigItem(
             keyName = "showMapPlayers",
             name = "Show Tracked Players",
             description = "Draw players shared with you by RuneAlytics on the minimap and game scene",
             section = privacySection,
-            position = 2
+            position = 3
     )
     default boolean showMapPlayers()
     {

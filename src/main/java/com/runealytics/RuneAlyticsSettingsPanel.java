@@ -62,6 +62,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private JLabel     connectionTitleLabel;
     private JLabel     connectionBodyLabel;
 
+    private final PrivacyWarningManager privacyWarnings;
+
     @Inject
     public RuneAlyticsSettingsPanel(
             RuneAlyticsVerificationPanel verificationPanel,
@@ -70,7 +72,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
             RunealyticsApiClient         apiClient,
             ScheduledExecutorService     executorService,
             Client                       client,
-            ProgressTracker              progressTracker
+            ProgressTracker              progressTracker,
+            PrivacyWarningManager        privacyWarnings
     )
     {
         this.verificationPanel = verificationPanel;
@@ -80,6 +83,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         this.executorService   = executorService;
         this.client            = client;
         this.progressTracker   = progressTracker;
+        this.privacyWarnings   = privacyWarnings;
 
         setLayout(new BorderLayout());
         setBackground(PANEL_BG);
@@ -217,7 +221,81 @@ public class RuneAlyticsSettingsPanel extends JPanel
         visCard.add(buildPillToggle(config.playerVisibility(), v -> config.playerVisibility(v)));
         p.add(visCard);
 
+        p.add(vSpace(10));
+        p.add(buildWarningsCard());
+
         return p;
+    }
+
+    /**
+     * "Show public status warnings" (eye above the player, chat line, sidebar box,
+     * Wilderness panel) and "Reset remembered dismissal". Independent of Online Status.
+     */
+    private JPanel buildWarningsCard()
+    {
+        JPanel card = settingsCard();
+
+        JLabel title = new JLabel("Show public status warnings");
+        title.setFont(cf(Font.BOLD, 13f));
+        title.setForeground(Color.WHITE);
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.add(title);
+        card.add(vSpace(8));
+        card.add(compactLabel(
+                "While your Online Status is Public: an eye above your character, a chat reminder, "
+                        + "a warning box here and a Wilderness warning. Turning this off does not change your Online Status.",
+                BODY_TEXT,
+                cf(Font.PLAIN, 12f)
+        ));
+        card.add(vSpace(10));
+
+        JPanel row = new JPanel(new GridLayout(1, 2, 5, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setPreferredSize(new Dimension(1, 34));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        ButtonGroup group = new ButtonGroup();
+        JToggleButton on = new JToggleButton("On");
+        JToggleButton off = new JToggleButton("Off");
+        boolean enabled = config.showPublicStatusWarnings();
+        for (JToggleButton b : new JToggleButton[]{on, off})
+        {
+            b.setFont(cf(Font.PLAIN, 12f));
+            b.setFocusPainted(false);
+            b.setOpaque(true);
+            b.setContentAreaFilled(true);
+            b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            b.setMargin(new Insets(0, 0, 0, 0));
+            group.add(b);
+            row.add(b);
+        }
+        on.setSelected(enabled);
+        off.setSelected(!enabled);
+        applyPillStyle(on);
+        applyPillStyle(off);
+        on.addItemListener(e ->
+        {
+            applyPillStyle(on);
+            applyPillStyle(off);
+            if (on.isSelected() && !config.showPublicStatusWarnings()) config.showPublicStatusWarnings(true);
+            if (off.isSelected() && config.showPublicStatusWarnings()) config.showPublicStatusWarnings(false);
+        });
+        card.add(row);
+        card.add(vSpace(10));
+
+        JButton reset = buildTealButton("Reset remembered dismissal");
+        boolean any = privacyWarnings != null && privacyWarnings.hasRememberedDismissals();
+        reset.setEnabled(any);
+        reset.setToolTipText(any
+                ? "Show the public status warning box again on every account that ticked \"Remember dismissal\""
+                : "No account has a remembered dismissal");
+        reset.addActionListener(e ->
+        {
+            if (privacyWarnings != null) privacyWarnings.resetRememberedDismissals();
+            reset.setEnabled(false);
+        });
+        card.add(reset);
+        return card;
     }
 
     private JPanel buildPillToggle(PrivacySetting current, Consumer<PrivacySetting> onChange)
