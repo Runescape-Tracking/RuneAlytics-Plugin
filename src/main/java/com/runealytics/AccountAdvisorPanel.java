@@ -286,16 +286,12 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         row.setOpaque(false);
         row.setAlignmentX(LEFT_ALIGNMENT);
 
-        JLabel icon = new JLabel("◆");
-        icon.setFont(new Font("Dialog", Font.PLAIN, 14));
-        icon.setForeground(GOLD);
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         left.setOpaque(false);
         accountName.setFont(BOLD12);
         accountName.setForeground(TEXT);
         accountName.setToolTipText("The account logged in to RuneLite — advice is always for this account");
         verifiedBadge.setFont(META);
-        left.add(icon);
         left.add(accountName);
         left.add(verifiedBadge);
 
@@ -407,8 +403,9 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             if (now == null)
             {
                 clearForAccount(null);
-                accountName.setText(state.isLoggedIn() && state.getVerifiedUsername() == null ? "Not linked" : "Not logged in");
-                verifiedBadge.setText(state.isLoggedIn() ? "  NOT VERIFIED" : "");
+                // Same wording as the XP tracker; a logged-in but unlinked account is flagged in red.
+                accountName.setText(state.isLoggedIn() ? "Account: not linked" : "Not logged in");
+                verifiedBadge.setText(state.isLoggedIn() ? "NOT VERIFIED" : "");
                 verifiedBadge.setForeground(ERROR);
                 setControls(false);
                 showEmpty(state.isLoggedIn() ? "Verify this account on the Settings tab to get recommendations."
@@ -416,9 +413,10 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
                 setFooter(MUTED, state.isLoggedIn() ? "Not verified" : "Not logged in");
                 return;
             }
-            accountName.setText(state.getVerifiedUsername());
-            verifiedBadge.setText("  VERIFIED");
-            verifiedBadge.setForeground(GREEN);
+            // The XP tracker's account line: "Account:" in the normal text colour, the name in green.
+            accountName.setText("<html>Account: <font color='#69dc8c'>"
+                    + RuneAlyticsXpTrackerPanel.prettyAccount(state.getVerifiedUsername().toLowerCase()) + "</font></html>");
+            verifiedBadge.setText("");
             if (!now.equals(account))
             {
                 clearForAccount(now);      // a different account: drop everything shown for the old one
@@ -1786,6 +1784,36 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         return b;
     }
 
+    /**
+     * Padding that puts the button's text exactly in the vertical middle.
+     *
+     * <p>Swing centres the text's whole line box (ascent + descent + leading), and
+     * with Calibri the leading and descent sit below the letters, so the visible
+     * text ends up above centre and the bottom gap looks larger. This moves the
+     * padding so the middle of the capital letters lands on the middle of the
+     * button, using the font's real metrics on this machine.</p>
+     *
+     * @param vertical   the padding each side would have with perfectly centred text
+     * @param horizontal left/right padding
+     */
+    static EmptyBorder centredPadding(JComponent c, int vertical, int horizontal)
+    {
+        int shift = textCentreShift(c.getFont(), c.getFontMetrics(c.getFont()));
+        int top = Math.max(0, vertical + shift);
+        int bottom = Math.max(0, vertical - shift);
+        return new EmptyBorder(top, horizontal, bottom, horizontal);
+    }
+
+    /** Pixels the text must move down so its capital letters are centred in its line box. */
+    static int textCentreShift(Font font, FontMetrics fm)
+    {
+        if (font == null || fm == null) return 0;
+        double capHeight = font.createGlyphVector(fm.getFontRenderContext(), "H").getVisualBounds().getHeight();
+        double lineCentre = fm.getHeight() / 2.0;                  // middle of the box Swing centres
+        double capsCentre = fm.getAscent() - capHeight / 2.0;      // middle of the capitals, from the top
+        return (int) Math.round(lineCentre - capsCentre);
+    }
+
     /** Applies the filled colours for {@code accent} (see {@link #actionButton}). */
     private static void styleButton(JButton b, Color accent)
     {
@@ -1807,13 +1835,14 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             border = BTN_BORDER;
         }
         b.setBackground(bg);
-        b.setBorder(new CompoundBorder(new LineBorder(border, 1, true), new EmptyBorder(5, 8, 5, 8)));
+        b.setBorder(new CompoundBorder(new LineBorder(border, 1, true), centredPadding(b, 5, 8)));
     }
 
     /** Same button, but its symbol label is drawn with the Dialog font (see {@link #SYMBOL}). */
     private static JButton symbolButton(JButton b)
     {
         b.setFont(new Font("Dialog", Font.PLAIN, 14));
+        styleButton(b, BTN_BORDER);     // re-centre the padding for the new font
         return b;
     }
 
@@ -1846,7 +1875,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     {
         b.setBackground(active ? new Color(30, 70, 40) : BTN_BG);
         b.setForeground(Color.WHITE);
-        b.setBorder(new CompoundBorder(new LineBorder(active ? GREEN.darker() : BTN_BORDER, 1, true), new EmptyBorder(3, 8, 3, 8)));
+        b.setBorder(new CompoundBorder(new LineBorder(active ? GREEN.darker() : BTN_BORDER, 1, true), centredPadding(b, 3, 8)));
     }
 
     private static JScrollPane scroll(JComponent content)

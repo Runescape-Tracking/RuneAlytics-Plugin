@@ -497,21 +497,54 @@ public class RuneAlyticsSettingsPanel extends JPanel
         p.add(vSpace(10));
 
         JButton resyncBtn = buildTealButton("Resync Achievements");
+        resyncBtn.setToolTipText("Re-read and resend all quest, diary and combat achievement progress (once every 5 minutes)");
         resyncBtn.addActionListener(e ->
         {
-            progressTracker.requestResync();
-            resyncBtn.setEnabled(false);
-            resyncBtn.setText("Resync queued");
-            javax.swing.Timer reset = new javax.swing.Timer(10_000, ev ->
+            if (progressTracker.requestResync())
             {
-                resyncBtn.setText("Resync Achievements");
-                resyncBtn.setEnabled(true);
-            });
-            reset.setRepeats(false);
-            reset.start();
+                showResyncCooldown(resyncBtn);
+            }
         });
+        // The Settings page is rebuilt often; pick up a cooldown that is still running.
+        showResyncCooldown(resyncBtn);
         p.add(resyncBtn);
         return p;
+    }
+
+    /**
+     * While the tracker's 5-minute resync cooldown runs, disables the button and
+     * counts down on it ("Resync in 4:59"), once a second; restores it after.
+     * The Swing timer stops itself, so nothing keeps running once it ends.
+     */
+    private void showResyncCooldown(JButton btn)
+    {
+        if (progressTracker.resyncCooldownRemainingMs() <= 0)
+        {
+            btn.setText("Resync Achievements");
+            btn.setEnabled(true);
+            return;
+        }
+        btn.setEnabled(false);
+        updateResyncLabel(btn);
+        javax.swing.Timer tick = new javax.swing.Timer(1_000, null);
+        tick.addActionListener(ev ->
+        {
+            if (progressTracker.resyncCooldownRemainingMs() <= 0 || !btn.isDisplayable())
+            {
+                tick.stop();
+                btn.setText("Resync Achievements");
+                btn.setEnabled(true);
+                return;
+            }
+            updateResyncLabel(btn);
+        });
+        tick.start();
+    }
+
+    private void updateResyncLabel(JButton btn)
+    {
+        long secs = (progressTracker.resyncCooldownRemainingMs() + 999) / 1_000;
+        btn.setText(String.format("Resync in %d:%02d", secs / 60, secs % 60));
     }
 
     private JPanel buildNeedHelpSection()

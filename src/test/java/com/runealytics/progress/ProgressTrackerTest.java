@@ -31,6 +31,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -346,5 +347,16 @@ public class ProgressTrackerTest
         assertEquals("combat achievement task completed (varp:bit 3116:31)",
                 ProgressTracker.describe(new ProgressTransition("t", ProgressTransition.CATEGORY_CA_TASK, "3116:31",
                         null, "completed", "0", "1", 1L, "live", null)));
+    }
+
+    @Test
+    public void manualResyncHasAFiveMinuteCooldown()
+    {
+        start();
+        assertEquals(0, tracker.resyncCooldownRemainingMs());
+        assertTrue(tracker.requestResync());
+        assertFalse("second click within 5 minutes is refused", tracker.requestResync());
+        long remaining = tracker.resyncCooldownRemainingMs();
+        assertTrue(remaining > ProgressTracker.RESYNC_COOLDOWN_MS - 5_000 && remaining <= ProgressTracker.RESYNC_COOLDOWN_MS);
     }
 }

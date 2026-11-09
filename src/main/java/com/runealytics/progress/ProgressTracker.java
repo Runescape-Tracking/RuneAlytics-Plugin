@@ -79,6 +79,8 @@ public class ProgressTracker
     static final long DELTA_DEBOUNCE_MS = 10_000L;
     static final long SNAPSHOT_DEBOUNCE_MS = 2_000L;
     static final int MAX_BATCHES_PER_FLUSH = 5;
+    /** Minimum time between manual "Resync Achievements" requests. */
+    public static final long RESYNC_COOLDOWN_MS = 5 * 60_000L;
 
     private final Client client;
     private final ClientThread clientThread;
@@ -129,6 +131,8 @@ public class ProgressTracker
 
     // ── Flush scheduling (executor) ──────────────────────────────────────────
     private final AtomicBoolean flushing = new AtomicBoolean(false);
+    /** When the last manual resync was accepted (ms since epoch), 0 = never. Guarded by {@code this}. */
+    private long lastManualResyncMs;
     private volatile boolean uploadsOffLogged;
     private ScheduledFuture<?> flushFuture;
     private long flushAtMs;
@@ -284,14 +288,36 @@ public class ProgressTracker
     }
 
     /** Manual resync. Safe from any thread. */
-    public void requestResync()
+    /**
+     * Manual resync ("Resync Achievements"). Safe from any thread. Limited to one
+     * per {@link #RESYNC_COOLDOWN_MS} so the button can't flood the website; the
+     * limit lives here (not in the button) so it also holds across Settings
+     * rebuilds and plugin restarts within the same client session.
+     *
+     * @return {@code true} if a resync was queued, {@code false} while cooling down
+     */
+    public boolean requestResync()
     {
-        if (!running) return;
+        if (!running) return false;
+        synchronized (this)
+        {
+            long now = System.currentTimeMillis();
+            if (lastManualResyncMs != 0 && now - lastManualResyncMs < RESYNC_COOLDOWN_MS) return false;
+            lastManualResyncMs = now;
+        }
         clientThread.invokeLater(() ->
         {
             snapshotRequested = true;
             dirty = true;
         });
+        return true;
+    }
+
+    /** Milliseconds until "Resync Achievements" can be used again; 0 when available. */
+    public synchronized long resyncCooldownRemainingMs()
+    {
+        if (lastManualResyncMs == 0) return 0;
+        return Math.max(0, lastManualResyncMs + RESYNC_COOLDOWN_MS - System.currentTimeMillis());
     }
 
     public void onGameTick()
