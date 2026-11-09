@@ -65,28 +65,31 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     // ── theme (existing plugin colours first; spec fallbacks where none exists) ──
     private static final Color BG          = ColorScheme.DARK_GRAY_COLOR;
     private static final Color HEADER_BG   = RuneAlyticsUi.TAB_HEADER_BG;
-    private static final Color CARD_BG     = new Color(27, 27, 28);    // MatchmakingPanel CARD_BG
+    private static final Color CARD_BG     = RuneAlyticsXpTrackerPanel.CARD_BG;
     private static final Color RAISED      = new Color(39, 43, 47);
-    private static final Color BORDER      = new Color(70, 70, 74);    // MatchmakingPanel CARD_BORDER
-    private static final Color TEXT        = new Color(240, 240, 237);
-    private static final Color MUTED       = new Color(200, 203, 205);
-    private static final Color GOLD        = new Color(200, 180, 80);  // Loot Tracker value colour
-    private static final Color GREEN       = new Color(72, 199, 116);  // MatchmakingPanel COL_GREEN
+    private static final Color BORDER      = RuneAlyticsXpTrackerPanel.CARD_BORDER;
+    private static final Color CELL_BG     = RuneAlyticsXpTrackerPanel.CELL_BG;
+    private static final Color TEXT        = RuneAlyticsXpTrackerPanel.TEXT;
+    private static final Color MUTED       = RuneAlyticsXpTrackerPanel.MUTED;
+    private static final Color GOLD        = RuneAlyticsXpTrackerPanel.GOLD;
+    private static final Color GREEN       = RuneAlyticsXpTrackerPanel.XP_GREEN;
+    private static final Color TEAL        = RuneAlyticsXpTrackerPanel.TEAL;
     private static final Color NEW_BG      = new Color(15, 40, 20);    // Loot Tracker highlight (SKILLING_HEADER_HL)
     private static final Color PURPLE      = new Color(184, 138, 224);
     private static final Color ERROR       = new Color(234, 146, 146);
     private static final Color AMBER       = new Color(222, 170, 60);
     private static final Color FILTER_INACTIVE = new Color(38, 38, 38);
-    private static final Color FILTER_BORDER   = new Color(70, 70, 70);
 
-    // Sizes raised for legibility at the sidebar's width; the names keep their
-    // role (BOLD12 = primary bold text) rather than their exact point size.
-    private static final Font TITLE      = new Font("Calibri", Font.BOLD, 15);
-    private static final Font BOLD12     = new Font("Calibri", Font.BOLD, 14);
-    private static final Font PLAIN12    = new Font("Calibri", Font.PLAIN, 14);
-    private static final Font PLAIN11    = new Font("Calibri", Font.PLAIN, 13);
-    private static final Font BOLD11     = new Font("Calibri", Font.BOLD, 13);
-    private static final Font META       = new Font("Calibri", Font.PLAIN, 12);
+    // Same text format as the XP tracker tab (RuneAlyticsXpTrackerPanel / RuneAlyticsXpSkillRow).
+    private static final Font TITLE      = new Font("Calibri", Font.BOLD, 13);   // XP: skill name
+    private static final Font BOLD12     = new Font("Calibri", Font.BOLD, 12);   // XP: account, buttons, captions
+    private static final Font PLAIN12    = new Font("Calibri", Font.PLAIN, 12);  // XP: body text
+    private static final Font PLAIN11    = new Font("Calibri", Font.PLAIN, 12);  // descriptive text (kept at 12 for legibility)
+    private static final Font BOLD11     = new Font("Calibri", Font.BOLD, 12);
+    private static final Font META       = new Font("Calibri", Font.BOLD, 11);   // pills, badges, footer
+    private static final Font SECTION    = new Font("Calibri", Font.BOLD, 13);   // XP: SECTION SUMMARY
+    private static final Font CELL_LABEL = new Font("Calibri", Font.BOLD, 12);   // XP: stat caption
+    private static final Font CELL_VALUE = new Font("Calibri", Font.BOLD, 16);   // XP: stat value
     private static final Font ICON_FONT  = new Font("Dialog", Font.PLAIN, 20);
     /**
      * Symbols (✔ ↺ ☑ ✕ ○ ★ ☆ ●) are drawn with the logical "Dialog" font, which
@@ -149,7 +152,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     private final ScrollableContentPanel listContent = new ScrollableContentPanel();
     private final ScrollableContentPanel detailContent = new ScrollableContentPanel();
     private final JPanel genPanel = vertical();
-    private final JLabel listTitle = new JLabel("Your next upgrades");
+    private final JLabel listTitle = new JLabel("YOUR NEXT UPGRADES");
     private final JLabel listCount = new JLabel("");
     private final JLabel keptNote = pill("Current plan remains available", BORDER, MUTED);
     private final JPanel cardsPanel = vertical();
@@ -230,7 +233,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         JPanel titleRow = new JPanel(new BorderLayout(6, 0));
         titleRow.setOpaque(false);
         titleRow.setAlignmentX(LEFT_ALIGNMENT);
-        listTitle.setFont(new Font("Calibri", Font.BOLD, 16));
+        listTitle.setFont(SECTION);
         listTitle.setForeground(GOLD);
         listCount.setFont(BOLD11);
         listCount.setForeground(TEXT);
@@ -314,48 +317,41 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         return block;
     }
 
-    /** Two equal columns, aligned label/value rows, a subtle divider — like the Loot Tracker's stats row. */
+    /** 2 × 2 stat cells, the same as the XP tracker's session summary. */
     private JPanel buildSummary()
     {
-        JPanel grid = new JPanel(new GridLayout(1, 2, 0, 0));
-        grid.setBackground(CARD_BG);
-        grid.setBorder(new CompoundBorder(new LineBorder(BORDER, 1), new EmptyBorder(6, 8, 6, 8)));
+        JPanel grid = new JPanel(new GridLayout(2, 2, 6, 6));
+        grid.setOpaque(false);
         grid.setAlignmentX(LEFT_ALIGNMENT);
-
-        JPanel left = statColumn(new String[]{"Active goals", "Steps completed"}, new JLabel[]{goalsValue, stepsValue});
-        JPanel right = statColumn(new String[]{"Recommendations", "Updated"}, new JLabel[]{recsValue, updatedValue});
-        left.setBorder(new EmptyBorder(0, 0, 0, 6));
-        right.setBorder(new CompoundBorder(new MatteBorder(0, 1, 0, 0, new Color(60, 60, 64)), new EmptyBorder(0, 6, 0, 0)));
-        grid.add(left);
-        grid.add(right);
+        grid.add(statCell("Active goals", goalsValue, GOLD));
+        grid.add(statCell("Suggestions", recsValue, TEAL));
+        grid.add(statCell("Steps done", stepsValue, GREEN));
+        grid.add(statCell("Updated", updatedValue, TEXT));
         limitHeight(grid);
         return grid;
     }
 
-    /** One column: label above value for each stat (aligned, never truncated in a narrow sidebar). */
-    private JPanel statColumn(String[] labels, JLabel[] values)
+    /** Caption above a large value, centred, on the XP tracker's cell background. */
+    private static JPanel statCell(String caption, JLabel value, Color valueColor)
     {
-        JPanel col = new JPanel(new GridBagLayout());
-        col.setOpaque(false);
-        GridBagConstraints c = new GridBagConstraints();
-        c.gridx = 0;
-        c.weightx = 1;
-        c.fill = GridBagConstraints.HORIZONTAL;
-        c.anchor = GridBagConstraints.WEST;
-        for (int i = 0; i < labels.length; i++)
-        {
-            JLabel l = new JLabel(labels[i]);
-            l.setFont(META);
-            l.setForeground(MUTED);
-            l.setToolTipText(labels[i]);
-            c.gridy = i * 2;
-            c.insets = new Insets(i == 0 ? 0 : 4, 0, 0, 0);
-            col.add(l, c);
-            c.gridy = i * 2 + 1;
-            c.insets = new Insets(0, 0, 0, 0);
-            col.add(values[i], c);
-        }
-        return col;
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setBackground(CELL_BG);
+        p.setOpaque(true);
+        p.setBorder(new CompoundBorder(new LineBorder(BORDER, 1, true), new EmptyBorder(6, 4, 6, 4)));
+        JLabel cap = new JLabel(caption);
+        cap.setFont(CELL_LABEL);
+        cap.setForeground(MUTED);
+        cap.setAlignmentX(CENTER_ALIGNMENT);
+        cap.setHorizontalAlignment(SwingConstants.CENTER);
+        value.setFont(CELL_VALUE);
+        value.setForeground(valueColor);
+        value.setAlignmentX(CENTER_ALIGNMENT);
+        value.setHorizontalAlignment(SwingConstants.CENTER);
+        p.add(cap);
+        p.add(Box.createRigidArea(new Dimension(0, 2)));
+        p.add(value);
+        return p;
     }
 
     private JPanel buildControls()
@@ -371,7 +367,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         row.setOpaque(false);
         row.setAlignmentX(LEFT_ALIGNMENT);
         JLabel l = new JLabel("Focus:");
-        l.setFont(PLAIN12);
+        l.setFont(BOLD12);
         l.setForeground(GOLD);
         focusBox.setFont(PLAIN12);
         focusBox.setFocusable(false);
@@ -412,7 +408,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             {
                 clearForAccount(null);
                 accountName.setText(state.isLoggedIn() && state.getVerifiedUsername() == null ? "Not linked" : "Not logged in");
-                verifiedBadge.setText(state.isLoggedIn() ? "  not verified" : "");
+                verifiedBadge.setText(state.isLoggedIn() ? "  NOT VERIFIED" : "");
                 verifiedBadge.setForeground(ERROR);
                 setControls(false);
                 showEmpty(state.isLoggedIn() ? "Verify this account on the Settings tab to get recommendations."
@@ -421,7 +417,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
                 return;
             }
             accountName.setText(state.getVerifiedUsername());
-            verifiedBadge.setText("  ✓ verified");
+            verifiedBadge.setText("  VERIFIED");
             verifiedBadge.setForeground(GREEN);
             if (!now.equals(account))
             {
@@ -1194,7 +1190,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             detailContent.add(RuneAlyticsUi.vSpace(8));
         }
 
-        JButton track = actionButton(p != null && p.tracked ? "Tracking ✓" : "Track plan", p != null && p.tracked ? GREEN : BORDER);
+        JButton track = actionButton(p != null && p.tracked ? "Tracking" : "Track plan", p != null && p.tracked ? GREEN : BORDER);
         track.setToolTipText("Keep this plan in In progress (saved on RuneAlytics)");
         track.addActionListener(e -> toggleTrack(rec));
         track.setEnabled(p != null);
@@ -1498,9 +1494,8 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         row.setAlignmentX(LEFT_ALIGNMENT);
         for (CoverageItem i : c.items)
         {
-            String glyph = "ok".equals(i.state) ? "✓ " : ("stale".equals(i.state) ? "! " : "– ");
             Color fg = "ok".equals(i.state) ? GREEN : ("stale".equals(i.state) ? AMBER : MUTED);
-            row.add(pill(glyph + i.label, RAISED, fg));
+            row.add(pill(i.label, RAISED, fg));
         }
         return row;
     }
@@ -1694,8 +1689,8 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
 
     private static JLabel sectionTitle(String s)
     {
-        JLabel l = new JLabel(s);
-        l.setFont(new Font("Calibri", Font.BOLD, 15));
+        JLabel l = new JLabel(s.toUpperCase());
+        l.setFont(SECTION);
         l.setForeground(GOLD);
         l.setAlignmentX(LEFT_ALIGNMENT);
         l.setBorder(new EmptyBorder(0, 0, 4, 0));
@@ -1767,16 +1762,52 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         c.setMaximumSize(new Dimension(Integer.MAX_VALUE, c.getPreferredSize().height));
     }
 
-    private static JButton actionButton(String label, Color border)
+    /** Neutral filled button (the XP tracker's pause-button colours). */
+    private static final Color BTN_BG = new Color(40, 44, 60);
+    private static final Color BTN_BORDER = new Color(90, 96, 120);
+
+    /**
+     * A filled button like the XP tracker's (bold white text on a solid colour).
+     * {@code accent} picks the colour: GREEN for the main action, GOLD for an
+     * active state, anything else for the neutral style.
+     */
+    private static JButton actionButton(String label, Color accent)
     {
         JButton b = new JButton(label);
-        b.setFont(BOLD11);
+        b.setFont(BOLD12);
         b.setFocusPainted(false);
         b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        b.setBackground(new Color(45, 45, 48));
-        b.setForeground(TEXT);
-        b.setBorder(new CompoundBorder(new LineBorder(border, 1, true), new EmptyBorder(5, 6, 5, 6)));
+        b.setForeground(Color.WHITE);
+        b.setOpaque(true);
+        b.setContentAreaFilled(true);
+        b.setMargin(new Insets(0, 0, 0, 0));
+        b.setHorizontalAlignment(SwingConstants.CENTER);
+        styleButton(b, accent);
         return b;
+    }
+
+    /** Applies the filled colours for {@code accent} (see {@link #actionButton}). */
+    private static void styleButton(JButton b, Color accent)
+    {
+        Color bg;
+        Color border;
+        if (GREEN.equals(accent))
+        {
+            bg = new Color(30, 70, 40);
+            border = GREEN.darker();
+        }
+        else if (GOLD.equals(accent))
+        {
+            bg = new Color(66, 54, 22);
+            border = GOLD.darker();
+        }
+        else
+        {
+            bg = BTN_BG;
+            border = BTN_BORDER;
+        }
+        b.setBackground(bg);
+        b.setBorder(new CompoundBorder(new LineBorder(border, 1, true), new EmptyBorder(5, 8, 5, 8)));
     }
 
     /** Same button, but its symbol label is drawn with the Dialog font (see {@link #SYMBOL}). */
@@ -1803,7 +1834,9 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     private static JButton filterPill(String label)
     {
         JButton b = new JButton(label);
-        b.setFont(BOLD11);
+        b.setFont(BOLD12);
+        b.setOpaque(true);
+        b.setContentAreaFilled(true);
         b.setFocusPainted(false);
         b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         return b;
@@ -1811,9 +1844,9 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
 
     private static void stylePill(JButton b, boolean active)
     {
-        b.setBackground(active ? new Color(30, 70, 40) : FILTER_INACTIVE);
-        b.setForeground(active ? Color.WHITE : new Color(205, 205, 205));
-        b.setBorder(new CompoundBorder(new LineBorder(active ? GREEN : FILTER_BORDER, 1, true), new EmptyBorder(2, 7, 2, 7)));
+        b.setBackground(active ? new Color(30, 70, 40) : BTN_BG);
+        b.setForeground(Color.WHITE);
+        b.setBorder(new CompoundBorder(new LineBorder(active ? GREEN.darker() : BTN_BORDER, 1, true), new EmptyBorder(3, 8, 3, 8)));
     }
 
     private static JScrollPane scroll(JComponent content)
