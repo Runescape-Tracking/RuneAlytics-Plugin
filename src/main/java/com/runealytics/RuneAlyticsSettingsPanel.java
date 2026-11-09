@@ -242,8 +242,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
         card.add(title);
         card.add(vSpace(8));
         card.add(compactLabel(
-                "While your Online Status is Public: an eye above your character, a chat reminder, "
-                        + "a warning box here and a Wilderness warning. Turning this off does not change your Online Status.",
+                "While your Online Status is Public: a chat reminder, and in the Wilderness an eye above your "
+                        + "character plus warnings here and in the game. Turning this off does not change your Online Status.",
                 BODY_TEXT,
                 cf(Font.PLAIN, 12f)
         ));
@@ -287,7 +287,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
         boolean any = privacyWarnings != null && privacyWarnings.hasRememberedDismissals();
         reset.setEnabled(any);
         reset.setToolTipText(any
-                ? "Show the public status warning box again on every account that ticked \"Remember dismissal\""
+                ? "Show the Wilderness warnings again on every account that ticked \"Remember dismissal\""
                 : "No account has a remembered dismissal");
         reset.addActionListener(e ->
         {

@@ -25,12 +25,12 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 
 /**
- * Sidebar box above the RuneAlytics tabs for {@link PrivacyWarningManager#banner()}:
+ * Sidebar box above the RuneAlytics tabs for {@link PrivacyWarningManager#banner()};
+ * shown only in the Wilderness:
  * <ul>
- *   <li><b>Public</b>: "Your online status is public" — <b>Hide</b> (saves Private),
- *       <b>Dismiss</b> (this session), <b>Remember dismissal</b> (this account, for good;
- *       the top-right eye keeps the state visible instead).</li>
- *   <li><b>Wilderness</b>: "Account visibility" — Hide for this trip / Make private.</li>
+ *   <li><b>Wilderness</b>: "Account visibility" — Hide for this trip / Make private, and
+ *       <b>Dismiss</b> (until the next Wilderness trip) with <b>Remember dismissal</b>
+ *       (this account, for good; the top-right eye keeps the state visible instead).</li>
  *   <li><b>Hidden for this Wilderness trip</b> — Restore public.</li>
  *   <li><b>Applying…</b> while the website update is pending, <b>Hidden</b> once it
  *       confirmed, or a failure with Retry.</li>
@@ -66,6 +66,8 @@ public class PrivacyWarningBanner extends JPanel
     private final JPanel buttons = new JPanel(new GridLayout(1, 2, 6, 0));
     private final JButton primary;
     private final JButton secondary;
+    private final JButton dismiss;
+    private final JPanel dismissRow = new JPanel(new BorderLayout(0, 4));
     private PrivacyWarningManager.Banner shown;
 
     @Inject
@@ -108,8 +110,8 @@ public class PrivacyWarningBanner extends JPanel
         remember.setOpaque(false);
         remember.setFocusPainted(false);
         remember.setAlignmentX(Component.LEFT_ALIGNMENT);
-        remember.setToolTipText("Don't show this box again for this account (an eye stays at the top right of the game)");
-        inner.add(remember);
+        remember.setToolTipText("Don't show these warnings again for this account "
+                + "(a small eye stays at the top right of the game in the Wilderness)");
 
         controls.setFont(new Font("Calibri", Font.BOLD, 12));
         controls.setForeground(LINK);
@@ -133,6 +135,18 @@ public class PrivacyWarningBanner extends JPanel
         primary.addActionListener(e -> onPrimary());
         secondary.addActionListener(e -> onSecondary());
         inner.add(buttons);
+
+        dismiss = button();
+        style(dismiss, "Dismiss", false);
+        dismiss.setToolTipText("Hide this warning until you next enter the Wilderness");
+        dismiss.addActionListener(e -> privacy.dismiss(remember.isSelected()));
+        dismissRow.setOpaque(false);
+        dismissRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        dismissRow.add(remember, BorderLayout.NORTH);
+        dismissRow.add(dismiss, BorderLayout.CENTER);
+        dismissRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, dismissRow.getPreferredSize().height));
+        inner.add(Box.createVerticalStrut(6));
+        inner.add(dismissRow);
 
         privacy.addListener(() -> SwingUtilities.invokeLater(this::refresh));
         setVisible(false);
@@ -176,6 +190,11 @@ public class PrivacyWarningBanner extends JPanel
         return secondary;
     }
 
+    JButton dismissButton()
+    {
+        return dismiss;
+    }
+
     JCheckBox rememberBox()
     {
         return remember;
@@ -192,19 +211,12 @@ public class PrivacyWarningBanner extends JPanel
         boolean showControls = false;
         switch (state)
         {
-            case PUBLIC:
-                t = "Your online status is public";
-                b = "Other players can see when you're online.";
-                p = "Hide";
-                s = "Dismiss";
-                showRemember = true;
-                break;
             case WILDERNESS:
                 t = "Account visibility";
                 b = "Your activity is public in the Wilderness.";
                 p = "Hide for this trip";
                 s = "Make private";
-                showControls = true;
+                showRemember = true;
                 break;
             case TRIP_HIDDEN:
                 hidden = true;
@@ -238,7 +250,7 @@ public class PrivacyWarningBanner extends JPanel
         title.setText("<html><body style='width:" + TITLE_WRAP_PX + "px'>" + t + "</body></html>");
         title.setForeground(hidden ? Color.WHITE : AMBER);
         body.setText("<html><body style='width:" + BODY_WRAP_PX + "px'>" + b + "</body></html>");
-        remember.setVisible(showRemember);
+        dismissRow.setVisible(showRemember);
         remember.setSelected(false);
         controls.setVisible(showControls);
 
@@ -262,9 +274,6 @@ public class PrivacyWarningBanner extends JPanel
         if (shown == null) return;
         switch (shown)
         {
-            case PUBLIC:
-                privacy.makePrivate();
-                break;
             case WILDERNESS:
                 privacy.hideForTrip();
                 break;
@@ -284,9 +293,6 @@ public class PrivacyWarningBanner extends JPanel
         if (shown == null) return;
         switch (shown)
         {
-            case PUBLIC:
-                privacy.dismiss(remember.isSelected());
-                break;
             case WILDERNESS:
                 privacy.makePrivate();
                 break;

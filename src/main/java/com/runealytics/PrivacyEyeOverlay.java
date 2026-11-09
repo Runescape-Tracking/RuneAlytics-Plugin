@@ -9,6 +9,7 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayUtil;
 
 import javax.inject.Inject;
+import javax.inject.Singleton;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
@@ -19,6 +20,7 @@ import java.awt.image.BufferedImage;
  *
  * <p>Per frame this is two volatile reads and, when shown, one cached image draw.</p>
  */
+@Singleton
 public class PrivacyEyeOverlay extends Overlay
 {
     private static final int Z_OFFSET = 30;

@@ -403,8 +403,8 @@ public interface RunealyticsConfig extends Config
     @ConfigItem(
             keyName = "showPublicStatusWarnings",
             name = "Show public status warnings",
-            description = "While your Online Status is Public: an eye above your character, a chat reminder, "
-                    + "a sidebar warning and a Wilderness warning. Turning this off does not change your Online Status.",
+            description = "While your Online Status is Public: a chat reminder, and in the Wilderness an eye above "
+                    + "your character plus Wilderness warnings. Turning this off does not change your Online Status.",
             section = privacySection,
             position = 2
     )
@@ -416,8 +416,8 @@ public interface RunealyticsConfig extends Config
     @ConfigItem(
             keyName = "showPublicStatusWarnings",
             name = "Show public status warnings",
-            description = "While your Online Status is Public: an eye above your character, a chat reminder, "
-                    + "a sidebar warning and a Wilderness warning. Turning this off does not change your Online Status.",
+            description = "While your Online Status is Public: a chat reminder, and in the Wilderness an eye above "
+                    + "your character plus Wilderness warnings. Turning this off does not change your Online Status.",
             section = privacySection,
             position = 2
     )

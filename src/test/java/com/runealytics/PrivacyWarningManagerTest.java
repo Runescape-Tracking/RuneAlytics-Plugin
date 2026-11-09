@@ -114,12 +114,12 @@ public class PrivacyWarningManagerTest
     }
 
     @Test
-    public void publicShowsEyeBannerAndOneChatLinePerSession()
+    public void outsideTheWildernessOnlyTheChatLineShows()
     {
         ticks(1);
-        assertTrue(privacy.showEyeAbovePlayer());
-        assertEquals(PrivacyWarningManager.Banner.PUBLIC, privacy.banner());
-        assertFalse("corner eye only after Remember dismissal", privacy.showCornerEye());
+        assertFalse("no eye outside the Wilderness", privacy.showEyeAbovePlayer());
+        assertFalse(privacy.showCornerEye());
+        assertEquals("no sidebar box outside the Wilderness", B_NONE, privacy.banner());
         assertEquals(W_NONE, privacy.wildernessPanel());
         assertTrue(chatText(1).contains(
                 "RuneAlytics — Your online status is public. Open RuneAlytics → Privacy to change it."));
@@ -153,7 +153,24 @@ public class PrivacyWarningManagerTest
         visibility = PrivacySetting.PUBLIC;
         privacy.reloadConfig();
         verify(chat, times(1)).queue(any(QueuedMessage.class));
-        assertEquals(PrivacyWarningManager.Banner.PUBLIC, privacy.banner());
+    }
+
+    @Test
+    public void inTheWildernessTheEyeAndWarningsShow()
+    {
+        ticks(1);
+        wilderness = 1;
+        ticks(1);
+        assertTrue(privacy.showEyeAbovePlayer());
+        assertEquals(PrivacyWarningManager.Banner.WILDERNESS, privacy.banner());
+        assertEquals(PrivacyWarningManager.WildPanel.PUBLIC, privacy.wildernessPanel());
+        assertFalse("corner eye only after Remember dismissal", privacy.showCornerEye());
+
+        wilderness = 0;
+        ticks(PrivacyWarningManager.EXIT_CONFIRM_TICKS);
+        assertFalse(privacy.showEyeAbovePlayer());
+        assertEquals(B_NONE, privacy.banner());
+        assertEquals(W_NONE, privacy.wildernessPanel());
     }
 
     @Test
@@ -198,6 +215,7 @@ public class PrivacyWarningManagerTest
     @Test
     public void hideSavesPrivateAndWaitsForTheWebsite()
     {
+        wilderness = 1;
         ticks(1);
         privacy.makePrivate();
         verify(config).playerVisibility(PrivacySetting.PRIVATE);
@@ -215,6 +233,7 @@ public class PrivacyWarningManagerTest
     @Test
     public void failedSyncShowsRetry()
     {
+        wilderness = 1;
         ticks(1);
         privacy.makePrivate();
         privacy.syncFinished(lastSync(), false);
@@ -230,6 +249,7 @@ public class PrivacyWarningManagerTest
     @Test
     public void staleOrOtherAccountResultsAreIgnored()
     {
+        wilderness = 1;
         ticks(1);
         privacy.makePrivate();
         PrivacyWarningManager.SyncTicket first = lastSync();
@@ -247,25 +267,48 @@ public class PrivacyWarningManagerTest
     }
 
     @Test
-    public void dismissForSessionVersusRememberPerAccount()
+    public void dismissAndCloseLastForThisTripRememberIsPerAccount()
     {
         ticks(1);
-        privacy.dismiss(false);
+        wilderness = 1;
+        ticks(1);
+        privacy.closeWildernessPanel();                       // the X
+        assertEquals(W_NONE, privacy.wildernessPanel());
         assertEquals(B_NONE, privacy.banner());
         assertTrue("eye above the player stays until Remember dismissal", privacy.showEyeAbovePlayer());
+        ticks(3);
+        assertEquals("stays closed while still inside", W_NONE, privacy.wildernessPanel());
+
+        // Next trip: back again.
+        wilderness = 0;
+        ticks(PrivacyWarningManager.EXIT_CONFIRM_TICKS);
+        wilderness = 1;
+        ticks(1);
+        assertEquals(PrivacyWarningManager.WildPanel.PUBLIC, privacy.wildernessPanel());
+        privacy.dismiss(false);                               // sidebar Dismiss
+        assertEquals(B_NONE, privacy.banner());
+        assertEquals(W_NONE, privacy.wildernessPanel());
         assertEquals("", rememberedCsv);
 
         privacy.dismiss(true);
         assertEquals("rune alytics", rememberedCsv);
         assertFalse(privacy.showEyeAbovePlayer());
         assertTrue("top-right eye replaces the other warnings", privacy.showCornerEye());
+        wilderness = 0;
+        ticks(PrivacyWarningManager.EXIT_CONFIRM_TICKS);
+        assertFalse("corner eye only in the Wilderness", privacy.showCornerEye());
+        wilderness = 1;
+        ticks(1);
+        assertEquals(W_NONE, privacy.wildernessPanel());
+        assertEquals(B_NONE, privacy.banner());
+        assertTrue(privacy.showCornerEye());
 
         // Another account on the same client still gets the warnings.
         privacy.onLoggedOut();
         name = "Second Acct";
         privacy.onLoggedIn();
         ticks(1);
-        assertEquals(PrivacyWarningManager.Banner.PUBLIC, privacy.banner());
+        assertEquals(PrivacyWarningManager.Banner.WILDERNESS, privacy.banner());
         assertTrue(privacy.showEyeAbovePlayer());
         assertFalse(privacy.showCornerEye());
     }
@@ -275,6 +318,7 @@ public class PrivacyWarningManagerTest
     {
         rememberedCsv = "rune alytics";
         PrivacyWarningManager restarted = newManager();
+        wilderness = 1;
         ticks(1);
         assertEquals(B_NONE, restarted.banner());
         assertTrue(restarted.showCornerEye());
@@ -282,7 +326,7 @@ public class PrivacyWarningManagerTest
 
         restarted.resetRememberedDismissals();
         assertEquals("", rememberedCsv);
-        assertEquals(PrivacyWarningManager.Banner.PUBLIC, restarted.banner());
+        assertEquals(PrivacyWarningManager.Banner.WILDERNESS, restarted.banner());
         assertTrue(restarted.showEyeAbovePlayer());
         assertFalse(restarted.showCornerEye());
     }

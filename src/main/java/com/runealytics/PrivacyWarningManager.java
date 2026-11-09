@@ -28,19 +28,23 @@ import java.util.function.LongSupplier;
  * through {@link #makePrivate()} (which saves Private through the normal settings
  * path, so the plugin's existing privacy sync sends it to the website).
  *
- * <h3>What is shown (all only while "Show public status warnings" is on and an account is logged in)</h3>
+ * <h3>What is shown (only while "Show public status warnings" is on and an account is logged in)</h3>
  * <ul>
- *   <li><b>Amber eye above the player</b> while effectively public, unless this account
- *       ticked "Remember dismissal".</li>
  *   <li><b>One red chat line</b> per client session per account, and again whenever the
  *       saved setting is switched to Public: {@link #CHAT_WARNING}.</li>
- *   <li><b>Sidebar banner</b> ({@link #banner()}): Hide / Dismiss / Remember dismissal,
- *       a Wilderness variant, and the Applying… / Hidden / failed states.</li>
- *   <li><b>Top-right Wilderness panel</b> ({@link #wildernessPanel()}): Hide for this trip /
- *       Make private, then the crossed-out eye with Restore public.</li>
- *   <li><b>Top-right eye</b> ({@link #showCornerEye()}) after Remember dismissal, so the
- *       public state stays visible; clicking it opens the privacy controls.</li>
  * </ul>
+ * Everything else appears <b>only in the Wilderness</b>, while effectively public:
+ * <ul>
+ *   <li><b>Amber eye above the player</b>, unless this account ticked "Remember dismissal".</li>
+ *   <li><b>Sidebar banner</b> ({@link #banner()}): Hide for this trip / Make private /
+ *       Dismiss (+ Remember dismissal), and the Applying… / Hidden / failed states.</li>
+ *   <li><b>Top-right Wilderness panel</b> ({@link #wildernessPanel()}): Hide for this trip /
+ *       Make private / close, then the crossed-out eye with Restore public.</li>
+ *   <li><b>Top-right eye</b> ({@link #showCornerEye()}) instead of the above after Remember
+ *       dismissal; clicking it opens the privacy controls.</li>
+ * </ul>
+ * Dismiss (sidebar) and the close X (panel) hide the warning until the next time the
+ * player enters the Wilderness.
  *
  * <h3>Wilderness trip</h3>
  * "Hide for this trip" is a temporary override: {@link #effectiveVisibility()} reports
@@ -70,7 +74,7 @@ public class PrivacyWarningManager
     static final long HIDDEN_SHOW_MS = 6_000L;
 
     /** What the sidebar banner shows. */
-    public enum Banner { NONE, PUBLIC, WILDERNESS, TRIP_HIDDEN, APPLYING, HIDDEN, FAILED }
+    public enum Banner { NONE, WILDERNESS, TRIP_HIDDEN, APPLYING, HIDDEN, FAILED }
 
     /** What the top-right Wilderness panel shows. */
     public enum WildPanel { NONE, PUBLIC, TRIP_HIDDEN, APPLYING, HIDDEN, FAILED }
@@ -108,7 +112,6 @@ public class PrivacyWarningManager
     private volatile Update update = Update.NONE;
     private volatile long hiddenAt;
 
-    private final Set<String> dismissedThisSession = new HashSet<>();
     private final Set<String> chatWarnedThisSession = new HashSet<>();
     private String tripAccount;
     private int ticksOutside;
@@ -144,7 +147,6 @@ public class PrivacyWarningManager
     {
         this.openSettings = openSettings != null ? openSettings : () -> { };
         this.resync = resync != null ? resync : () -> { };
-        dismissedThisSession.clear();
         chatWarnedThisSession.clear();
         account = null;
         inWilderness = false;
@@ -387,18 +389,17 @@ public class PrivacyWarningManager
         resync.run();
     }
 
-    /** Close (X) on the Wilderness panel: hidden until the next time the player enters. */
+    /** Close (X) on the Wilderness panel: panel and sidebar box hidden until the player next enters. */
     public void closeWildernessPanel()
     {
-        synchronized (this)
-        {
-            wildPanelClosed = true;
-            if (update == Update.HIDDEN || update == Update.FAILED) update = Update.NONE;
-        }
-        fireChanged();
+        dismiss(false);
     }
 
-    /** "Dismiss" on the banner; {@code remember} = "Remember dismissal" (saved for this account). */
+    /**
+     * "Dismiss" on the banner (and the panel's X): hidden for this Wilderness trip.
+     * {@code remember} = "Remember dismissal" (saved for this account): from then on
+     * only the small top-right eye shows in the Wilderness.
+     */
     public void dismiss(boolean remember)
     {
         String acct;
@@ -406,7 +407,7 @@ public class PrivacyWarningManager
         {
             acct = account;
             if (acct == null) return;
-            dismissedThisSession.add(acct);
+            wildPanelClosed = true;
             if (update == Update.HIDDEN || update == Update.FAILED) update = Update.NONE;
         }
         if (remember)
@@ -426,8 +427,8 @@ public class PrivacyWarningManager
     {
         synchronized (this)
         {
-            dismissedThisSession.clear();
             remembered = Collections.emptySet();
+            wildPanelClosed = false;
         }
         config.privacyWarningDismissedAccounts("");
         fireChanged();
@@ -477,19 +478,20 @@ public class PrivacyWarningManager
         return tripHidden;
     }
 
-    /** Amber eye above the local player. */
+    /** Amber eye above the local player: in the Wilderness, until Remember dismissal. */
     public boolean showEyeAbovePlayer()
     {
-        return active() && effectivelyPublic() && !isRemembered();
+        return active() && inWilderness && effectivelyPublic() && !isRemembered();
     }
 
-    /** Top-right "Public status" eye: after Remember dismissal, when the Wilderness panel isn't up. */
+    /** Top-right "Public status" eye: in the Wilderness after Remember dismissal (when the panel isn't up). */
     public boolean showCornerEye()
     {
-        return active() && effectivelyPublic() && isRemembered() && wildernessPanel() == WildPanel.NONE;
+        return active() && inWilderness && effectivelyPublic() && isRemembered()
+                && wildernessPanel() == WildPanel.NONE;
     }
 
-    /** The top-right Wilderness panel. */
+    /** The top-right Wilderness panel (nothing outside the Wilderness). */
     public WildPanel wildernessPanel()
     {
         if (!active() || !inWilderness || wildPanelClosed) return WildPanel.NONE;
@@ -498,24 +500,20 @@ public class PrivacyWarningManager
         if (u == Update.FAILED) return WildPanel.FAILED;
         if (tripHidden) return WildPanel.TRIP_HIDDEN;
         if (u == Update.HIDDEN) return WildPanel.HIDDEN;
-        return isSavedPublic() ? WildPanel.PUBLIC : WildPanel.NONE;
+        return isSavedPublic() && !isRemembered() ? WildPanel.PUBLIC : WildPanel.NONE;
     }
 
-    /** The sidebar banner. */
+    /** The sidebar banner (nothing outside the Wilderness). */
     public Banner banner()
     {
-        if (!active()) return Banner.NONE;
+        if (!active() || !inWilderness) return Banner.NONE;
         Update u = update;
         if (u == Update.APPLYING) return Banner.APPLYING;
         if (u == Update.FAILED) return Banner.FAILED;
         if (tripHidden) return Banner.TRIP_HIDDEN;
         if (u == Update.HIDDEN) return Banner.HIDDEN;
-        if (!isSavedPublic() || isRemembered()) return Banner.NONE;
-        if (inWilderness) return Banner.WILDERNESS;
-        synchronized (this)
-        {
-            return dismissedThisSession.contains(account) ? Banner.NONE : Banner.PUBLIC;
-        }
+        if (!isSavedPublic() || isRemembered() || wildPanelClosed) return Banner.NONE;
+        return Banner.WILDERNESS;
     }
 
     /** Called (on any thread) whenever what should be shown may have changed. */

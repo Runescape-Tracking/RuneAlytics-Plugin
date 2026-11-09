@@ -9,6 +9,7 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayPriority;
 
 import javax.inject.Inject;
+import javax.inject.Singleton;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
@@ -33,9 +34,13 @@ import java.util.List;
  *       controls (opens RuneAlytics → Settings).</li>
  * </ul>
  * Buttons are left-clicked through {@link PrivacyOverlayMouseListener}; the same
- * actions are on the right-click menu. Nothing is drawn (and no click is taken)
- * when neither applies.
+ * actions are on the overlay's Shift+right-click menu. Nothing is drawn (and no
+ * click is taken) when neither applies.
+ *
+ * <p>Singleton: the mouse listener must hit-test the instance that is actually
+ * rendered (a second instance never gets bounds, so clicks would fall through).</p>
  */
+@Singleton
 public class PrivacyStatusOverlay extends Overlay
 {
     private static final Color BOX_BG = new Color(28, 10, 10, 230);
