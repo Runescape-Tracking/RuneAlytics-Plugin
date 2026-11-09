@@ -44,6 +44,8 @@ public class RuneAlyticsPanel extends PluginPanel
     public static final String FEATURE_LOOT         = "loot_tracker";
     /** Server-controlled: shows the Match Finder tab. */
     public static final String FEATURE_MATCHES      = "match_finder";
+    /** Advisor tab: Account Advisor recommendations from runealytics.com. */
+    public static final String FEATURE_ADVISOR      = "advisor";
     /** Server-controlled: shows the XP Tracker tab. */
     public static final String FEATURE_XP_TRACKER   = "xp_tracker";
     /**
@@ -352,6 +354,7 @@ public class RuneAlyticsPanel extends PluginPanel
         flags.put(FEATURE_LOOT,         true);   // local tracking always available
         flags.put(FEATURE_XP_TRACKER,   true);   // shown until server flags say otherwise
         flags.put(FEATURE_MATCHES,      false);  // match finder requires verification
+        flags.put(FEATURE_ADVISOR,      false);  // advice requires a verified account
         applyFeatureFlags(flags);
     }
 
@@ -367,12 +370,31 @@ public class RuneAlyticsPanel extends PluginPanel
      */
     public void showMainFeatures(boolean lootEnabled, boolean xpEnabled, boolean matchEnabled)
     {
+        showMainFeatures(lootEnabled, xpEnabled, matchEnabled, true);
+    }
+
+    /** As above, plus the Advisor tab (server flag "advisor", on by default). */
+    public void showMainFeatures(boolean lootEnabled, boolean xpEnabled, boolean matchEnabled, boolean advisorEnabled)
+    {
         Map<String, Boolean> flags = new HashMap<>();
+        flags.put(FEATURE_ADVISOR,      advisorEnabled);
         flags.put(FEATURE_VERIFICATION, true);   // always accessible
         flags.put(FEATURE_LOOT,         lootEnabled);
         flags.put(FEATURE_XP_TRACKER,   xpEnabled);
         flags.put(FEATURE_MATCHES,      matchEnabled);
         applyFeatureFlags(flags);
+    }
+
+    /** Selects a visible tab by its title (e.g. the Advisor header's ⚙ opens "Settings"). */
+    public void selectTab(String title)
+    {
+        SwingUtilities.invokeLater(() -> {
+            int idx = tabbedPane.indexOfTab(title);
+            if (idx >= 0)
+            {
+                tabbedPane.setSelectedIndex(idx);
+            }
+        });
     }
 
     // ═════════════════════════════════════════════════════════════════════════
