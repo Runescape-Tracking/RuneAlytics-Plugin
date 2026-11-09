@@ -61,10 +61,17 @@ public class ProgressTracker
 
     /** Ticks with no var changes before a deferred rescan (≈1.2 s). */
     static final int QUIET_TICKS = 2;
-    /** Minimum ticks between change-driven rescans (≈6 s). */
-    static final int MIN_SCAN_GAP_TICKS = 10;
-    /** A rescan is forced this many ticks after the first unprocessed change, even if vars keep changing (≈30 s). */
-    static final int MAX_DEFER_TICKS = 50;
+    /**
+     * Minimum ticks between change-driven rescans (≈15 s). Game variables change
+     * constantly during combat and skilling; this keeps quest re-reads (one client
+     * script per quest, on the client thread) rare while still catching a
+     * completion within seconds of it happening.
+     */
+    static final int MIN_SCAN_GAP_TICKS = 25;
+    /** A rescan is forced this many ticks after the first unprocessed change, even if vars keep changing (≈60 s). */
+    static final int MAX_DEFER_TICKS = 100;
+    /** A scan slower than this is reported (it would cost frame time on the client thread). */
+    static final long SLOW_SCAN_NANOS = 8_000_000L;
     /** Full re-read while logged in, to recover anything a missed event would hide. */
     static final long RECONCILE_INTERVAL_MS = 30 * 60_000L;
     /** How often an unchanged baseline's "last observed" time is refreshed on disk. */
@@ -540,7 +547,13 @@ public class ProgressTracker
         scans++;
         scanNanosTotal += timing.totalNanos;
         scanNanosMax = Math.max(scanNanosMax, timing.totalNanos);
-        if (timing.totalNanos > 5_000_000L || scans % 100 == 0)
+        if (timing.totalNanos > SLOW_SCAN_NANOS)
+        {
+            // Logged even with debug logging off (see RuneAlyticsLogGate): the scan runs on the client thread.
+            log.debug("[Progress] performance warning: scan #{} took {} µs (quests {} µs)",
+                    scans, timing.totalNanos / 1_000, timing.questNanos / 1_000);
+        }
+        else if (scans % 100 == 0)
         {
             log.debug("[Progress] scan #{} took {} µs (quests {} µs); avg {} µs, max {} µs",
                     scans, timing.totalNanos / 1_000, timing.questNanos / 1_000,

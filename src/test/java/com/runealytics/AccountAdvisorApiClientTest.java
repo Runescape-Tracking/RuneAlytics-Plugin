@@ -123,4 +123,24 @@ public class AccountAdvisorApiClientTest
         assertNull(AccountAdvisorPanel.ago(null));
         assertNull(AccountAdvisorPanel.ago("garbage"));
     }
+
+    @Test
+    public void websiteLinkUsesTheOsrsUsername()
+    {
+        assertEquals("https://runealytics.com/account-advisor?account=rune%20alytics&plan=39",
+                AccountAdvisorApiClient.buildWebsiteUrl("https://runealytics.com/api", "rune alytics", 39));
+        assertEquals("https://runealytics.com/account-advisor?account=rune%20alytics",
+                AccountAdvisorApiClient.buildWebsiteUrl("https://runealytics.com/api/", "rune alytics", null));
+        assertEquals("http://localhost:8000/account-advisor?account=Iron%20Guy&plan=2",
+                AccountAdvisorApiClient.buildWebsiteUrl("http://localhost:8000/api", "Iron Guy", 2));
+        assertNull(AccountAdvisorApiClient.buildWebsiteUrl("https://runealytics.com/api", null, 39));
+        assertNull(AccountAdvisorApiClient.buildWebsiteUrl("https://runealytics.com/api", "  ", 39));
+    }
+
+    @Test
+    public void linkWarningNamesTheSite()
+    {
+        assertEquals("oldschool.runescape.wiki", RuneAlyticsUi.siteNameOf("https://oldschool.runescape.wiki/w/Priest_in_Peril"));
+        assertEquals("runealytics.com", RuneAlyticsUi.siteNameOf("https://www.runealytics.com/x"));
+    }
 }

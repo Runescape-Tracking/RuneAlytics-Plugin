@@ -351,6 +351,34 @@ public class AccountAdvisorApiClient
     //  Calls (blocking)
     // ═════════════════════════════════════════════════════════════════════════
 
+    /**
+     * The website's Account Advisor page for {@code account} (the OSRS username,
+     * which is how the site selects the account), optionally opened on {@code planId}.
+     */
+    public String websiteUrl(String account, Integer planId)
+    {
+        return buildWebsiteUrl(config.apiUrl(), account, planId);
+    }
+
+    /**
+     * {@code <site>/account-advisor?account=<osrs name>[&plan=<id>]}, where {@code <site>}
+     * is the configured API URL without its trailing {@code /api}. The name is
+     * percent-encoded with spaces as {@code %20} (e.g. {@code rune%20alytics}).
+     */
+    static String buildWebsiteUrl(String apiUrl, String account, Integer planId)
+    {
+        if (account == null || account.trim().isEmpty()) return null;
+        String base = apiUrl == null || apiUrl.trim().isEmpty() ? "https://runealytics.com" : apiUrl.trim();
+        while (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+        if (base.endsWith("/api")) base = base.substring(0, base.length() - 4);
+        HttpUrl site = HttpUrl.parse(base);
+        if (site == null) return null;
+        HttpUrl.Builder b = site.newBuilder().addPathSegment("account-advisor")
+                .addQueryParameter("account", account.trim());
+        if (planId != null) b.addQueryParameter("plan", String.valueOf(planId));
+        return b.build().toString();
+    }
+
     public Overview overview(String horizon) throws IOException
     {
         HttpUrl base = HttpUrl.parse(config.apiUrl() + "/plugin/advisor");

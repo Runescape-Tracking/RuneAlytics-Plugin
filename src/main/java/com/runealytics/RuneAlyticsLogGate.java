@@ -45,6 +45,7 @@ public final class RuneAlyticsLogGate extends TurboFilter
     static final String[] CRITICAL_KEYWORDS = {
         "fail", "error", "exception", "rejected", "unable", "could not", "couldn't",
         "cannot", "timed out", "timeout", "denied", "invalid", "mismatch", "unauthorized",
+        "performance warning",
     };
 
     private static volatile boolean verbose;

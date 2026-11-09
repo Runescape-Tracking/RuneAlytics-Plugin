@@ -13,7 +13,6 @@ import com.runealytics.AccountAdvisorApiClient.Summary;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.ui.ColorScheme;
-import net.runelite.client.util.LinkBrowser;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -34,6 +33,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -51,7 +51,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   SOUTH  connection / freshness footer
  *
  * Data comes from the website's Account Advisor (AccountAdvisorApiClient).
- * Requests run on the plugin executor; Swing changes happen on the EDT. Every
+ * Requests run on the tab's own background thread (never RuneLite's shared
+ * executor or the client thread); Swing changes happen on the EDT. Every
  * response is checked against a request generation AND the account it was
  * made for, so an old answer can never land under a newly logged-in account.
  * Cards are keyed by stable activity id and updated in place on progress
@@ -68,7 +69,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     private static final Color RAISED      = new Color(39, 43, 47);
     private static final Color BORDER      = new Color(70, 70, 74);    // MatchmakingPanel CARD_BORDER
     private static final Color TEXT        = new Color(240, 240, 237);
-    private static final Color MUTED       = new Color(168, 172, 174);
+    private static final Color MUTED       = new Color(200, 203, 205);
     private static final Color GOLD        = new Color(200, 180, 80);  // Loot Tracker value colour
     private static final Color GREEN       = new Color(72, 199, 116);  // MatchmakingPanel COL_GREEN
     private static final Color NEW_BG      = new Color(15, 40, 20);    // Loot Tracker highlight (SKILLING_HEADER_HL)
@@ -78,13 +79,22 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     private static final Color FILTER_INACTIVE = new Color(38, 38, 38);
     private static final Color FILTER_BORDER   = new Color(70, 70, 70);
 
-    private static final Font TITLE      = new Font("Calibri", Font.BOLD, 13);
-    private static final Font BOLD12     = new Font("Calibri", Font.BOLD, 12);
-    private static final Font PLAIN12    = new Font("Calibri", Font.PLAIN, 12);
-    private static final Font PLAIN11    = new Font("Calibri", Font.PLAIN, 11);
-    private static final Font BOLD11     = new Font("Calibri", Font.BOLD, 11);
-    private static final Font META       = new Font("Calibri", Font.PLAIN, 10);
+    // Sizes raised for legibility at the sidebar's width; the names keep their
+    // role (BOLD12 = primary bold text) rather than their exact point size.
+    private static final Font TITLE      = new Font("Calibri", Font.BOLD, 15);
+    private static final Font BOLD12     = new Font("Calibri", Font.BOLD, 14);
+    private static final Font PLAIN12    = new Font("Calibri", Font.PLAIN, 14);
+    private static final Font PLAIN11    = new Font("Calibri", Font.PLAIN, 13);
+    private static final Font BOLD11     = new Font("Calibri", Font.BOLD, 13);
+    private static final Font META       = new Font("Calibri", Font.PLAIN, 12);
     private static final Font ICON_FONT  = new Font("Dialog", Font.PLAIN, 20);
+    /**
+     * Symbols (✔ ↺ ☑ ✕ ○ ★ ☆ ●) are drawn with the logical "Dialog" font, which
+     * falls back to the system symbol fonts. Calibri has no glyph for most of them,
+     * so they rendered as empty boxes.
+     */
+    private static final Font SYMBOL      = new Font("Dialog", Font.BOLD, 13);
+    private static final Font SYMBOL_META = new Font("Dialog", Font.PLAIN, 12);
 
     private static final String CONFIG_GROUP = "runealytics";
     private static final String SEEN_KEY_PREFIX = "advisorSeen_";
@@ -108,6 +118,12 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     private final AccountAdvisorApiClient api;
     private final RuneAlyticsState state;
     private final ScheduledExecutorService executor;
+    /**
+     * Dedicated daemon thread for advisor HTTP calls and polling, so a slow
+     * website response never holds up RuneLite's shared executor (used by every
+     * plugin) or the client thread. Created on first use, stopped in shutDown().
+     */
+    private ScheduledExecutorService advisorExecutor;
     private final ConfigManager configManager;
     private volatile Runnable openSettings = () -> { };
 
@@ -120,7 +136,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     private final JLabel stepsValue = valueLabel();
     private final JLabel recsValue = valueLabel();
     private final JLabel updatedValue = valueLabel();
-    private final JButton generateButton = actionButton("✦ Generate advice", GREEN);
+    private final JButton generateButton = actionButton("Generate advice", GREEN);
     private final JButton websiteButton = actionButton("↗ Open website", BORDER);
     private final JComboBox<String> focusBox = new JComboBox<>();
     private final JButton filterAll = filterPill("All");
@@ -152,7 +168,6 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     private Coverage coverage;
     private String horizon;
     private int defaultMinutes = 60;
-    private String webUrl;
     private String account;          // lower-cased RSN the shown data belongs to
     private Filter filter = Filter.ALL;
     private String detailKey;        // activity id of the open detail view
@@ -215,7 +230,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         JPanel titleRow = new JPanel(new BorderLayout(6, 0));
         titleRow.setOpaque(false);
         titleRow.setAlignmentX(LEFT_ALIGNMENT);
-        listTitle.setFont(new Font("Calibri", Font.BOLD, 14));
+        listTitle.setFont(new Font("Calibri", Font.BOLD, 16));
         listTitle.setForeground(GOLD);
         listCount.setFont(BOLD11);
         listCount.setForeground(TEXT);
@@ -243,7 +258,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         JPanel footer = new JPanel(new BorderLayout(6, 0));
         footer.setBackground(HEADER_BG);
         footer.setBorder(new CompoundBorder(new MatteBorder(1, 0, 0, 0, new Color(55, 55, 55)), new EmptyBorder(5, 8, 5, 8)));
-        footerDot.setFont(META);
+        footerDot.setFont(SYMBOL_META);
         footerText.setFont(META);
         footerText.setForeground(MUTED);
         footer.add(footerDot, BorderLayout.WEST);
@@ -268,8 +283,9 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         row.setOpaque(false);
         row.setAlignmentX(LEFT_ALIGNMENT);
 
-        JLabel icon = new JLabel("🧭");
-        icon.setFont(new Font("Dialog", Font.PLAIN, 16));
+        JLabel icon = new JLabel("◆");
+        icon.setFont(new Font("Dialog", Font.PLAIN, 14));
+        icon.setForeground(GOLD);
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         left.setOpaque(false);
         accountName.setFont(BOLD12);
@@ -396,7 +412,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             {
                 clearForAccount(null);
                 accountName.setText(state.isLoggedIn() && state.getVerifiedUsername() == null ? "Not linked" : "Not logged in");
-                verifiedBadge.setText(state.isLoggedIn() ? "  ✕ not verified" : "");
+                verifiedBadge.setText(state.isLoggedIn() ? "  not verified" : "");
                 verifiedBadge.setForeground(ERROR);
                 setControls(false);
                 showEmpty(state.isLoggedIn() ? "Verify this account on the Settings tab to get recommendations."
@@ -423,10 +439,32 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     public void shutDown()
     {
         generation.incrementAndGet();
+        synchronized (this)
+        {
+            if (advisorExecutor != null)
+            {
+                advisorExecutor.shutdownNow();
+                advisorExecutor = null;
+            }
+        }
         SwingUtilities.invokeLater(() -> {
             cancelPoll();
             clearForAccount(null);
         });
+    }
+
+    private synchronized ScheduledExecutorService exec()
+    {
+        if (advisorExecutor == null || advisorExecutor.isShutdown())
+        {
+            advisorExecutor = Executors.newSingleThreadScheduledExecutor(r ->
+            {
+                Thread t = new Thread(r, "RuneAlytics-Advisor");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        return advisorExecutor;
     }
 
     private void clearForAccount(String newAccount)
@@ -437,7 +475,6 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         plan = null;
         summary = null;
         coverage = null;
-        webUrl = null;
         generating = false;
         genError = null;
         buildingPlanId = null;
@@ -470,14 +507,13 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         final int gen = generation.incrementAndGet();
         setControls(false);
         setFooter(MUTED, "Loading your advice…");
-        executor.execute(() -> {
+        exec().execute(() -> {
             try
             {
                 Overview o = api.overview(null);
                 onEdt(gen, acct, () -> {
                     horizon = o.horizon;
                     defaultMinutes = o.defaultMinutes;
-                    webUrl = o.webUrl;
                     setFocusOptions(o.focusOptions, o.focus);
                     coverage = o.coverage;
                     summary = o.summary;
@@ -531,7 +567,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         renderGenPanel();
         setControls(true);
         setFooter(PURPLE, "Requested just now · Waiting for website");
-        executor.execute(() -> {
+        exec().execute(() -> {
             try
             {
                 PlanResult r = api.generate(h, minutes, focus);
@@ -577,7 +613,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             return;
         }
         long delay = POLL_BACKOFF_MS[Math.min(attempt, POLL_BACKOFF_MS.length - 1)];
-        poll = executor.schedule(() -> {
+        poll = exec().schedule(() -> {
             try
             {
                 PlanResult r = api.plan(planId);
@@ -628,7 +664,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         }
         final int gen = generation.get();
         setFooter(MUTED, "Checking progress…");
-        executor.execute(() -> {
+        exec().execute(() -> {
             try
             {
                 ProgressUpdate u = api.progress(p.id);
@@ -651,7 +687,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         final boolean target = !r.progress.tracked;
         final int gen = generation.get();
         replaceProgress(r.key, r.progress.withTracked(target));      // optimistic; reverted on failure
-        executor.execute(() -> {
+        exec().execute(() -> {
             try
             {
                 api.track(r.activityId, target);
@@ -680,7 +716,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             return;
         }
         final int gen = generation.get();
-        executor.execute(() -> {
+        exec().execute(() -> {
             try
             {
                 ProgressUpdate u = api.ack(p.id, s.id, done);
@@ -744,10 +780,6 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     {
         boolean samePlan = plan != null && plan.id == p.id;
         plan = p;
-        if (p.webUrl != null)
-        {
-            webUrl = p.webUrl;
-        }
         if (s != null)
         {
             summary = s;
@@ -935,7 +967,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
                 card.add(text("Couldn't generate new advice", TITLE, ERROR));
                 card.add(text(genError, PLAIN11, MUTED));
                 card.add(RuneAlyticsUi.vSpace(6));
-                JButton retry = actionButton("↻ Retry", BORDER);
+                JButton retry = actionButton("Retry", BORDER);
                 retry.addActionListener(e -> {
                     genError = null;
                     if (buildingPlanId != null)
@@ -953,7 +985,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             genPanel.add(RuneAlyticsUi.vSpace(6));
             keptNote.setVisible(plan != null);
         }
-        generateButton.setText(generating ? "✦ Generating…" : "✦ Generate advice");
+        generateButton.setText(generating ? "Generating…" : "Generate advice");
         genPanel.revalidate();
         genPanel.repaint();
     }
@@ -997,8 +1029,8 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     private void setControls(boolean on)
     {
         generateButton.setEnabled(on && !generating);
-        websiteButton.setEnabled(on && webUrl != null);
-        headerWebsite.setEnabled(on && webUrl != null);
+        websiteButton.setEnabled(on && account != null);
+        headerWebsite.setEnabled(on && account != null);
         focusBox.setEnabled(on && !generating);
         filterAll.setEnabled(on);
         filterReady.setEnabled(on);
@@ -1055,10 +1087,10 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
 
     private void openWebsite()
     {
-        if (webUrl != null)
-        {
-            LinkBrowser.browse(webUrl);
-        }
+        // The site picks the account by OSRS username (not the internal id), and
+        // opens the plan currently shown when there is one.
+        String url = api.websiteUrl(account, plan != null ? plan.id : null);
+        RuneAlyticsUi.confirmAndOpenLink(this, url, "RuneAlytics.com");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1158,15 +1190,15 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             prog.add(new ThinBar(p.done, p.total), BorderLayout.CENTER);
             limitHeight(prog);
             detailContent.add(prog);
-            detailContent.add(text(legend(), META, MUTED));
+            detailContent.add(text(legend(), SYMBOL_META, MUTED));
             detailContent.add(RuneAlyticsUi.vSpace(8));
         }
 
-        JButton track = actionButton(p != null && p.tracked ? "★ Tracking" : "☆ Track plan", p != null && p.tracked ? GREEN : BORDER);
+        JButton track = actionButton(p != null && p.tracked ? "Tracking ✓" : "Track plan", p != null && p.tracked ? GREEN : BORDER);
         track.setToolTipText("Keep this plan in In progress (saved on RuneAlytics)");
         track.addActionListener(e -> toggleTrack(rec));
         track.setEnabled(p != null);
-        JButton refresh = actionButton("↻ Refresh progress", BORDER);
+        JButton refresh = actionButton("Refresh progress", BORDER);
         refresh.setToolTipText("Re-check these steps against your latest synced data (doesn't generate new advice)");
         refresh.addActionListener(e -> refreshProgress());
         detailContent.add(buttonPair(track, refresh));
@@ -1179,7 +1211,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             detailContent.add(RuneAlyticsUi.vSpace(6));
             JButton link = actionButton((rec.linkLabel != null ? rec.linkLabel : "Open") + " ↗", BORDER);
             final String url = rec.linkUrl;
-            link.addActionListener(e -> LinkBrowser.browse(url));
+            link.addActionListener(e -> RuneAlyticsUi.confirmAndOpenLink(this, url, RuneAlyticsUi.siteNameOf(url)));
             detailContent.add(fullWidth(link));
         }
         if (coverage != null && !coverage.items.isEmpty())
@@ -1243,7 +1275,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         private final JLabel progressLabel = new JLabel();
         private final ThinBar bar = new ThinBar(0, 0);
         private final JButton view = actionButton("View plan ›", BORDER);
-        private final JButton track = actionButton("☆", BORDER);
+        private final JButton track = symbolButton(actionButton("☆", BORDER));
 
         RecCard(Recommendation r)
         {
@@ -1479,7 +1511,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         row.setOpaque(false);
         row.setAlignmentX(LEFT_ALIGNMENT);
         JLabel g = new JLabel(glyph);
-        g.setFont(BOLD12);
+        g.setFont(SYMBOL);
         g.setForeground(color);
         g.setPreferredSize(new Dimension(16, 16));
         JLabel l = new JLabel(label);
@@ -1554,7 +1586,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     {
         if (category == null)
         {
-            return "🧭";
+            return "◆";
         }
         switch (category)
         {
@@ -1563,8 +1595,8 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             case "skilling": return "⛏";
             case "money": return "💰";
             case "collection_log": return "📖";
-            case "preparation": return "🧭";
-            default: return "✦";
+            case "preparation": return "◆";
+            default: return "◆";
         }
     }
 
@@ -1663,7 +1695,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     private static JLabel sectionTitle(String s)
     {
         JLabel l = new JLabel(s);
-        l.setFont(new Font("Calibri", Font.BOLD, 13));
+        l.setFont(new Font("Calibri", Font.BOLD, 15));
         l.setForeground(GOLD);
         l.setAlignmentX(LEFT_ALIGNMENT);
         l.setBorder(new EmptyBorder(0, 0, 4, 0));
@@ -1747,6 +1779,13 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         return b;
     }
 
+    /** Same button, but its symbol label is drawn with the Dialog font (see {@link #SYMBOL}). */
+    private static JButton symbolButton(JButton b)
+    {
+        b.setFont(new Font("Dialog", Font.PLAIN, 14));
+        return b;
+    }
+
     private static JButton iconButton(String glyph, String tooltip)
     {
         JButton b = new JButton(glyph);
@@ -1773,7 +1812,7 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
     private static void stylePill(JButton b, boolean active)
     {
         b.setBackground(active ? new Color(30, 70, 40) : FILTER_INACTIVE);
-        b.setForeground(active ? Color.WHITE : new Color(160, 160, 160));
+        b.setForeground(active ? Color.WHITE : new Color(205, 205, 205));
         b.setBorder(new CompoundBorder(new LineBorder(active ? GREEN : FILTER_BORDER, 1, true), new EmptyBorder(2, 7, 2, 7)));
     }
 
@@ -1797,16 +1836,46 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
 
     /**
      * JTextArea measures its wrapped height from its current width, which is 0
-     * on the first layout pass. Re-validate whenever the width really changes so
-     * long titles and explanations get their full height (no clipping).
+     * on the first layout pass. This variant reports the height wrapped at its
+     * real width, and asks for one more layout pass only when a width change
+     * actually changes that height.
+     *
+     * <p>Performance: the wrapped height is cached per (width, text, font), so the
+     * many size queries during a layout pass cost nothing, and a width change that
+     * leaves the height unchanged (or bounces between two widths) never schedules
+     * another layout. That keeps the sidebar idle when nothing changes.</p>
      */
     private static final class WrapText extends JTextArea
     {
+        private int cachedWidth = -1;
+        private int cachedHeight;
+        private boolean relayoutQueued;
+
         WrapText(String s)
         {
             super(s);
             // Never let caret moves (setText) scroll the list: keep the reader's position.
             ((javax.swing.text.DefaultCaret) getCaret()).setUpdatePolicy(javax.swing.text.DefaultCaret.NEVER_UPDATE);
+            getDocument().addDocumentListener(new javax.swing.event.DocumentListener()
+            {
+                @Override
+                public void insertUpdate(javax.swing.event.DocumentEvent e)
+                {
+                    cachedWidth = -1;
+                }
+
+                @Override
+                public void removeUpdate(javax.swing.event.DocumentEvent e)
+                {
+                    cachedWidth = -1;
+                }
+
+                @Override
+                public void changedUpdate(javax.swing.event.DocumentEvent e)
+                {
+                    cachedWidth = -1;
+                }
+            });
         }
 
         /** Read-only text never needs scrolling into view; ignoring this keeps the list where the reader left it. */
@@ -1816,13 +1885,23 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
         }
 
         @Override
+        public void setFont(Font f)
+        {
+            super.setFont(f);
+            cachedWidth = -1;
+        }
+
+        @Override
         public void setBounds(int x, int y, int w, int h)
         {
             boolean widthChanged = w != getWidth();
             super.setBounds(x, y, w, h);
-            if (widthChanged && w > 0)
+            if (widthChanged && w > 0 && !relayoutQueued && wrappedHeight(w) != h)
             {
+                // The height we were given is wrong for this width: one more layout pass.
+                relayoutQueued = true;
                 SwingUtilities.invokeLater(() -> {
+                    relayoutQueued = false;
                     invalidate();
                     Container top = SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
                     (top != null ? top : getParent()).revalidate();
@@ -1830,21 +1909,30 @@ public class AccountAdvisorPanel extends RuneAlyticsPanelBase
             }
         }
 
+        /** Height of the text wrapped at {@code w} pixels, cached until width, text or font change. */
+        private int wrappedHeight(int w)
+        {
+            if (w != cachedWidth && getUI() != null)
+            {
+                Insets in = getInsets();
+                javax.swing.text.View v = getUI().getRootView(this);
+                v.setSize(Math.max(1, w - in.left - in.right), Float.MAX_VALUE);
+                cachedHeight = (int) Math.ceil(v.getPreferredSpan(javax.swing.text.View.Y_AXIS)) + in.top + in.bottom;
+                cachedWidth = w;
+            }
+            return cachedHeight;
+        }
+
         @Override
         public Dimension getPreferredSize()
         {
-            Dimension d = super.getPreferredSize();
             int w = getWidth();
             if (w > 0 && getUI() != null)
             {
                 // Height of the text wrapped at the current width; never wider than we have.
-                Insets in = getInsets();
-                javax.swing.text.View v = getUI().getRootView(this);
-                v.setSize(Math.max(1, w - in.left - in.right), Float.MAX_VALUE);
-                int h = (int) Math.ceil(v.getPreferredSpan(javax.swing.text.View.Y_AXIS)) + in.top + in.bottom;
-                d = new Dimension(w, h);
+                return new Dimension(w, wrappedHeight(w));
             }
-            return d;
+            return super.getPreferredSize();
         }
 
         @Override

@@ -4,7 +4,6 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import com.runealytics.progress.ProgressTracker;
-import net.runelite.client.util.LinkBrowser;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -716,32 +715,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private void openExternalLink(String url, String siteName)
     {
-        String message =
-                "<html><body style='width:270px; font-family:Calibri; font-size:12pt'>"
-                        + "<b style='font-size:13pt'>&#9888; External Website</b><br><br>"
-                        + "You are about to open <b>" + siteName + "</b>, a third-party website."
-                        + "<br><br>"
-                        + "<b>RuneLite is not affiliated with RuneAlytics</b> and takes no "
-                        + "responsibility for its content or services.<br><br>"
-                        + "<b>By continuing you acknowledge:</b><ul style='margin:4px 0 0 16px'>"
-                        + "<li>This site may set <b>cookies</b> and can see your <b>IP address</b></li>"
-                        + "<li><b>Do NOT</b> reuse passwords — especially your OSRS, email, "
-                        + "or banking passwords</li>"
-                        + "<li>You are solely responsible for your own account security</li>"
-                        + "</ul></body></html>";
-
-        int choice = JOptionPane.showConfirmDialog(
-                SwingUtilities.getWindowAncestor(this),
-                message,
-                "External Website — RuneAlytics",
-                JOptionPane.OK_CANCEL_OPTION,
-                JOptionPane.WARNING_MESSAGE
-        );
-
-        if (choice == JOptionPane.OK_OPTION)
-        {
-            LinkBrowser.browse(url);
-        }
+        RuneAlyticsUi.confirmAndOpenLink(this, url, siteName);
     }
 
     private JButton buildGoldButton(String text)
