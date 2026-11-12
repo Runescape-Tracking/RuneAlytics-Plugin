@@ -173,8 +173,36 @@ public class InstanceLocationTrackerTest
     public void tableCoversTheRaidRooms()
     {
         assertEquals("Theatre of Blood: Verzik Vitur", InstanceLocationTracker.AREAS.get(12611));
+        assertEquals("Theatre of Blood: Verzik Vitur", InstanceLocationTracker.AREAS.get(12867));
         assertEquals("Tombs of Amascut: Wardens", InstanceLocationTracker.AREAS.get(15696));
         assertEquals("Vorkath", InstanceLocationTracker.AREAS.get(9023));
+        assertEquals("Corporeal Beast", InstanceLocationTracker.AREAS.get(11844));
+        assertEquals("Thermonuclear smoke devil", InstanceLocationTracker.AREAS.get(9619));
+        assertEquals("Skotizo", InstanceLocationTracker.AREAS.get(9048));
         assertEquals(4883, CERBERUS_LAIR.getRegionID());
+    }
+
+    @Test
+    public void anEmptyTemplateChunkIsNotPlottedAtTheOrigin()
+    {
+        instanced = true;
+        standing = new WorldPoint(7000, 8000, 0);
+        template = new WorldPoint(3, 5, 0);
+        tracker.onGameTick();
+        assertNull(tracker.resolve(instanceCapture()));
+    }
+
+    @Test
+    public void anEmptyTemplateDoesNotDiscardAKnownEntrance()
+    {
+        standing = CERBERUS_ENTRANCE;
+        tracker.onGameTick();
+        instanced = true;
+        standing = new WorldPoint(7000, 8000, 0);
+        template = new WorldPoint(3, 5, 0);
+        tracker.onGameTick();
+        PlayerLocationSnapshot loc = tracker.resolve(instanceCapture());
+        assertEquals(2873, loc.getWorldX());
+        assertEquals("instance_entrance", loc.toJson().get("location_source").getAsString());
     }
 }

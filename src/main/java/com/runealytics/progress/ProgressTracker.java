@@ -287,7 +287,6 @@ public class ProgressTracker
         if (running) scheduleFlush(SNAPSHOT_DEBOUNCE_MS);
     }
 
-    /** Manual resync. Safe from any thread. */
     /**
      * Manual resync ("Resync Achievements"). Safe from any thread. Limited to one
      * per {@link #RESYNC_COOLDOWN_MS} so the button can't flood the website; the

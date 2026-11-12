@@ -14,7 +14,7 @@ Code: `src/main/java/com/runealytics/progress/`. Target: RuneLite 1.13.4 (`lates
 
 1. `LOGGED_IN` arms a bounded readiness gate (≥2 ticks, 1 quiet tick, account hash known, local baseline loaded; gives up after 12 ticks).
 2. Scan on `GameTick` (never inside `VarbitChanged`, because `runScript` is not reentrant). Sanity checks: quests are `unavailable` if 0 finished but QP > 0; CA is `unavailable` if all words are 0 but counters > 0.
-3. `VarbitChanged` only marks state dirty. A rescan runs after 2 quiet ticks with ≥10 ticks between scans (forced after 50 ticks). There is also a full re-read every 30 min.
+3. `VarbitChanged` only marks state dirty. A rescan runs after 2 quiet ticks with ≥25 ticks between scans (forced after 100 ticks, about 60 seconds). There is also a full re-read every 30 min.
 4. `ProgressDiffer` compares against the per-account baseline (account hash + `RuneScapeProfileType`; beta worlds skipped).
    - First observation = historical import, so **no events**.
    - Forward changes become `transitions` (`live`, or `catch_up` for the first scan after login).

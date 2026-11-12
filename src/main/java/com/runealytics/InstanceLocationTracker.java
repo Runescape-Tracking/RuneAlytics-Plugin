@@ -46,14 +46,16 @@ public class InstanceLocationTracker
         Map<Integer, String> m = new HashMap<>();
         put(m, "Cerberus", 4883, 5140, 5395);
         put(m, "Vorkath", 9023);
+        // 9008 is the north edge of Zulrah's shrine; the boss tile itself is in 9007.
         put(m, "Zulrah", 9007, 9008);
         put(m, "Kraken", 9116);
-        put(m, "Thermonuclear smoke devil", 9363);
+        put(m, "Thermonuclear smoke devil", 9363, 9619);
         put(m, "Grotesque Guardians", 6727);
         put(m, "Alchemical Hydra", 5536);
-        put(m, "Skotizo", 6810);
+        // 6810 is the older template; current clients copy the lair from 9048.
+        put(m, "Skotizo", 6810, 9048);
         put(m, "Hespori", 5021);
-        put(m, "Corporeal Beast", 11842);
+        put(m, "Corporeal Beast", 11842, 11844);
         put(m, "The Nightmare", 15515);
         put(m, "Phantom Muspah", 11330);
         put(m, "General Graardor", 11347);
@@ -75,7 +77,7 @@ public class InstanceLocationTracker
         put(m, "Theatre of Blood: Nylocas", 13122);
         put(m, "Theatre of Blood: Sotetseg", 13123, 13379);
         put(m, "Theatre of Blood: Xarpus", 12612);
-        put(m, "Theatre of Blood: Verzik Vitur", 12611);
+        put(m, "Theatre of Blood: Verzik Vitur", 12611, 12867); // 12867 is her treasure vault
         put(m, "Tombs of Amascut", 14160);
         put(m, "Tombs of Amascut: Akkha", 14676);
         put(m, "Tombs of Amascut: Ba-Ba", 15188);
@@ -117,13 +119,15 @@ public class InstanceLocationTracker
     {
         Player me = client.getLocalPlayer();
         if (me == null) return;
+        WorldPoint here = me.getWorldLocation();
+        if (here == null) return;
         if (!client.isInInstancedRegion())
         {
             if (inInstance) log.debug("[Location] left instance");
             inInstance = false;
             entrance = null;
             lastFought = null;
-            lastOutside = me.getWorldLocation();
+            lastOutside = here;
             return;
         }
         if (!inInstance)
@@ -164,6 +168,12 @@ public class InstanceLocationTracker
         if (raw == null || !raw.isInstanced()) return raw;
         Player me = client.getLocalPlayer();
         WorldPoint template = templatePoint(me);
+        // An empty instance chunk resolves to region 0 (tiles near the origin). That is
+        // not a place on the map; ignore it and keep the entrance, or omit the location.
+        if (template != null && template.getRegionID() == 0)
+        {
+            template = null;
+        }
         String name = instanceName(template);
         // Before this tick's onGameTick ran, the spot from the last tick outside is the entrance.
         WorldPoint door = inInstance ? entrance : lastOutside;
