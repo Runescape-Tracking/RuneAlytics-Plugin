@@ -46,11 +46,19 @@ public final class PlayerLocationSnapshot
     /** Instances only: what the player is doing there ("Cerberus", "Theatre of Blood: Xarpus"); may be null. */
     @SerializedName("instance_name")     private String  instanceName;
     /**
-     * Instances only: {@code true} when the coordinates are where the player entered
-     * the instance (e.g. the Cerberus winch), {@code false} when they are the
-     * instance's template position on the world map.
+     * With {@link #locationSource}: {@code true} when the coordinates are where the
+     * player entered (e.g. the Cerberus winch), {@code false} when they are the
+     * template position. An older kill record has this {@code false} and no
+     * {@code locationSource}; those coordinates were never rewritten.
      */
     @SerializedName("instance_entrance") private boolean instanceEntrance;
+    /**
+     * Set only when this snapshot replaced instance-space coordinates.
+     * {@code instance_entrance} or {@code instance_template}. Absent on captures
+     * that still hold the raw instance coordinates, including kill records saved
+     * before that rewrite existed.
+     */
+    @SerializedName("location_source")   private String  locationSource;
 
     /** Required by Gson when deserializing persisted kill records. */
     public PlayerLocationSnapshot() {}
@@ -77,6 +85,11 @@ public final class PlayerLocationSnapshot
         this.timestamp = timestamp;
     }
 
+    /** {@code location_source} when the coordinates are the tile the player entered from. */
+    public static final String SOURCE_ENTRANCE = "instance_entrance";
+    /** {@code location_source} when the coordinates are the instance template on the world map. */
+    public static final String SOURCE_TEMPLATE = "instance_template";
+
     /**
      * A location for a player inside an instance: {@code at} is the entrance (or the
      * template position), never the meaningless instance coordinates.
@@ -94,6 +107,7 @@ public final class PlayerLocationSnapshot
                 true, world, timestamp);
         s.instanceName = instanceName;
         s.instanceEntrance = entrance;
+        s.locationSource = entrance ? SOURCE_ENTRANCE : SOURCE_TEMPLATE;
         return s;
     }
 
@@ -205,10 +219,19 @@ public final class PlayerLocationSnapshot
         o.addProperty("instanced",  instanced);
         o.addProperty("world",      world);
         o.addProperty("timestamp",  timestamp);
-        if (instanced)
+        // Only snapshots rewritten by forInstance (or an older record that already
+        // stored instance_entrance=true) name a real map position. A plain instanced
+        // capture still holds throw-away instance coordinates, so it must not claim
+        // to be the template.
+        String source = locationSource;
+        if (source == null && instanceEntrance)
         {
-            o.addProperty("instance_name", instanceName);            // null -> JSON null
-            o.addProperty("location_source", instanceEntrance ? "instance_entrance" : "instance_template");
+            source = SOURCE_ENTRANCE;
+        }
+        if (source != null)
+        {
+            o.addProperty("instance_name", instanceName); // null -> JSON null
+            o.addProperty("location_source", source);
         }
         return o;
     }
@@ -222,7 +245,9 @@ public final class PlayerLocationSnapshot
                 + ", region=" + regionId
                 + ", chunk=(" + chunkX + "," + chunkY + ")"
                 + ", instanced=" + instanced
-                + (instanced ? ", instance=" + instanceName + (instanceEntrance ? " (entrance)" : " (template)") : "")
+                + (locationSource != null
+                    ? ", instance=" + instanceName + (instanceEntrance ? " (entrance)" : " (template)")
+                    : "")
                 + ", ts=" + timestamp + "}";
     }
 }

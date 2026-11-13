@@ -1,5 +1,6 @@
 package com.runealytics;
 
+import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
 import org.junit.Test;
@@ -59,5 +60,30 @@ public class PlayerLocationSnapshotTest
         assertTrue(json.get("instanced").getAsBoolean());
         assertTrue(json.get("map_region").isJsonNull());
         assertTrue(json.get("area_name").isJsonNull());
+        assertFalse("raw instance coordinates are not a template position", json.has("location_source"));
+        assertFalse(json.has("instance_name"));
+    }
+
+    @Test
+    public void toJson_keepsLegacyInstancedKillsUnlabelled()
+    {
+        PlayerLocationSnapshot legacy = new Gson().fromJson(
+                "{\"instanced\":true,\"world_x\":7000,\"world_y\":8000,\"world\":330}",
+                PlayerLocationSnapshot.class);
+        JsonObject json = legacy.toJson();
+        assertTrue(json.get("instanced").getAsBoolean());
+        assertEquals(7000, json.get("world_x").getAsInt());
+        assertFalse(json.has("location_source"));
+    }
+
+    @Test
+    public void toJson_stillLabelsAnEntranceSavedBeforeLocationSourceExisted()
+    {
+        PlayerLocationSnapshot saved = new Gson().fromJson(
+                "{\"instanced\":true,\"instance_entrance\":true,\"instance_name\":\"Cerberus\",\"world_x\":2873}",
+                PlayerLocationSnapshot.class);
+        JsonObject json = saved.toJson();
+        assertEquals("instance_entrance", json.get("location_source").getAsString());
+        assertEquals("Cerberus", json.get("instance_name").getAsString());
     }
 }
