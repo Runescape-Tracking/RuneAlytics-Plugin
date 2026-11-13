@@ -11,6 +11,7 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +45,8 @@ public class RuneAlyticsPanel extends PluginPanel
     public static final String FEATURE_LOOT         = "loot_tracker";
     /** Server-controlled: shows the Match Finder tab. */
     public static final String FEATURE_MATCHES      = "match_finder";
+    /** Advisor tab: Account Advisor recommendations from runealytics.com. */
+    public static final String FEATURE_ADVISOR      = "advisor";
     /** Server-controlled: shows the XP Tracker tab. */
     public static final String FEATURE_XP_TRACKER   = "xp_tracker";
     /**
@@ -52,6 +55,12 @@ public class RuneAlyticsPanel extends PluginPanel
      * tab is always visible; this only enables the server-side session sync.
      */
     public static final String FEATURE_XP_SESSION   = "xp_session";
+    /**
+     * Server-controlled: gates whether quest / diary / combat-achievement progress
+     * is uploaded to {@code /api/plugin/v1/accounts/me/progress}. Progress is still
+     * captured locally while the flag is off, so nothing is lost before launch.
+     */
+    public static final String FEATURE_ACHIEVEMENTS = "achievements";
     /**
      * Locally-controlled pseudo-flag: shows the Settings / Verification tab.
      * Set {@code true} when the account is not verified; {@code false} once verified.
@@ -92,6 +101,14 @@ public class RuneAlyticsPanel extends PluginPanel
     }
 
     private final List<TabEntry> tabRegistry = new ArrayList<>();
+
+    /**
+     * Shorter labels used when more than {@link #MAX_TABS_FOR_FULL_TITLES} tabs are
+     * showing, so the tab strip fits the sidebar. Only the label changes: the
+     * registered title stays the tab's identity for lookups and the saved last tab.
+     */
+    private static final Map<String, String> SHORT_TITLES = Collections.singletonMap("Loot Tracker", "Loot");
+    private static final int MAX_TABS_FOR_FULL_TITLES = 3;
 
     /**
      * Callbacks fired on the EDT immediately after a tab transitions from
@@ -177,6 +194,7 @@ public class RuneAlyticsPanel extends PluginPanel
             TabEntry entry = new TabEntry(title, featureKey, content);
             tabRegistry.add(entry);
             tabbedPane.addTab(title, content);
+            updateTabLabels();
             log.debug("Tab added: '{}' (feature={})", title, featureKey);
 
             // If feature flags were already applied before this tab was
@@ -302,6 +320,8 @@ public class RuneAlyticsPanel extends PluginPanel
             if (fallback >= 0) tabbedPane.setSelectedIndex(fallback);
         }
 
+        updateTabLabels();
+
         // validate() lays out only this subtree, avoiding a full-frame relayout flash.
         tabbedPane.validate();
         tabbedPane.repaint();
@@ -315,9 +335,9 @@ public class RuneAlyticsPanel extends PluginPanel
      */
     private int preferredFallbackIndex()
     {
-        int loot = tabbedPane.indexOfTab("Loot Tracker");
+        int loot = indexOfTitle("Loot Tracker");
         if (loot >= 0) return loot;
-        int settings = tabbedPane.indexOfTab("Settings");
+        int settings = indexOfTitle("Settings");
         if (settings >= 0) return settings;
         return tabbedPane.getTabCount() > 0 ? 0 : -1;
     }
@@ -346,6 +366,7 @@ public class RuneAlyticsPanel extends PluginPanel
         flags.put(FEATURE_LOOT,         true);   // local tracking always available
         flags.put(FEATURE_XP_TRACKER,   true);   // shown until server flags say otherwise
         flags.put(FEATURE_MATCHES,      false);  // match finder requires verification
+        flags.put(FEATURE_ADVISOR,      false);  // advice requires a verified account
         applyFeatureFlags(flags);
     }
 
@@ -361,12 +382,31 @@ public class RuneAlyticsPanel extends PluginPanel
      */
     public void showMainFeatures(boolean lootEnabled, boolean xpEnabled, boolean matchEnabled)
     {
+        showMainFeatures(lootEnabled, xpEnabled, matchEnabled, true);
+    }
+
+    /** As above, plus the Advisor tab (server flag "advisor", on by default). */
+    public void showMainFeatures(boolean lootEnabled, boolean xpEnabled, boolean matchEnabled, boolean advisorEnabled)
+    {
         Map<String, Boolean> flags = new HashMap<>();
+        flags.put(FEATURE_ADVISOR,      advisorEnabled);
         flags.put(FEATURE_VERIFICATION, true);   // always accessible
         flags.put(FEATURE_LOOT,         lootEnabled);
         flags.put(FEATURE_XP_TRACKER,   xpEnabled);
         flags.put(FEATURE_MATCHES,      matchEnabled);
         applyFeatureFlags(flags);
+    }
+
+    /** Selects a visible tab by its title (e.g. the Advisor header's ⚙ opens "Settings"). */
+    public void selectTab(String title)
+    {
+        SwingUtilities.invokeLater(() -> {
+            int idx = indexOfTitle(title);
+            if (idx >= 0)
+            {
+                tabbedPane.setSelectedIndex(idx);
+            }
+        });
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -378,8 +418,9 @@ public class RuneAlyticsPanel extends PluginPanel
         int idx = tabbedPane.getSelectedIndex();
         if (idx >= 0)
         {
-            // Persist the selected tab's title (indices shift as tabs are added/removed).
-            String title = tabbedPane.getTitleAt(idx);
+            // Persist the selected tab's registered title (indices shift as tabs are
+            // added/removed, and the shown label may be shortened).
+            String title = registeredTitleAt(idx);
             configManager.setConfiguration(CONFIG_GROUP, CONFIG_LAST_TAB, title);
             log.debug("Saved last tab: {}", title);
         }
@@ -396,7 +437,7 @@ public class RuneAlyticsPanel extends PluginPanel
             if (saved == null || saved.trim().isEmpty()) return;
 
             // Look up by title; an unknown or hidden tab resolves to -1 and is ignored.
-            int idx = tabbedPane.indexOfTab(saved.trim());
+            int idx = indexOfTitle(saved.trim());
             if (idx >= 0)
             {
                 tabbedPane.setSelectedIndex(idx);
@@ -408,6 +449,66 @@ public class RuneAlyticsPanel extends PluginPanel
     // ═════════════════════════════════════════════════════════════════════════
     //  Private helpers
     // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Index of the visible tab registered under {@code title} (its full name, e.g.
+     * "Loot Tracker", even while it is labelled "Loot"), or -1 if hidden/unknown.
+     * A shortened label is accepted too.
+     */
+    private int indexOfTitle(String title)
+    {
+        for (TabEntry e : tabRegistry)
+        {
+            if (e.title.equals(title) || title.equals(SHORT_TITLES.get(e.title)))
+            {
+                return findTabIndex(e);
+            }
+        }
+        return tabbedPane.indexOfTab(title);
+    }
+
+    /** The registered (full) title of the tab at {@code idx}. */
+    private String registeredTitleAt(int idx)
+    {
+        Component c = tabbedPane.getComponentAt(idx);
+        for (TabEntry e : tabRegistry)
+        {
+            if (e.content == c) return e.title;
+        }
+        return tabbedPane.getTitleAt(idx);
+    }
+
+    /** Puts {@code banner} above the tabs (e.g. the public Online Status warning). EDT. */
+    public void setTopBanner(JComponent banner)
+    {
+        add(banner, BorderLayout.NORTH);
+        revalidate();
+        repaint();
+    }
+
+    /** Labels of the tabs currently shown, in order (tests). */
+    List<String> visibleTabLabels()
+    {
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < tabbedPane.getTabCount(); i++) out.add(tabbedPane.getTitleAt(i));
+        return out;
+    }
+
+    /** Uses the short labels while more than {@link #MAX_TABS_FOR_FULL_TITLES} tabs are showing. */
+    private void updateTabLabels()
+    {
+        boolean crowded = tabbedPane.getTabCount() > MAX_TABS_FOR_FULL_TITLES;
+        for (TabEntry e : tabRegistry)
+        {
+            int idx = findTabIndex(e);
+            if (idx < 0) continue;
+            String label = crowded ? SHORT_TITLES.getOrDefault(e.title, e.title) : e.title;
+            if (!label.equals(tabbedPane.getTitleAt(idx)))
+            {
+                tabbedPane.setTitleAt(idx, label);
+            }
+        }
+    }
 
     private int findTabIndex(TabEntry entry)
     {

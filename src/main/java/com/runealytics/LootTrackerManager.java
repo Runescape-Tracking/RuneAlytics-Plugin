@@ -369,6 +369,26 @@ public class LootTrackerManager
     //  CONSTRUCTOR
     // ═════════════════════════════════════════════════════════════════════════
 
+    /**
+     * How the plugin captures a location (privacy decoy, Wilderness-trip override and
+     * instance entrance applied). Falls back to a plain privacy-aware capture.
+     */
+    private volatile java.util.function.Supplier<PlayerLocationSnapshot> locationSource;
+
+    /** Uses {@code source} to capture kill locations (client thread). */
+    public void setLocationSource(java.util.function.Supplier<PlayerLocationSnapshot> source)
+    {
+        this.locationSource = source;
+    }
+
+    private PlayerLocationSnapshot captureLocation()
+    {
+        java.util.function.Supplier<PlayerLocationSnapshot> src = locationSource;
+        return src != null
+                ? src.get()
+                : PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
+    }
+
     @Inject
     public LootTrackerManager(
             Client                   client,
@@ -1464,7 +1484,7 @@ public class LootTrackerManager
         // 3. Use pre-captured location if available; otherwise capture on current thread.
         PlayerLocationSnapshot location = capturedLocation != null
                 ? capturedLocation
-                : PlayerLocationSnapshot.captureRespectingPrivacy(client, config.playerVisibility());
+                : captureLocation();
 
         // 4. Create the storage-compatible record
         LootStorageData.KillRecord killRecord = new LootStorageData.KillRecord();

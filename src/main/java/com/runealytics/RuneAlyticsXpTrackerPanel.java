@@ -781,7 +781,8 @@ public class RuneAlyticsXpTrackerPanel extends PluginPanel
         return b;
     }
 
-    private static String prettyAccount(String normalized)
+    /** "rune alytics" → "Rune Alytics". Also used by the Advisor tab's account line. */
+    static String prettyAccount(String normalized)
     {
         // Normalized keys are lowercase; title-case each word for display.
         String[] parts = normalized.split(" ");

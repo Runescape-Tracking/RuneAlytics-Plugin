@@ -43,6 +43,12 @@ public class RuneAlyticsState
     private volatile boolean xpSessionSyncEnabled;
 
     /**
+     * Server feature flag ({@code "achievements"}): when {@code true}, quest, diary
+     * and combat-achievement progress is uploaded. Defaults {@code false}.
+     */
+    private volatile boolean achievementSyncEnabled;
+
+    /**
      * Current game mode resolved at the time of the last loot/XP event.
      * Possible values: "regular", "ironman", "leagues", "deadman",
      * "fresh_start", "grid_master".
@@ -95,6 +101,7 @@ public class RuneAlyticsState
         syncInProgress = false;
         lastSyncTime = 0;
         xpSessionSyncEnabled = false;
+        achievementSyncEnabled = false;
         currentGameMode = "regular";
         currentAccountSubtype = "normal";
         currentLocation = null;
@@ -109,6 +116,15 @@ public class RuneAlyticsState
     public long getSessionGeneration()
     {
         return sessionGeneration;
+    }
+
+    /**
+     * Starts a new session generation. Called on logout so async work captured for
+     * the previous login (same name or not) is recognised as stale.
+     */
+    public void nextSessionGeneration()
+    {
+        sessionGeneration++;
     }
 
     public boolean canSync()

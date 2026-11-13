@@ -3,7 +3,7 @@ package com.runealytics;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import net.runelite.client.util.LinkBrowser;
+import com.runealytics.progress.ProgressTracker;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -52,6 +52,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private final RunealyticsApiClient         apiClient;
     private final ScheduledExecutorService     executorService;
     private final Client                       client;
+    private final ProgressTracker              progressTracker;
 
     private JScrollPane scroll;
 
@@ -61,6 +62,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
     private JLabel     connectionTitleLabel;
     private JLabel     connectionBodyLabel;
 
+    private final PrivacyWarningManager privacyWarnings;
+
     @Inject
     public RuneAlyticsSettingsPanel(
             RuneAlyticsVerificationPanel verificationPanel,
@@ -68,7 +71,9 @@ public class RuneAlyticsSettingsPanel extends JPanel
             RuneAlyticsState             state,
             RunealyticsApiClient         apiClient,
             ScheduledExecutorService     executorService,
-            Client                       client
+            Client                       client,
+            ProgressTracker              progressTracker,
+            PrivacyWarningManager        privacyWarnings
     )
     {
         this.verificationPanel = verificationPanel;
@@ -77,6 +82,8 @@ public class RuneAlyticsSettingsPanel extends JPanel
         this.apiClient         = apiClient;
         this.executorService   = executorService;
         this.client            = client;
+        this.progressTracker   = progressTracker;
+        this.privacyWarnings   = privacyWarnings;
 
         setLayout(new BorderLayout());
         setBackground(PANEL_BG);
@@ -137,6 +144,10 @@ public class RuneAlyticsSettingsPanel extends JPanel
         panel.add(sectionHeader("PRIVACY SETTINGS"));
         panel.add(vSpace(6));
         panel.add(buildPrivacySection());
+        panel.add(vSpace(14));
+        panel.add(sectionHeader("ACHIEVEMENTS"));
+        panel.add(vSpace(6));
+        panel.add(buildAchievementsSection());
         panel.add(vSpace(16));
         panel.add(buildNeedHelpSection());
         panel.add(vSpace(20));
@@ -210,7 +221,81 @@ public class RuneAlyticsSettingsPanel extends JPanel
         visCard.add(buildPillToggle(config.playerVisibility(), v -> config.playerVisibility(v)));
         p.add(visCard);
 
+        p.add(vSpace(10));
+        p.add(buildWarningsCard());
+
         return p;
+    }
+
+    /**
+     * "Show public status warnings" (eye above the player, chat line, sidebar box,
+     * Wilderness panel) and "Reset remembered dismissal". Independent of Online Status.
+     */
+    private JPanel buildWarningsCard()
+    {
+        JPanel card = settingsCard();
+
+        JLabel title = new JLabel("Show public status warnings");
+        title.setFont(cf(Font.BOLD, 13f));
+        title.setForeground(Color.WHITE);
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.add(title);
+        card.add(vSpace(8));
+        card.add(compactLabel(
+                "While your Online Status is Public: a chat reminder, and in the Wilderness an eye above your "
+                        + "character plus warnings here and in the game. Turning this off does not change your Online Status.",
+                BODY_TEXT,
+                cf(Font.PLAIN, 12f)
+        ));
+        card.add(vSpace(10));
+
+        JPanel row = new JPanel(new GridLayout(1, 2, 5, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setPreferredSize(new Dimension(1, 34));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        ButtonGroup group = new ButtonGroup();
+        JToggleButton on = new JToggleButton("On");
+        JToggleButton off = new JToggleButton("Off");
+        boolean enabled = config.showPublicStatusWarnings();
+        for (JToggleButton b : new JToggleButton[]{on, off})
+        {
+            b.setFont(cf(Font.PLAIN, 12f));
+            b.setFocusPainted(false);
+            b.setOpaque(true);
+            b.setContentAreaFilled(true);
+            b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            b.setMargin(new Insets(0, 0, 0, 0));
+            group.add(b);
+            row.add(b);
+        }
+        on.setSelected(enabled);
+        off.setSelected(!enabled);
+        applyPillStyle(on);
+        applyPillStyle(off);
+        on.addItemListener(e ->
+        {
+            applyPillStyle(on);
+            applyPillStyle(off);
+            if (on.isSelected() && !config.showPublicStatusWarnings()) config.showPublicStatusWarnings(true);
+            if (off.isSelected() && config.showPublicStatusWarnings()) config.showPublicStatusWarnings(false);
+        });
+        card.add(row);
+        card.add(vSpace(10));
+
+        JButton reset = buildTealButton("Reset remembered dismissal");
+        boolean any = privacyWarnings != null && privacyWarnings.hasRememberedDismissals();
+        reset.setEnabled(any);
+        reset.setToolTipText(any
+                ? "Show the Wilderness warnings again on every account that ticked \"Remember dismissal\""
+                : "No account has a remembered dismissal");
+        reset.addActionListener(e ->
+        {
+            if (privacyWarnings != null) privacyWarnings.resetRememberedDismissals();
+            reset.setEnabled(false);
+        });
+        card.add(reset);
+        return card;
     }
 
     private JPanel buildPillToggle(PrivacySetting current, Consumer<PrivacySetting> onChange)
@@ -472,6 +557,74 @@ public class RuneAlyticsSettingsPanel extends JPanel
         parent.add(card);
     }
 
+    /**
+     * Quest / diary / combat-achievement sync. Progress is captured automatically;
+     * the button only queues a full re-read and snapshot upload (handled on the
+     * client thread and a background executor by {@link ProgressTracker}).
+     */
+    private JPanel buildAchievementsSection()
+    {
+        JPanel p = verticalPanel();
+
+        p.add(compactLabel(
+                "Quests, achievement diaries and combat achievements sync automatically while you play.",
+                BODY_TEXT,
+                cf(Font.PLAIN, 13f),
+                TEXT_WRAP_PX
+        ));
+        p.add(vSpace(10));
+
+        JButton resyncBtn = buildTealButton("Resync Achievements");
+        resyncBtn.setToolTipText("Re-read and resend all quest, diary and combat achievement progress (once every 5 minutes)");
+        resyncBtn.addActionListener(e ->
+        {
+            if (progressTracker.requestResync())
+            {
+                showResyncCooldown(resyncBtn);
+            }
+        });
+        // The Settings page is rebuilt often; pick up a cooldown that is still running.
+        showResyncCooldown(resyncBtn);
+        p.add(resyncBtn);
+        return p;
+    }
+
+    /**
+     * While the tracker's 5-minute resync cooldown runs, disables the button and
+     * counts down on it ("Resync in 4:59"), once a second; restores it after.
+     * The Swing timer stops itself, so nothing keeps running once it ends.
+     */
+    private void showResyncCooldown(JButton btn)
+    {
+        if (progressTracker.resyncCooldownRemainingMs() <= 0)
+        {
+            btn.setText("Resync Achievements");
+            btn.setEnabled(true);
+            return;
+        }
+        btn.setEnabled(false);
+        updateResyncLabel(btn);
+        javax.swing.Timer tick = new javax.swing.Timer(1_000, null);
+        tick.addActionListener(ev ->
+        {
+            if (progressTracker.resyncCooldownRemainingMs() <= 0 || !btn.isDisplayable())
+            {
+                tick.stop();
+                btn.setText("Resync Achievements");
+                btn.setEnabled(true);
+                return;
+            }
+            updateResyncLabel(btn);
+        });
+        tick.start();
+    }
+
+    private void updateResyncLabel(JButton btn)
+    {
+        long secs = (progressTracker.resyncCooldownRemainingMs() + 999) / 1_000;
+        btn.setText(String.format("Resync in %d:%02d", secs / 60, secs % 60));
+    }
+
     private JPanel buildNeedHelpSection()
     {
         JPanel p = verticalPanel();
@@ -673,32 +826,7 @@ public class RuneAlyticsSettingsPanel extends JPanel
 
     private void openExternalLink(String url, String siteName)
     {
-        String message =
-                "<html><body style='width:270px; font-family:Calibri; font-size:12pt'>"
-                        + "<b style='font-size:13pt'>&#9888; External Website</b><br><br>"
-                        + "You are about to open <b>" + siteName + "</b>, a third-party website."
-                        + "<br><br>"
-                        + "<b>RuneLite is not affiliated with RuneAlytics</b> and takes no "
-                        + "responsibility for its content or services.<br><br>"
-                        + "<b>By continuing you acknowledge:</b><ul style='margin:4px 0 0 16px'>"
-                        + "<li>This site may set <b>cookies</b> and can see your <b>IP address</b></li>"
-                        + "<li><b>Do NOT</b> reuse passwords — especially your OSRS, email, "
-                        + "or banking passwords</li>"
-                        + "<li>You are solely responsible for your own account security</li>"
-                        + "</ul></body></html>";
-
-        int choice = JOptionPane.showConfirmDialog(
-                SwingUtilities.getWindowAncestor(this),
-                message,
-                "External Website — RuneAlytics",
-                JOptionPane.OK_CANCEL_OPTION,
-                JOptionPane.WARNING_MESSAGE
-        );
-
-        if (choice == JOptionPane.OK_OPTION)
-        {
-            LinkBrowser.browse(url);
-        }
+        RuneAlyticsUi.confirmAndOpenLink(this, url, siteName);
     }
 
     private JButton buildGoldButton(String text)

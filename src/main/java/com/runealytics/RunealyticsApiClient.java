@@ -246,17 +246,31 @@ public class RunealyticsApiClient
      */
     public void syncPrivacySettings(PrivacySetting bankPrivacy, PrivacySetting playerVisibility)
     {
+        syncPrivacySettings(bankPrivacy, playerVisibility, null);
+    }
+
+    /**
+     * As {@link #syncPrivacySettings(PrivacySetting, PrivacySetting)}, then reports
+     * the outcome to {@code done} (on an OkHttp thread): {@code true} only for a
+     * 2xx response. A skipped call (account not linked) reports {@code false}.
+     */
+    public void syncPrivacySettings(PrivacySetting bankPrivacy, PrivacySetting playerVisibility,
+                                    java.util.function.Consumer<Boolean> done)
+    {
+        final java.util.function.Consumer<Boolean> report = done != null ? done : ok -> { };
         String token    = state.getVerificationCode();
         String username = state.getVerifiedUsername();
 
         if (token == null || token.isEmpty())
         {
             log.debug("[Privacy] Skipping — no verification token in state");
+            report.accept(false);
             return;
         }
         if (username == null || username.isEmpty())
         {
             log.debug("[Privacy] Skipping — no username in state");
+            report.accept(false);
             return;
         }
 
@@ -288,16 +302,18 @@ public class RunealyticsApiClient
             public void onFailure(Call call, IOException e)
             {
                 log.debug("[Privacy] Network failure: {}", e.getMessage());
+                report.accept(false);
             }
 
             @Override
             @SuppressWarnings("NullableProblems")
             public void onResponse(Call call, Response response)
             {
+                boolean ok = response.isSuccessful();
                 try
                 {
                     String responseBody = response.body() != null ? response.body().string() : "";
-                    if (response.isSuccessful())
+                    if (ok)
                         log.debug("[Privacy] OK HTTP {} — {}", response.code(), responseBody);
                     else
                         log.debug("[Privacy] FAILED HTTP {} — {}", response.code(), responseBody);
@@ -310,6 +326,7 @@ public class RunealyticsApiClient
                 {
                     response.close();
                 }
+                report.accept(ok);
             }
         });
     }
@@ -446,6 +463,9 @@ public class RunealyticsApiClient
                         List<MapPlayer> players = parseVisiblePlayers(responseBody);
                         state.setVisibleMapPlayers(players);
                         log.debug("[Heartbeat] {} visible map player(s) received", players.size());
+                        // Server-controlled debug logging; anything other than an
+                        // explicit `"debug_logging": true` means off.
+                        RuneAlyticsLogGate.setVerbose(RuneAlyticsLogGate.parseDebugLogging(gson, responseBody));
                     }
                     else
                     {

@@ -3,6 +3,7 @@ package com.runealytics;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.util.ImageUtil;
+import net.runelite.client.util.LinkBrowser;
 
 import javax.swing.*;
 import javax.swing.border.Border;
@@ -429,5 +430,65 @@ public final class RuneAlyticsUi
     public static Component hSpace(int px)
     {
         return Box.createRigidArea(new Dimension(px, 0));
+    }
+
+    /**
+     * Shows the "External Website" warning (cookies, IP address, password reuse,
+     * RuneLite is not affiliated) and opens {@code url} only if the user presses OK.
+     * Every link RuneAlytics opens in the browser goes through this. EDT only.
+     *
+     * @param parent   any component in the sidebar (used to position the dialog)
+     * @param url      the address to open
+     * @param siteName shown in bold, e.g. "RuneAlytics.com"
+     */
+    public static void confirmAndOpenLink(Component parent, String url, String siteName)
+    {
+        if (url == null || url.isEmpty()) return;
+        String message =
+                "<html><body style='width:270px; font-family:Calibri; font-size:12pt'>"
+                        + "<b style='font-size:13pt'>&#9888; External Website</b><br><br>"
+                        + "You are about to open <b>" + escapeHtml(siteName) + "</b>, a third-party website."
+                        + "<br><br>"
+                        + "<b>RuneLite is not affiliated with RuneAlytics</b> and takes no "
+                        + "responsibility for its content or services.<br><br>"
+                        + "<b>By continuing you acknowledge:</b><ul style='margin:4px 0 0 16px'>"
+                        + "<li>This site may set <b>cookies</b> and can see your <b>IP address</b></li>"
+                        + "<li><b>Do NOT</b> reuse passwords — especially your OSRS, email, "
+                        + "or banking passwords</li>"
+                        + "<li>You are solely responsible for your own account security</li>"
+                        + "</ul></body></html>";
+
+        int choice = JOptionPane.showConfirmDialog(
+                parent != null ? SwingUtilities.getWindowAncestor(parent) : null,
+                message,
+                "External Website — RuneAlytics",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE
+        );
+
+        if (choice == JOptionPane.OK_OPTION)
+        {
+            LinkBrowser.browse(url);
+        }
+    }
+
+    /** Host of {@code url} for the warning dialog (e.g. "oldschool.runescape.wiki"), or the url itself. */
+    public static String siteNameOf(String url)
+    {
+        try
+        {
+            String host = java.net.URI.create(url).getHost();
+            return host != null ? host.replaceFirst("^www\\.", "") : url;
+        }
+        catch (IllegalArgumentException e)
+        {
+            return url;
+        }
+    }
+
+    private static String escapeHtml(String s)
+    {
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 }
