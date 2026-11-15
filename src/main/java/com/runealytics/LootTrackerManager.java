@@ -618,9 +618,12 @@ public class LootTrackerManager
     /**
      * Wave/add NPCs that appear during multi-stage boss encounters but never
      * carry a loot table of their own (Mokhaiotl Delves, TzHaar Fight Cave,
-     * the Inferno, Fortis Colosseum). Recording their deaths only produces
-     * empty "No drops recorded yet" containers, so they never get one,
-     * regardless of {@code trackAllNpcs}.
+     * the Inferno, Fortis Colosseum, raids, Corrupted Gauntlet). Recording their
+     * deaths only produces empty "No drops recorded yet" containers, so they
+     * never get one, regardless of {@code trackAllNpcs}.
+     *
+     * <p>These names exist only inside those encounters, so a substring match is
+     * safe anywhere (including when purging old saved data).</p>
      */
     private static final Set<String> NON_LOOT_ENCOUNTER_ADDS = ImmutableSet.of(
             // Mokhaiotl Delves adds
@@ -629,31 +632,57 @@ public class LootTrackerManager
             "tz-kih", "tz-kek", "tok-xil", "yt-mejkot", "ket-zek",
             // Fortis Colosseum waves (Sol Heredit's loot comes via widget read)
             "serpent shaman", "jaguar warrior", "javelin colossus",
-            "manticore", "shockwave colossus", "fremennik seer", "minotaur",
+            "manticore", "shockwave colossus", "fremennik seer",
             // Chambers of Xeric adds (loot comes from chest, not individual mobs)
-            "guardian", "muttadile", "tekton", "ice demon", "lizardman shaman",
-            "scout", "soldier",
+            "muttadile", "tekton", "ice demon",
             // Theatre of Blood adds (loot comes from chest, not individual mobs)
-            "nylocas vasilias", "nylocas", "bloat", "pestilent",
+            "nylocas", "pestilent",
             // Tombs of Amascut adds (loot comes from chest, not individual mobs)
-            "scabarite", "cursed", "scarab", "soul",
+            "scabarite",
             // Corrupted Gauntlet adds (loot comes from chest, not individual mobs)
             "corrupted wolf", "corrupted spider", "corrupted scorpion",
             "corrupted ogre", "corrupted unicorn", "corrupted bat"
     );
 
     /**
-     * @param lowerName already-lowercased, already-normalised NPC name
+     * Encounter adds whose names are ordinary words also used by normal monsters
+     * that do drop loot (Kalphite Soldier, Minotaur, Lizardman shaman, Earth
+     * guardian, Scarab mage, …). They only count as no-drop adds when the kill
+     * happened inside an instance (the raids, the Colosseum), and they are never
+     * purged from saved data.
+     */
+    private static final Set<String> INSTANCE_ONLY_ENCOUNTER_ADDS = ImmutableSet.of(
+            // Chambers of Xeric
+            "guardian", "lizardman shaman", "scout", "soldier",
+            // Fortis Colosseum
+            "minotaur",
+            // Theatre of Blood
+            "bloat",
+            // Tombs of Amascut
+            "cursed", "scarab", "soul"
+    );
+
+    /**
+     * @param lowerName  already-lowercased, already-normalised NPC name
+     * @param inInstance whether the kill happened inside an instance; {@code false}
+     *                   when unknown (e.g. purging saved data on load)
      * @return true if this is a known no-drop encounter add (Inferno waves
      *         are matched by their shared {@code "jal-"} prefix rather than
      *         an exhaustive name list).
      */
-    private static boolean isNonLootEncounterAdd(String lowerName)
+    static boolean isNonLootEncounterAdd(String lowerName, boolean inInstance)
     {
         if (lowerName.startsWith("jal-") || lowerName.startsWith("jaltok")) return true;
         for (String s : NON_LOOT_ENCOUNTER_ADDS)
         {
             if (lowerName.contains(s)) return true;
+        }
+        if (inInstance)
+        {
+            for (String s : INSTANCE_ONLY_ENCOUNTER_ADDS)
+            {
+                if (lowerName.contains(s)) return true;
+            }
         }
         return false;
     }
@@ -690,7 +719,7 @@ public class LootTrackerManager
 
         String name = normalizeBossName(npc.getName());
 
-        if (isNonLootEncounterAdd(name.toLowerCase()))
+        if (isNonLootEncounterAdd(name.toLowerCase(), client.isInInstancedRegion()))
         {
             log.debug("Zero-loot kill suppressed for known no-drop encounter add '{}' (id={})",
                     name, npcId);
@@ -2084,7 +2113,9 @@ public class LootTrackerManager
 
             String canonical = normalizeBossName(rawKey);
 
-            if (isNonLootEncounterAdd(canonical.toLowerCase()))
+            // Only names that exist solely inside encounters are purged; a stored
+            // "Kalphite Soldier" or "Minotaur" is a real monster with real loot.
+            if (isNonLootEncounterAdd(canonical.toLowerCase(), false))
             {
                 bossKills.remove(rawKey);
                 changed = true;
