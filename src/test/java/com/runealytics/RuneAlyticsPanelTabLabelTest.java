@@ -14,11 +14,11 @@ import static org.mockito.Mockito.mock;
 
 public class RuneAlyticsPanelTabLabelTest
 {
-    private static Map<String, Boolean> flags(boolean matches)
+    private static Map<String, Boolean> flags(boolean extra)
     {
         Map<String, Boolean> f = new HashMap<>();
         f.put(RuneAlyticsPanel.FEATURE_XP_TRACKER, true);
-        f.put(RuneAlyticsPanel.FEATURE_MATCHES, matches);
+        f.put("extra_tab", extra);
         f.put(RuneAlyticsPanel.FEATURE_ADVISOR, true);
         f.put(RuneAlyticsPanel.FEATURE_VERIFICATION, true);
         return f;
@@ -31,11 +31,11 @@ public class RuneAlyticsPanelTabLabelTest
         SwingUtilities.invokeAndWait(() -> panel[0] = new RuneAlyticsPanel(mock(ConfigManager.class)));
         panel[0].addTab("Loot Tracker", null, new JPanel());
         panel[0].addTab("XP", RuneAlyticsPanel.FEATURE_XP_TRACKER, new JPanel());
-        panel[0].addTab("Matches", RuneAlyticsPanel.FEATURE_MATCHES, new JPanel());
+        panel[0].addTab("Extra", "extra_tab", new JPanel());
         panel[0].addTab("Settings", RuneAlyticsPanel.FEATURE_VERIFICATION, new JPanel());
 
         SwingUtilities.invokeAndWait(() -> panel[0].applyFeatureFlags(flags(true)));
-        assertEquals(Arrays.asList("Loot", "XP", "Matches", "Settings"), panel[0].visibleTabLabels());
+        assertEquals(Arrays.asList("Loot", "XP", "Extra", "Settings"), panel[0].visibleTabLabels());
 
         SwingUtilities.invokeAndWait(() -> panel[0].applyFeatureFlags(flags(false)));
         assertEquals(Arrays.asList("Loot Tracker", "XP", "Settings"), panel[0].visibleTabLabels());

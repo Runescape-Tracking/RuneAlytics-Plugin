@@ -43,8 +43,6 @@ public class RuneAlyticsPanel extends PluginPanel
     // ── Feature-flag key constants ────────────────────────────────────────────
     /** Server-controlled: shows the Loot Tracker tab. */
     public static final String FEATURE_LOOT         = "loot_tracker";
-    /** Server-controlled: shows the Match Finder tab. */
-    public static final String FEATURE_MATCHES      = "match_finder";
     /** Advisor tab: Account Advisor recommendations from runealytics.com. */
     public static final String FEATURE_ADVISOR      = "advisor";
     /** Server-controlled: shows the XP Tracker tab. */
@@ -356,8 +354,7 @@ public class RuneAlyticsPanel extends PluginPanel
 
     /**
      * Called when the player is logged in but not yet verified (or becomes
-     * unverified).  Loot Tracker is always shown for local tracking; only the
-     * Match Finder requires verification and remains hidden.
+     * unverified).  Loot Tracker is always shown for local tracking.
      */
     public void showVerificationOnly()
     {
@@ -365,7 +362,6 @@ public class RuneAlyticsPanel extends PluginPanel
         flags.put(FEATURE_VERIFICATION, true);
         flags.put(FEATURE_LOOT,         true);   // local tracking always available
         flags.put(FEATURE_XP_TRACKER,   true);   // shown until server flags say otherwise
-        flags.put(FEATURE_MATCHES,      false);  // match finder requires verification
         flags.put(FEATURE_ADVISOR,      false);  // advice requires a verified account
         applyFeatureFlags(flags);
     }
@@ -374,26 +370,24 @@ public class RuneAlyticsPanel extends PluginPanel
      * Called after feature flags are fetched for a verified account.
      *
      * <p>Verification tab stays visible so the player can always access settings.
-     * Loot Tracker / XP Tracker / Match Finder visibility is server-controlled.</p>
+     * Loot Tracker / XP Tracker visibility is server-controlled.</p>
      *
      * @param lootEnabled  whether the Loot Tracker tab should be visible
      * @param xpEnabled    whether the XP Tracker tab should be visible
-     * @param matchEnabled whether the Match Finder tab should be visible
      */
-    public void showMainFeatures(boolean lootEnabled, boolean xpEnabled, boolean matchEnabled)
+    public void showMainFeatures(boolean lootEnabled, boolean xpEnabled)
     {
-        showMainFeatures(lootEnabled, xpEnabled, matchEnabled, true);
+        showMainFeatures(lootEnabled, xpEnabled, true);
     }
 
     /** As above, plus the Advisor tab (server flag "advisor", on by default). */
-    public void showMainFeatures(boolean lootEnabled, boolean xpEnabled, boolean matchEnabled, boolean advisorEnabled)
+    public void showMainFeatures(boolean lootEnabled, boolean xpEnabled, boolean advisorEnabled)
     {
         Map<String, Boolean> flags = new HashMap<>();
         flags.put(FEATURE_ADVISOR,      advisorEnabled);
         flags.put(FEATURE_VERIFICATION, true);   // always accessible
         flags.put(FEATURE_LOOT,         lootEnabled);
         flags.put(FEATURE_XP_TRACKER,   xpEnabled);
-        flags.put(FEATURE_MATCHES,      matchEnabled);
         applyFeatureFlags(flags);
     }
 
