@@ -177,8 +177,6 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private RuneAlyticsXpSessionManager xpSessionManager;
     @Inject private RunealyticsApiClient     apiClient;
     @Inject private BankDataManager          bankDataManager;
-    @Inject private MatchmakingManager       matchmakingManager;
-    @Inject private MatchmakingMinimapOverlay matchmakingOverlay;
     @Inject private LiveMapMinimapOverlay     liveMapOverlay;
     @Inject private OverlayManager           overlayManager;
     @Inject private CurrentPlayerIdentityService currentPlayerIdentity;
@@ -248,7 +246,6 @@ public class RuneAlyticsPlugin extends Plugin
     // ── Feature-flag change tracking ────────────────────────────────────────────
     /** Last loot-sync / xp-tracker / match-enabled flags pushed to the UI. Null = not yet fetched. */
     private Boolean lastLootSyncFlag     = null;
-    private Boolean lastMatchEnabledFlag = null;
     private Boolean lastXpTrackerFlag    = null;
     /** True once the server's "achievements" flag state has been logged this session. */
     private volatile boolean achievementFlagLogged = false;
@@ -538,7 +535,6 @@ public class RuneAlyticsPlugin extends Plugin
                 .panel(mainPanel)
                 .build();
         clientToolbar.addNavigation(navButton);
-        overlayManager.add(matchmakingOverlay);
         overlayManager.add(liveMapOverlay);
 
         // Public Online Status warnings: eye above the player, chat line, sidebar
@@ -562,7 +558,6 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 LootTrackerPanel        lootPanel        = injector.getInstance(LootTrackerPanel.class);
                 RuneAlyticsXpTrackerPanel xpPanel        = injector.getInstance(RuneAlyticsXpTrackerPanel.class);
-                MatchmakingPanel        matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
                 RuneAlyticsSettingsPanel settingsPanel   = injector.getInstance(RuneAlyticsSettingsPanel.class);
                 // Create the verification panel singleton on the EDT.
                 injector.getInstance(RuneAlyticsVerificationPanel.class);
@@ -579,10 +574,9 @@ public class RuneAlyticsPlugin extends Plugin
 
                 // Loot Tracker has no feature gate — local tracking is always
                 // available. The XP Tracker tab is gated by the server "xp_tracker"
-                // flag; Matches by "match_finder"; Settings by verification.
+                // flag; Settings by verification.
                 mainPanel.addTab("Loot Tracker", null,                 lootPanel);
                 mainPanel.addTab("XP",           FEATURE_XP_TRACKER,   xpPanel);
-                mainPanel.addTab("Matches",      FEATURE_MATCHES,      matchmakingPanel);
                 mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
                 mainPanel.setTopBanner(injector.getInstance(PrivacyWarningBanner.class));
                 log.debug("RuneAlytics tabs populated");
@@ -660,8 +654,6 @@ public class RuneAlyticsPlugin extends Plugin
         try { flushXpSessionOnLogout(); } catch (Exception e) { log.debug("XP session flush on shutdown failed: {}", e.getMessage()); }
         try { xpSessionManager.setLoggedIn(false); } catch (Exception e) { log.debug("XP session pause on shutdown failed: {}", e.getMessage()); }
         try { lootManager.shutdown();             } catch (Exception e) { log.debug("Loot manager shutdown failed: {}", e.getMessage()); }
-        try { matchmakingManager.reset();         } catch (Exception e) { log.debug("Matchmaking reset on shutdown failed: {}", e.getMessage()); }
-        try { overlayManager.remove(matchmakingOverlay); } catch (Exception e) { log.debug("Matchmaking overlay removal failed: {}", e.getMessage()); }
         try { overlayManager.remove(liveMapOverlay);     } catch (Exception e) { log.debug("Live-map overlay removal failed: {}", e.getMessage()); }
         try { overlayManager.remove(privacyEyeOverlay);    } catch (Exception e) { log.debug("Privacy eye overlay removal failed: {}", e.getMessage()); }
         try { mouseManager.unregisterMouseListener(privacyOverlayMouse); } catch (Exception e) { log.debug("Privacy mouse listener removal failed: {}", e.getMessage()); }
@@ -840,13 +832,6 @@ public class RuneAlyticsPlugin extends Plugin
         Actor target = event.getActor();
         Hitsplat hs   = event.getHitsplat();
 
-        // ── Matchmaking: a hit between the two participants starts the fight ──
-        // Runs independently of loot tracking.
-        if (target instanceof Player)
-        {
-            matchmakingManager.onCombatHitsplat(target, hs);
-        }
-
         // ── Loot tracking: remember every NPC the local player damaged ───────
         if (!config.enableLootTracking()) return;
 
@@ -864,11 +849,6 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Death recovery guard: detect local player death ───────────────────
         deathRecoveryGuard.onActorDeath(event);
 
-        // ── Matchmaking: report player deaths to server ───────────────────────
-        if (actor instanceof Player)
-        {
-            matchmakingManager.onActorDeath((Player) actor);
-        }
 
         if (!config.enableLootTracking()) return;
 
@@ -1071,10 +1051,6 @@ public class RuneAlyticsPlugin extends Plugin
     @Subscribe
     public void onItemContainerChanged(ItemContainerChanged event)
     {
-        // ── Matchmaking: refresh gear snapshot and report on change ──────────
-        // Runs on the client thread, so ItemContainer reads are safe.
-        matchmakingManager.onItemContainerChanged(event);
-
         // ── DOOM REWARD CONTAINER (ID 935 or 923) ──────────────────────────
         // Containers 935/923 are specific to Doom and hold the actual reward items.
         // Capture immediately when these containers appear with items, since
@@ -1680,10 +1656,6 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Death recovery guard: update region tracking ──────────────────────
         deathRecoveryGuard.onGameTick();
 
-        // ── Matchmaking polling / automation ─────────────────────────────────
-        // Runs on the client thread, so inventory/gear reads are safe.
-        matchmakingManager.onGameTick();
-
         // ── Flush zero-loot kills ──────────────────────────────────────────────
         // ActorDeath entries that aged out without a cancelling
         // NpcLootReceived are promoted to zero-loot kills here.
@@ -1845,11 +1817,9 @@ public class RuneAlyticsPlugin extends Plugin
             clearTransientLootState();
             previousXp.clear();
             lastLootSyncFlag     = null;
-            lastMatchEnabledFlag = null;
             lastXpTrackerFlag    = null;
             achievementFlagLogged = false;
 
-            matchmakingManager.reset(); // clear any active match on logout
             clanManager.reset();         // clear clan membership on logout
             // Back to the neutral "unknown" state — the next login re-fetches the
             // flag rather than leaving a stale "turned off" message behind.
@@ -1858,7 +1828,6 @@ public class RuneAlyticsPlugin extends Plugin
                 mainPanel.showLoggedOutState();
                 if (xpTrackerPanel != null) xpTrackerPanel.refresh();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
-                injector.getInstance(MatchmakingPanel.class).refreshLoginState();
             });
             return;
         }
@@ -1896,7 +1865,6 @@ public class RuneAlyticsPlugin extends Plugin
             SwingUtilities.invokeLater(() -> {
                 injector.getInstance(RuneAlyticsVerificationPanel.class).refreshLoginState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
-                injector.getInstance(MatchmakingPanel.class).refreshLoginState();
             });
 
             if (username == null || username.isEmpty()) return;
@@ -1913,13 +1881,12 @@ public class RuneAlyticsPlugin extends Plugin
             {
                 Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
                 boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
-                boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
                 boolean xpTracker = flags.getOrDefault(FEATURE_XP_TRACKER, false);
                 state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
                 applyAchievementFlag(flags);
                 if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
                 SwingUtilities.invokeLater(() ->
-                        mainPanel.showMainFeatures(true, xpTracker, matchEnabled));
+                        mainPanel.showMainFeatures(true, xpTracker));
 
                 // Auto-reconcile loot on login. Delayed so the login itself
                 // isn't slowed and the client has settled (local player + item
@@ -2986,7 +2953,6 @@ public class RuneAlyticsPlugin extends Plugin
 
         Map<String, Boolean> flags = apiClient.fetchFeatureFlags(rsn);
         boolean lootSync    = flags.getOrDefault(FEATURE_LOOT,    false);
-        boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
         boolean xpTracker   = flags.getOrDefault(FEATURE_XP_TRACKER, false);
         state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
         applyAchievementFlag(flags);
@@ -2997,18 +2963,13 @@ public class RuneAlyticsPlugin extends Plugin
             lastLootSyncFlag = lootSync;
             if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
         }
-        // Re-apply tab visibility whenever the XP Tracker or Match Finder flag
-        // changes (disabling the active tab moves the user to a working one).
-        boolean tabsChanged =
-                (lastMatchEnabledFlag == null || lastMatchEnabledFlag != matchEnabled)
-                        || (lastXpTrackerFlag == null || lastXpTrackerFlag != xpTracker);
-        if (tabsChanged)
+        // Re-apply tab visibility whenever the XP Tracker flag changes
+        // (disabling the active tab moves the user to a working one).
+        if (lastXpTrackerFlag == null || lastXpTrackerFlag != xpTracker)
         {
-            lastMatchEnabledFlag = matchEnabled;
             lastXpTrackerFlag    = xpTracker;
-            final boolean me = matchEnabled;
             final boolean xp = xpTracker;
-            SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, xp, me));
+            SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, xp));
         }
     }
 
@@ -3542,7 +3503,6 @@ public class RuneAlyticsPlugin extends Plugin
             RuneAlyticsSettingsPanel sp = injector.getInstance(RuneAlyticsSettingsPanel.class);
             sp.updateVerificationStatus(verified, verified ? rsn : null);
             vp.refreshLoginState();
-            injector.getInstance(MatchmakingPanel.class).refreshLoginState();
         });
 
         // Fetch feature flags and show the full UI once verification is
@@ -3574,11 +3534,7 @@ public class RuneAlyticsPlugin extends Plugin
 
                 SwingUtilities.invokeLater(() ->
                 {
-                    mainPanel.showMainFeatures(
-                            lootSync,
-                            xpTracker,
-                            flags.getOrDefault(FEATURE_MATCHES, false));
-                    injector.getInstance(MatchmakingPanel.class).refreshLoginState();
+                    mainPanel.showMainFeatures(lootSync, xpTracker);
                 });
             });
         }
