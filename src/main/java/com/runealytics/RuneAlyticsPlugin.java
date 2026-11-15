@@ -130,7 +130,7 @@ public class RuneAlyticsPlugin extends Plugin
     /** Every menu option onMenuOptionClicked acts on; used as a fast pre-filter. */
     private static final Set<String> RELEVANT_MENU_OPTIONS = java.util.Set.of(
             "rub", "read", "open", "use", "claim", "activate", "tear",
-            "loot-jar", "loot", "pickpocket", "pick-pocket"
+            "loot-jar", "loot", "pickpocket", "pick-pocket", "harvest"
     );
 
     // ─ Pre-compiled regex patterns to avoid recompilation on hot paths ─
@@ -390,6 +390,26 @@ public class RuneAlyticsPlugin extends Plugin
     private String  pendingImpJarName       = null;
     private List<ItemStack> impJarInventorySnapshot = null;
     private long    impJarWindowExpiry      = 0L;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  ARAXXOR HARVEST STATE
+    //
+    //  Araxxor drops nothing on death; its loot appears when the player chooses
+    //  "Harvest" on the corpse, straight into the inventory (overflow onto the
+    //  floor under the player). For a few ticks after that click, inventory
+    //  gains and items appearing next to the player are collected, then added
+    //  to the (zero-drop) Araxxor kill.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Game ticks after the Harvest click during which loot is collected. */
+    private static final int ARAXXOR_HARVEST_TICKS = 5;
+    /** After a harvest, Araxxor NpcLootReceived events are ignored (the harvest owns that loot). */
+    private static final long ARAXXOR_HARVEST_OWNS_LOOT_MS = 15_000;
+
+    private List<ItemStack> araxxorHarvestSnapshot = null;
+    private final List<ItemStack> araxxorHarvestGains = new ArrayList<>();
+    private long araxxorHarvestUntilTick = 0L;
+    private long lastAraxxorHarvestMs    = 0L;
 
     // ─────────────────────────────────────────────────────────────────────────
     //  ZERO-LOOT KILL TRACKING
@@ -705,6 +725,10 @@ public class RuneAlyticsPlugin extends Plugin
         impJarInventorySnapshot = null;
         impJarWindowExpiry      = 0L;
 
+        // Clear Araxxor harvest state
+        araxxorHarvestSnapshot = null;
+        araxxorHarvestGains.clear();
+
         // Clear zero-loot kill tracking (damage history is per-world)
         damagedNpcs.clear();
         pendingDeaths.clear();
@@ -736,6 +760,15 @@ public class RuneAlyticsPlugin extends Plugin
 
         NPC npc = event.getNpc();
         if (npc == null) return;
+
+        // Araxxor's loot is read from the corpse harvest; a loot event from the
+        // corpse despawning (floor overflow) would count the same items twice.
+        if (System.currentTimeMillis() - lastAraxxorHarvestMs < ARAXXOR_HARVEST_OWNS_LOOT_MS
+                && LootTrackerManager.ARAXXOR.equals(LootTrackerManager.normalizeBossName(npc.getName())))
+        {
+            log.debug("Araxxor loot event ignored: the corpse harvest already recorded it");
+            return;
+        }
 
         // Capture game mode at kill time so the record reflects the current world.
         updateCurrentGameMode();
@@ -1124,6 +1157,15 @@ public class RuneAlyticsPlugin extends Plugin
             List<ItemStack> justEquipped     = diffInventory(equipmentSnapshot, currentEquipment);
             equipmentSnapshot = currentEquipment;
 
+            // ── Araxxor harvest (loot goes straight into the inventory) ───────
+            if (araxxorHarvestSnapshot != null)
+            {
+                List<ItemStack> currentInv = getCurrentInventory();
+                araxxorHarvestGains.addAll(excludeEquipmentMovement(
+                        diffInventory(araxxorHarvestSnapshot, currentInv), justUnequipped));
+                araxxorHarvestSnapshot = currentInv;   // later changes add only what's new
+            }
+
             // ── Impling jar loot (no XP, so the skilling diff misses it) ──────
             if (pendingImpJarName != null && impJarInventorySnapshot != null)
             {
@@ -1300,6 +1342,17 @@ public class RuneAlyticsPlugin extends Plugin
             // fall through — the impling/pickpocket branches below should still run
         }
 
+        // ── Araxxor: "Harvest" on the corpse gives the kill's loot ─────────────
+        if ("harvest".equals(lowerOption) && lowerTarget.contains("araxxor"))
+        {
+            araxxorHarvestSnapshot  = getCurrentInventory();
+            araxxorHarvestGains.clear();
+            araxxorHarvestUntilTick = gameTickCount + ARAXXOR_HARVEST_TICKS;
+            lastAraxxorHarvestMs    = System.currentTimeMillis();
+            log.debug("Araxxor harvest clicked: collecting loot for {} ticks", ARAXXOR_HARVEST_TICKS);
+            return;
+        }
+
         // ── Impling jar loot ─────────────────────────────────────────────────
         // The menu option is "Loot-jar" (or "Loot" in some clients) and the
         // target is the jar item name (e.g. "Eclectic impling jar").
@@ -1344,6 +1397,18 @@ public class RuneAlyticsPlugin extends Plugin
 
         TileItem tile = event.getItem();
         WorldPoint itemLoc = event.getTile().getWorldLocation();
+
+        // ── Araxxor harvest overflow (full inventory → floor under the player) ─
+        if (araxxorHarvestSnapshot != null && itemLoc != null)
+        {
+            Player local = client.getLocalPlayer();
+            WorldPoint playerLoc = local != null ? local.getWorldLocation() : null;
+            if (playerLoc != null && itemLoc.distanceTo(playerLoc) <= 1)
+            {
+                araxxorHarvestGains.add(new ItemStack(tile.getId(), tile.getQuantity()));
+                return;
+            }
+        }
 
         // ── Whisperer personal drops (debounced) ──────────────────────────────
         if (whispererGroundItemWindow)
@@ -1690,6 +1755,22 @@ public class RuneAlyticsPlugin extends Plugin
             log.debug("Pickpocket window ticked out for '{}'", pendingPickpocketNpc);
             pendingPickpocketNpc        = null;
             pickpocketInventorySnapshot = null;
+        }
+
+        // ── Araxxor harvest window closed: add the loot to the kill ──────────
+        if (araxxorHarvestSnapshot != null && gameTickCount >= araxxorHarvestUntilTick)
+        {
+            List<ItemStack> loot = new ArrayList<>(araxxorHarvestGains);
+            araxxorHarvestSnapshot = null;
+            araxxorHarvestGains.clear();
+            if (loot.isEmpty())
+            {
+                log.debug("Araxxor harvest window ended with no items");
+            }
+            else
+            {
+                lootManager.processAraxxorHarvest(loot);
+            }
         }
 
         // ── Expire impling jar attribution window ─────────────────────────────
