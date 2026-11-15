@@ -250,6 +250,7 @@ public class RuneAlyticsPlugin extends Plugin
     private Boolean lastLootSyncFlag     = null;
     private Boolean lastMatchEnabledFlag = null;
     private Boolean lastXpTrackerFlag    = null;
+    private Boolean lastAdvisorFlag      = null;
     /** True once the server's "achievements" flag state has been logged this session. */
     private volatile boolean achievementFlagLogged = false;
 
@@ -543,6 +544,7 @@ public class RuneAlyticsPlugin extends Plugin
                 LootTrackerPanel        lootPanel        = injector.getInstance(LootTrackerPanel.class);
                 RuneAlyticsXpTrackerPanel xpPanel        = injector.getInstance(RuneAlyticsXpTrackerPanel.class);
                 MatchmakingPanel        matchmakingPanel = injector.getInstance(MatchmakingPanel.class);
+                AccountAdvisorPanel     advisorPanel     = injector.getInstance(AccountAdvisorPanel.class);
                 RuneAlyticsSettingsPanel settingsPanel   = injector.getInstance(RuneAlyticsSettingsPanel.class);
                 // Create the verification panel singleton on the EDT.
                 injector.getInstance(RuneAlyticsVerificationPanel.class);
@@ -559,10 +561,13 @@ public class RuneAlyticsPlugin extends Plugin
 
                 // Loot Tracker has no feature gate — local tracking is always
                 // available. The XP Tracker tab is gated by the server "xp_tracker"
-                // flag; Matches by "match_finder"; Settings by verification.
+                // flag; Matches by "match_finder"; Advisor by "advisor" (and
+                // verification); Settings by verification.
                 mainPanel.addTab("Loot Tracker", null,                 lootPanel);
                 mainPanel.addTab("XP",           FEATURE_XP_TRACKER,   xpPanel);
                 mainPanel.addTab("Matches",      FEATURE_MATCHES,      matchmakingPanel);
+                mainPanel.addTab("Advisor",      FEATURE_ADVISOR,      advisorPanel);
+                advisorPanel.setOpenSettings(() -> mainPanel.selectTab("Settings"));
                 mainPanel.addTab("Settings",     FEATURE_VERIFICATION, settingsPanel);
                 mainPanel.setTopBanner(injector.getInstance(PrivacyWarningBanner.class));
                 log.debug("RuneAlytics tabs populated");
@@ -610,6 +615,8 @@ public class RuneAlyticsPlugin extends Plugin
     @Override
     protected void shutDown()
     {
+        // Account Advisor: stop polling and drop pending callbacks.
+        try { injector.getInstance(AccountAdvisorPanel.class).shutDown(); } catch (Exception ignored) { }
         log.debug("RuneAlytics shutting down");
 
         // Stop the live-map heartbeat so no pings fire after the plugin is gone.
@@ -1778,6 +1785,7 @@ public class RuneAlyticsPlugin extends Plugin
                 if (xpTrackerPanel != null) xpTrackerPanel.refresh();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
                 injector.getInstance(MatchmakingPanel.class).refreshLoginState();
+                injector.getInstance(AccountAdvisorPanel.class).refreshLoginState();
             });
             return;
         }
@@ -1816,6 +1824,7 @@ public class RuneAlyticsPlugin extends Plugin
                 injector.getInstance(RuneAlyticsVerificationPanel.class).refreshLoginState();
                 injector.getInstance(RuneAlyticsSettingsPanel.class).refreshLoginState();
                 injector.getInstance(MatchmakingPanel.class).refreshLoginState();
+                injector.getInstance(AccountAdvisorPanel.class).refreshLoginState();
             });
 
             if (username == null || username.isEmpty()) return;
@@ -1834,11 +1843,12 @@ public class RuneAlyticsPlugin extends Plugin
                 boolean lootSync = flags.getOrDefault(FEATURE_LOOT, false);
                 boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
                 boolean xpTracker = flags.getOrDefault(FEATURE_XP_TRACKER, false);
+                boolean advisor = flags.getOrDefault(FEATURE_ADVISOR, true);
                 state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
                 applyAchievementFlag(flags);
                 if (lootTrackerPanel != null) lootTrackerPanel.setSyncEnabled(lootSync);
                 SwingUtilities.invokeLater(() ->
-                        mainPanel.showMainFeatures(true, xpTracker, matchEnabled));
+                        mainPanel.showMainFeatures(true, xpTracker, matchEnabled, advisor));
 
                 // Auto-reconcile loot on login. Delayed so the login itself
                 // isn't slowed and the client has settled (local player + item
@@ -2907,6 +2917,7 @@ public class RuneAlyticsPlugin extends Plugin
         boolean lootSync    = flags.getOrDefault(FEATURE_LOOT,    false);
         boolean matchEnabled = flags.getOrDefault(FEATURE_MATCHES, false);
         boolean xpTracker   = flags.getOrDefault(FEATURE_XP_TRACKER, false);
+        boolean advisor     = flags.getOrDefault(FEATURE_ADVISOR, true);
         state.setXpSessionSyncEnabled(flags.getOrDefault(FEATURE_XP_SESSION, false));
         applyAchievementFlag(flags);
 
@@ -2920,14 +2931,17 @@ public class RuneAlyticsPlugin extends Plugin
         // changes (disabling the active tab moves the user to a working one).
         boolean tabsChanged =
                 (lastMatchEnabledFlag == null || lastMatchEnabledFlag != matchEnabled)
-                        || (lastXpTrackerFlag == null || lastXpTrackerFlag != xpTracker);
+                        || (lastXpTrackerFlag == null || lastXpTrackerFlag != xpTracker)
+                        || (lastAdvisorFlag == null || lastAdvisorFlag != advisor);
         if (tabsChanged)
         {
             lastMatchEnabledFlag = matchEnabled;
             lastXpTrackerFlag    = xpTracker;
+            lastAdvisorFlag      = advisor;
             final boolean me = matchEnabled;
             final boolean xp = xpTracker;
-            SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, xp, me));
+            final boolean ad = advisor;
+            SwingUtilities.invokeLater(() -> mainPanel.showMainFeatures(true, xp, me, ad));
         }
     }
 
@@ -3462,6 +3476,7 @@ public class RuneAlyticsPlugin extends Plugin
             sp.updateVerificationStatus(verified, verified ? rsn : null);
             vp.refreshLoginState();
             injector.getInstance(MatchmakingPanel.class).refreshLoginState();
+            injector.getInstance(AccountAdvisorPanel.class).refreshLoginState();
         });
 
         // Fetch feature flags and show the full UI once verification is
@@ -3496,8 +3511,10 @@ public class RuneAlyticsPlugin extends Plugin
                     mainPanel.showMainFeatures(
                             lootSync,
                             xpTracker,
-                            flags.getOrDefault(FEATURE_MATCHES, false));
+                            flags.getOrDefault(FEATURE_MATCHES, false),
+                            flags.getOrDefault(FEATURE_ADVISOR, true));
                     injector.getInstance(MatchmakingPanel.class).refreshLoginState();
+                    injector.getInstance(AccountAdvisorPanel.class).refreshLoginState();
                 });
             });
         }
