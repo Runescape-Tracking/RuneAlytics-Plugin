@@ -9,11 +9,11 @@ import net.runelite.client.game.ItemManager;
 /**
  * Shared helpers for converting RuneLite {@link ItemContainer}s and
  * {@link ItemStack} lists into the {@code [{id, qty}, ...]} JSON shape used
- * everywhere the plugin POSTs item data (bank sync, heartbeat gear,
+ * everywhere the plugin POSTs item data (bank sync, matchmaking item report,
  * wealth snapshots, etc).
  *
- * <p>Consolidated here so {@link BankDataManager} and the heartbeat do not each
- * carry their own near-identical copy of the conversion code.</p>
+ * <p>Consolidated here so {@link BankDataManager} and {@link MatchmakingManager}
+ * do not each carry their own near-identical copy of the conversion code.</p>
  *
  * <p>The "valued" variants additionally embed per-item GE value resolved via
  * {@link ItemValueResolver} so the server doesn't have to look up prices
@@ -55,8 +55,8 @@ public final class RuneAlyticsItemJson
      * (no GE values).  Slot index lets the server identify the weapon slot (3)
      * for gear-rule validation and the website prices every item itself.
      *
-     * <p>Used by the heartbeat so the plugin sends lean item data and the
-     * website owns all valuation.</p>
+     * <p>Used by the matchmaking path so the plugin sends lean item data and
+     * the website owns all valuation.</p>
      */
     public static JsonArray fromEquipment(ItemContainer container)
     {
