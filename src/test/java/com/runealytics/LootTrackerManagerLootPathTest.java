@@ -204,4 +204,40 @@ public class LootTrackerManagerLootPathTest
         assertEquals(1, storage.getCurrentData().getBossKills()
                 .get("Duke Sucellus").getKills().get(0).getDrops().size());
     }
+
+    // ── Araxxor: loot comes from harvesting the corpse ──────────────────────
+
+    private static net.runelite.api.NPC araxxor()
+    {
+        net.runelite.api.NPC npc = mock(net.runelite.api.NPC.class);
+        when(npc.getName()).thenReturn("Araxxor");
+        when(npc.getId()).thenReturn(13668);
+        when(npc.getCombatLevel()).thenReturn(890);
+        return npc;
+    }
+
+    @Test
+    public void araxxorHarvestFillsTheZeroDropKill()
+    {
+        manager.processZeroLootKill(araxxor());          // the death: no drops yet
+        LootStorageData.BossKillData b = storage.getCurrentData().getBossKills().get("Araxxor");
+        assertEquals(1, b.getKills().size());
+        assertTrue(b.getKills().get(0).getDrops().isEmpty());
+
+        manager.processAraxxorHarvest(whip());          // "Harvest" on the corpse
+
+        b = storage.getCurrentData().getBossKills().get("Araxxor");
+        assertEquals("same kill, not a second one", 1, b.getKills().size());
+        assertEquals(1, b.getKills().get(0).getDrops().size());
+        assertEquals(4151, b.getKills().get(0).getDrops().get(0).getItemId());
+    }
+
+    @Test
+    public void araxxorHarvestWithoutASeenDeathRecordsTheKill()
+    {
+        manager.processAraxxorHarvest(whip());
+        LootStorageData.BossKillData b = storage.getCurrentData().getBossKills().get("Araxxor");
+        assertEquals(1, b.getKills().size());
+        assertEquals(1, b.getKills().get(0).getDrops().size());
+    }
 }

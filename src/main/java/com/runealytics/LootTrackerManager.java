@@ -973,6 +973,34 @@ public class LootTrackerManager
         recordKill(storedKey, 0, 0, client.getWorld(), drops);
     }
 
+    /** Stored name of Araxxor kills (see {@link BossNames#normalize}). */
+    static final String ARAXXOR = "Araxxor";
+    private static final int ARAXXOR_NPC_ID = 13668;
+    private static final int ARAXXOR_COMBAT_LEVEL = 890;
+
+    /**
+     * Loot from harvesting Araxxor's corpse. Araxxor drops nothing when it dies (its
+     * death is recorded as a zero-drop kill); the reward only appears when the player
+     * harvests the corpse, straight into the inventory (overflow on the floor). The
+     * items are attached to that zero-drop kill; if the death wasn't seen, a kill is
+     * recorded instead. Destroying the corpse leaves the kill at zero drops.
+     * Client thread (item prices).
+     */
+    public void processAraxxorHarvest(List<ItemStack> items)
+    {
+        if (!config.enableLootTracking()) return;
+        if (items == null || items.isEmpty()) return;
+        if (upgradeRecentZeroLootKillDeferred(ARAXXOR, items))
+        {
+            log.debug("Araxxor harvest: {} item(s) added to the last kill", items.size());
+            return;
+        }
+        List<LootStorageData.DropRecord> drops = convertToDropRecords(items);
+        if (drops.isEmpty()) return;
+        log.debug("Araxxor harvest: no zero-drop kill to attach to, recording a kill ({} items)", drops.size());
+        recordKill(ARAXXOR, ARAXXOR_NPC_ID, ARAXXOR_COMBAT_LEVEL, client.getWorld(), drops);
+    }
+
     private static String canonicaliseImplingJar(String raw)
     {
         if (raw == null || raw.isEmpty()) return "Unknown";
