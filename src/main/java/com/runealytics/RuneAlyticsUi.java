@@ -491,4 +491,34 @@ public final class RuneAlyticsUi
         if (s == null) return "";
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
+
+    /**
+     * Padding that puts the button's text exactly in the vertical middle.
+     *
+     * <p>Swing centres the text's whole line box (ascent + descent + leading), and
+     * with Calibri the leading and descent sit below the letters, so the visible
+     * text ends up above centre and the bottom gap looks larger. This moves the
+     * padding so the middle of the capital letters lands on the middle of the
+     * button, using the font's real metrics on this machine.</p>
+     *
+     * @param vertical   the padding each side would have with perfectly centred text
+     * @param horizontal left/right padding
+     */
+    static EmptyBorder centredPadding(JComponent c, int vertical, int horizontal)
+    {
+        int shift = textCentreShift(c.getFont(), c.getFontMetrics(c.getFont()));
+        int top = Math.max(0, vertical + shift);
+        int bottom = Math.max(0, vertical - shift);
+        return new EmptyBorder(top, horizontal, bottom, horizontal);
+    }
+
+    /** Pixels the text must move down so its capital letters are centred in its line box. */
+    static int textCentreShift(Font font, FontMetrics fm)
+    {
+        if (font == null || fm == null) return 0;
+        double capHeight = font.createGlyphVector(fm.getFontRenderContext(), "H").getVisualBounds().getHeight();
+        double lineCentre = fm.getHeight() / 2.0;                  // middle of the box Swing centres
+        double capsCentre = fm.getAscent() - capHeight / 2.0;      // middle of the capitals, from the top
+        return (int) Math.round(lineCentre - capsCentre);
+    }
 }

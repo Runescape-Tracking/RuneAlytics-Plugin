@@ -19,7 +19,6 @@ public class RuneAlyticsPanelTabLabelTest
         Map<String, Boolean> f = new HashMap<>();
         f.put(RuneAlyticsPanel.FEATURE_XP_TRACKER, true);
         f.put(RuneAlyticsPanel.FEATURE_MATCHES, matches);
-        f.put(RuneAlyticsPanel.FEATURE_ADVISOR, true);
         f.put(RuneAlyticsPanel.FEATURE_VERIFICATION, true);
         return f;
     }

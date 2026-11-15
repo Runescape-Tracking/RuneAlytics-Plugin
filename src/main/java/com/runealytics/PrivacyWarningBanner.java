@@ -327,6 +327,6 @@ public class PrivacyWarningBanner extends JPanel
         Color bg = green ? GREEN : NEUTRAL;
         Color border = green ? GREEN_BORDER : NEUTRAL_BORDER;
         b.setBackground(bg);
-        b.setBorder(new CompoundBorder(new LineBorder(border, 1, true), AccountAdvisorPanel.centredPadding(b, 5, 6)));
+        b.setBorder(new CompoundBorder(new LineBorder(border, 1, true), RuneAlyticsUi.centredPadding(b, 5, 6)));
     }
 }
