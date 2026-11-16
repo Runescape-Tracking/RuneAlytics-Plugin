@@ -117,6 +117,18 @@ public interface RunealyticsConfig extends Config
         return true;
     }
 
+    @ConfigItem(
+            keyName = "shareSlayerTasks",
+            name = "Share Slayer tasks",
+            description = "Send your current Slayer task, kills left and when it is extended, completed or cancelled to RuneAlytics",
+            section = syncSection,
+            position = 4
+    )
+    default boolean shareSlayerTasks()
+    {
+        return true;
+    }
+
     // ==================== LOOT TRACKING ====================
 
     @ConfigSection(
