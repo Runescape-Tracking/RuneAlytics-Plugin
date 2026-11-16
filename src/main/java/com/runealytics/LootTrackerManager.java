@@ -2293,12 +2293,14 @@ public class LootTrackerManager
         boolean[] changed = { false };
         clientThread.invoke(() ->
         {
-            for (Map.Entry<String, LootStorageData.BossKillData> entry : data.getBossKills().entrySet())
+            // Snapshots: when called off the client thread this runs a tick later,
+            // after the loader has already renamed / purged boss keys (and new
+            // kills may arrive), so the live collections can change under the scan.
+            for (LootStorageData.BossKillData bd : new ArrayList<>(data.getBossKills().values()))
             {
-                LootStorageData.BossKillData bd = entry.getValue();
-
+                if (bd == null) continue;
                 for (LootStorageData.KillRecord kr : bd.getKills() != null
-                        ? bd.getKills() : Collections.<LootStorageData.KillRecord>emptyList())
+                        ? new ArrayList<>(bd.getKills()) : Collections.<LootStorageData.KillRecord>emptyList())
                 {
                     if (kr.getDrops() == null) continue;
 
@@ -2306,7 +2308,7 @@ public class LootTrackerManager
                     // must never block the rest of the scan.
                     try
                     {
-                        for (LootStorageData.DropRecord drop : kr.getDrops())
+                        for (LootStorageData.DropRecord drop : new ArrayList<>(kr.getDrops()))
                         {
                             if (drop.getItemId() <= 0 || drop.getGePrice() > 0) continue;
 
@@ -2346,7 +2348,7 @@ public class LootTrackerManager
                     }
                     catch (Exception ex)
                     {
-                        log.debug("[Loot] Backfill failed for a drop in '{}': {}", entry.getKey(), ex.getMessage());
+                        log.debug("[Loot] Backfill failed for a drop in '{}': {}", bd.getNpcName(), ex.getMessage());
                     }
                 }
 
@@ -2377,7 +2379,7 @@ public class LootTrackerManager
                     catch (Exception ex)
                     {
                         log.debug("[Loot] Backfill failed for aggregated drop in '{}': {}",
-                                entry.getKey(), ex.getMessage());
+                                bd.getNpcName(), ex.getMessage());
                     }
                 }
             }

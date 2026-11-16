@@ -1493,7 +1493,7 @@ public class RuneAlyticsPlugin extends Plugin
         deathRecoveryGuard.onChatMessage(event);
 
         // ── Slayer task: completed / cancelled / assignment lines ────────────
-        slayerTasks.onChatMessage(event.getType(), event.getMessage());
+        slayerTasks.onChatMessage(event);
 
         // ── Doom of Mokhaiotl death detection ───────────────────────────────────
         if (event.getType() == ChatMessageType.GAMEMESSAGE)

@@ -195,6 +195,19 @@ public final class SlayerTaskTracker
         }
     }
 
+    /**
+     * The player asked for their task ({@code !task}): send the count now, ignoring
+     * the throttle. The varps stay the source; a lower confirmed count is taken.
+     */
+    public void confirm(SlayerChatParser.Signal s, long nowMs)
+    {
+        flushAssign();
+        if (task == null || s == null || s.amount < 0) return;
+        if (s.name != null && task.name != null && !task.name.equalsIgnoreCase(s.name)) return;
+        if (s.amount < task.remaining) task.remaining = s.amount;
+        progress(nowMs);
+    }
+
     /** Once per game tick: due progress, held assignment, undecided task end. */
     public void tick(long nowMs)
     {

@@ -209,4 +209,21 @@ public class SlayerTaskTrackerTest
         assertNull(SlayerTaskReader.master(3));
         assertEquals("Krystilia", SlayerTaskReader.master(7));
     }
+
+    @Test
+    public void taskCommandSendsTheCountNowDespiteTheThrottle()
+    {
+        assign("Hydras", "Karuulm Slayer Dungeon", 45, null);
+        observe(task("Hydras", "Karuulm Slayer Dungeon", 40));          // held: within 30 s
+        assertEquals(List.of("assigned"), types());
+
+        tracker.confirm(SlayerChatParser.parseTaskCommand("Slayer Task: Hydras (Karuulm Slayer Dungeon): 40 left"), now);
+        assertEquals(List.of("assigned", "progress"), types());
+        assertEquals(Integer.valueOf(40), last().remaining);
+
+        tracker.confirm(SlayerChatParser.parseTaskCommand("Slayer Task: Abyssal demons: 10 left"), now);
+        assertEquals("a reply for a different task is ignored", 2, sent.size());
+        tracker.confirm(SlayerChatParser.parseTaskCommand("Slayer Task: Hydras (Karuulm Slayer Dungeon): 99 left"), now);
+        assertEquals("the varps' lower count wins", Integer.valueOf(40), last().remaining);
+    }
 }

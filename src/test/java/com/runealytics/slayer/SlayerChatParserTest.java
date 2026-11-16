@@ -114,4 +114,23 @@ public class SlayerChatParserTest
         assertNull(dialog("Hello there, adventurer."));
         assertNull(chat(null));
     }
+
+    @Test
+    public void runeLiteTaskCommandReply()
+    {
+        SlayerChatParser.Signal left = SlayerChatParser.parseTaskCommand(
+                "<col=000000>Slayer Task: <col=ff0000>Hydras (Karuulm Slayer Dungeon): 12 left");
+        assertEquals(Kind.CURRENT, left.kind);
+        assertEquals("Hydras", left.name);
+        assertEquals("Karuulm Slayer Dungeon", left.location);
+        assertEquals(12, left.amount);
+
+        SlayerChatParser.Signal killed = SlayerChatParser.parseTaskCommand("Slayer Task: Abyssal demons: 33/150 killed");
+        assertEquals(117, killed.amount);
+        assertNull(killed.location);
+
+        assertNull(SlayerChatParser.parseTaskCommand("!task"));
+        assertNull(SlayerChatParser.parseTaskCommand("Slayer Task: Hydras: lots left"));
+        assertNull(SlayerChatParser.parseTaskCommand(null));
+    }
 }

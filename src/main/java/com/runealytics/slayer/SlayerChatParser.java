@@ -112,6 +112,25 @@ public final class SlayerChatParser
         return null;
     }
 
+    private static final Pattern TASK_COMMAND = Pattern.compile("^Slayer Task: (?<name>.+?)(?: \\((?<location>[^)]+)\\))?: "
+            + "(?:(?<left>[\\d,]+) left|(?<killed>[\\d,]+)/(?<total>[\\d,]+) killed)$");
+
+    /**
+     * RuneLite's reply to the player's own {@code !task}, as written onto that chat
+     * line ("Slayer Task: Hydras (Karuulm Slayer Dungeon): 12 left" or "33/45
+     * killed"). {@code null} for anything else.
+     */
+    public static Signal parseTaskCommand(String raw)
+    {
+        Matcher m = TASK_COMMAND.matcher(clean(raw));
+        if (!m.matches()) return null;
+        int left = m.group("left") != null ? number(m.group("left"))
+                : number(m.group("total")) - number(m.group("killed"));
+        if (left < 0) return null;
+        String location = m.group("location");
+        return new Signal(Kind.CURRENT, m.group("name").trim(), location == null ? null : location.trim(), left);
+    }
+
     /** Strips colour/markup tags and line breaks; collapses spaces. */
     static String clean(String raw)
     {
