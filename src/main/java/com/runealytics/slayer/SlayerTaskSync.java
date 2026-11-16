@@ -9,6 +9,8 @@ import com.runealytics.RunealyticsConfig;
 import com.runealytics.progress.ProgressStore;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
+import net.runelite.api.MessageNode;
+import net.runelite.api.events.ChatMessage;
 import net.runelite.api.Client;
 import net.runelite.api.Player;
 import net.runelite.api.gameval.InterfaceID;
@@ -69,6 +71,8 @@ public class SlayerTaskSync
     private boolean varsDirty;
     private boolean saveDirty;
     private String lastDialog;
+    private MessageNode taskCommand;
+    private long taskCommandUntilMs;
 
     @Inject
     public SlayerTaskSync(Client client, RunealyticsConfig config, RuneAlyticsState state,
@@ -104,11 +108,52 @@ public class SlayerTaskSync
         if (SlayerTaskReader.isTaskVar(varpId, varbitId)) varsDirty = true;
     }
 
-    public void onChatMessage(ChatMessageType type, String message)
+    public void onChatMessage(ChatMessage event)
     {
         if (account == null || !config.shareSlayerTasks()) return;
-        if (type != ChatMessageType.GAMEMESSAGE && type != ChatMessageType.SPAM) return;
-        tracker.onSignal(SlayerChatParser.parseChat(message), null, System.currentTimeMillis());
+        ChatMessageType type = event.getType();
+        if (type == ChatMessageType.GAMEMESSAGE || type == ChatMessageType.SPAM)
+        {
+            tracker.onSignal(SlayerChatParser.parseChat(event.getMessage()), null, System.currentTimeMillis());
+        }
+        else if ("!task".equalsIgnoreCase(event.getMessage() == null ? "" : event.getMessage().trim()) && isOwn(event))
+        {
+            // RuneLite writes its reply onto this same line a moment later.
+            taskCommand = event.getMessageNode();
+            taskCommandUntilMs = System.currentTimeMillis() + 10_000L;
+        }
+    }
+
+    /** Typed by this player: only their own !task counts, never someone else's. */
+    private boolean isOwn(ChatMessage event)
+    {
+        if (event.getType() == ChatMessageType.PRIVATECHATOUT) return true;
+        if (event.getType() == ChatMessageType.PRIVATECHAT) return false;
+        String sender = CurrentPlayerIdentityService.normalizeUsername(
+                event.getName() == null ? null : event.getName().replaceAll("<[^>]*>", ""));
+        return sender != null && sender.equals(account);
+    }
+
+    /** True while waiting for RuneLite's reply to the player's own !task (tests). */
+    boolean isWatchingTaskCommand()
+    {
+        return taskCommand != null;
+    }
+
+    /** RuneLite's reply to the player's !task, read from that line only. */
+    private void readTaskCommand(long now)
+    {
+        if (taskCommand == null) return;
+        SlayerChatParser.Signal s = SlayerChatParser.parseTaskCommand(taskCommand.getRuneLiteFormatMessage());
+        if (s != null || now > taskCommandUntilMs)
+        {
+            taskCommand = null;
+            if (s != null)
+            {
+                tracker.confirm(s, now);
+                saveDirty = true;
+            }
+        }
     }
 
     /** "Share Slayer tasks" changed: off drops anything unsent; on catches the server up. */
@@ -148,6 +193,7 @@ public class SlayerTaskSync
                 saveDirty = true;
             }
         }
+        readTaskCommand(now);
         tracker.tick(now);
         if (saveDirty) save();
         pump();
