@@ -186,6 +186,7 @@ public class RuneAlyticsPlugin extends Plugin
     @Inject private DoomEncounterTracker     doomEncounterTracker;
     @Inject private GroundItemAttributor     groundItemAttributor;
     @Inject private ProgressTracker          progressTracker;
+    @Inject private com.runealytics.slayer.SlayerTaskSync slayerTasks;
     @Inject private PrivacyWarningManager    privacyWarnings;
     @Inject private InstanceLocationTracker  instanceLocations;
     @Inject private PrivacyEyeOverlay        privacyEyeOverlay;
@@ -518,6 +519,7 @@ public class RuneAlyticsPlugin extends Plugin
 
         // Quest / diary / combat-achievement progress. Capture follows the config
         // toggle; uploads additionally need the server "achievements" flag.
+        slayerTasks.start(progressStore);
         progressTracker.start(
                 progressStore,
                 config::apiUrl,
@@ -636,6 +638,7 @@ public class RuneAlyticsPlugin extends Plugin
         stopHeartbeat();
 
         // Stop progress capture: cancels its scheduled flush and persists pending changes.
+        clientThread.invoke(slayerTasks::onLoggedOut);
         try { progressTracker.stop(); } catch (Exception e) { log.debug("Progress tracker stop failed: {}", e.getMessage()); }
 
         // Cancel the pending whisperer loot flush.
@@ -1471,6 +1474,9 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Death recovery guard: detect death messages ───────────────────────
         deathRecoveryGuard.onChatMessage(event);
 
+        // ── Slayer task: completed / cancelled / assignment lines ────────────
+        slayerTasks.onChatMessage(event.getType(), event.getMessage());
+
         // ── Doom of Mokhaiotl death detection ───────────────────────────────────
         if (event.getType() == ChatMessageType.GAMEMESSAGE)
         {
@@ -1656,6 +1662,9 @@ public class RuneAlyticsPlugin extends Plugin
         // ── Public Online Status warnings (one varbit read) ──────────────────
         privacyWarnings.onGameTick();
 
+        // ── Slayer task: varp changes, dialogue, throttled progress, sending ─
+        slayerTasks.onGameTick();
+
         // ── Remember the spot outside instances (shown while inside one) ──────
         instanceLocations.onGameTick();
 
@@ -1794,6 +1803,7 @@ public class RuneAlyticsPlugin extends Plugin
         {
             // Forget the account for progress capture and flush what it captured.
             progressTracker.onLogout();
+            slayerTasks.onLoggedOut();
             privacyWarnings.onLoggedOut();
             instanceLocations.reset();
             // Async work captured before this logout is now stale.
@@ -1921,6 +1931,7 @@ public class RuneAlyticsPlugin extends Plugin
     public void onVarbitChanged(VarbitChanged event)
     {
         progressTracker.onVarChanged();
+        slayerTasks.onVarChanged(event.getVarpId(), event.getVarbitId());
     }
 
     @Subscribe
@@ -1973,6 +1984,11 @@ public class RuneAlyticsPlugin extends Plugin
                 || "privacyWarningDismissedAccounts".equals(key))
         {
             privacyWarnings.reloadConfig();
+        }
+        if ("shareSlayerTasks".equals(key))
+        {
+            final boolean on = config.shareSlayerTasks();
+            clientThread.invoke(() -> slayerTasks.onShareToggled(on));
         }
         if ("enableAchievementSync".equals(key))
         {
